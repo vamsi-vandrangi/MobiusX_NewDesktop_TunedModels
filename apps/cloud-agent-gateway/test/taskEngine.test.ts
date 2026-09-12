@@ -87,6 +87,23 @@ test("ask and plan modes never propose edits", async () => {
   }
 });
 
+test("build mode edits get a clearly-labeled demo second-pass review", async () => {
+  const summary = await startTask({ mode: "build", prompt: "add retry jitter" });
+  await waitUntilDone(summary.id);
+  const task = await getTask(summary.id);
+  assert.equal(task!.review?.verdict, "approve");
+  assert.match(task!.review!.summary, /demo reviewer/);
+});
+
+test("spec and plan modes never get a review (reviewer is scoped to real code edits)", async () => {
+  for (const mode of ["spec", "plan"] as const) {
+    const summary = await startTask({ mode, prompt: "something" });
+    await waitUntilDone(summary.id);
+    const task = await getTask(summary.id);
+    assert.equal(task!.review, undefined);
+  }
+});
+
 test("spec mode proposes a clearly-labeled demo spec under .mobiusx/specs/", async () => {
   const summary = await startTask({ mode: "spec", prompt: "subscription management" });
   await waitUntilDone(summary.id);

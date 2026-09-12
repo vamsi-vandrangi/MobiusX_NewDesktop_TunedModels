@@ -25,7 +25,18 @@ export const demoRunner: AgentRunner = {
       }
 
       emit({ type: "output", delta: renderOutput(input) });
-      if (input.mode === "build") emit({ type: "edits", edits: [demoEdit(input)] });
+      if (input.mode === "build") {
+        emit({ type: "edits", edits: [demoEdit(input)] });
+        // Second-pass Reviewer agent (PRD §11/§46) — scripted here, same as everything else in this runner.
+        emit({
+          type: "review",
+          review: {
+            verdict: "approve",
+            summary:
+              "[demo reviewer — no model configured] This is a scripted demo review that always approves the demo edit; configure a real model for an actual second-opinion code review.",
+          },
+        });
+      }
       if (input.mode === "spec") emit({ type: "edits", edits: [demoSpecEdit(input)] });
       emit({ type: "status", status: "completed" });
       emit({ type: "done" });

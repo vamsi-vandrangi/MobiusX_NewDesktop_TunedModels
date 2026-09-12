@@ -455,7 +455,7 @@ async function findRelevantFiles(query, mode) {
  * resolves once the task reaches a terminal state. Shared by the assistant
  * panel and the Tasks view's live detail pane.
  */
-function streamTask(taskId, { onStep, onOutput, onEdits, onStatus, onError, onDone }) {
+function streamTask(taskId, { onStep, onOutput, onEdits, onReview, onStatus, onError, onDone }) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`${cloudWsUrl}/tasks/${taskId}/stream?token=${encodeURIComponent(cloudToken)}`);
     ws.addEventListener("message", (event) => {
@@ -463,6 +463,7 @@ function streamTask(taskId, { onStep, onOutput, onEdits, onStatus, onError, onDo
       if (msg.type === "step") onStep?.(msg.step);
       else if (msg.type === "output") onOutput?.(msg.delta);
       else if (msg.type === "edits") onEdits?.(msg.edits);
+      else if (msg.type === "review") onReview?.(msg.review);
       else if (msg.type === "status") onStatus?.(msg.status);
       else if (msg.type === "error") onError?.(msg.message);
       else if (msg.type === "done") {
@@ -486,6 +487,14 @@ function streamTask(taskId, { onStep, onOutput, onEdits, onStatus, onError, onDo
 // the desktop agent's POST /fs/apply-edits (see fsOps.ts#applyEdits) —
 // nothing here writes to disk itself.
 // ============================================================
+
+/** Renders a Reviewer-agent verdict banner's inner HTML (see EditReview in @mobiusx/protocol) — shared by buildEditsCard's initial render and a later post-hoc injection (the review event can arrive after the edits card already exists). */
+function renderReviewBannerHtml(review) {
+  const cls = review.verdict === "approve" ? "approve" : "concerns";
+  const icon = review.verdict === "approve" ? "✓" : "⚠";
+  const label = review.verdict === "approve" ? "Reviewer: Approve" : "Reviewer: Concerns";
+  return `<div class="review-banner ${cls}"><div class="review-banner-head"><span class="review-banner-icon">${icon}</span><span class="review-banner-label">${label}</span></div><div class="review-banner-summary">${escapeHtml(review.summary)}</div></div>`;
+}
 
 /** Renders a unified-style line diff as HTML. Falls back to plain (escaped) new-content text if the diff library somehow isn't loaded, rather than throwing. */
 function renderDiffHtml(oldStr, newStr) {
@@ -533,13 +542,14 @@ async function refreshAfterApply(appliedRelPaths) {
  * these files somewhere the user didn't intend, so a mismatch disables
  * Apply with an explicit explanation instead of guessing.
  */
-function buildEditsCard(edits, taskProjectPath) {
+function buildEditsCard(edits, taskProjectPath, review) {
   const projectMismatch = Boolean(taskProjectPath) && taskProjectPath !== currentProjectPath;
 
   const card = document.createElement("div");
   card.className = "edits-card";
   card.innerHTML = `
     <div class="edits-card-head">Proposed changes — ${edits.length} file${edits.length === 1 ? "" : "s"}</div>
+    <div class="edits-card-review">${review ? renderReviewBannerHtml(review) : ""}</div>
     ${
       projectMismatch
         ? `<div class="edits-card-warning">This task ran against <code>${escapeHtml(taskProjectPath)}</code>, but that isn't the project currently open (${currentProjectPath ? `<code>${escapeHtml(currentProjectPath)}</code>` : "none"}). Open that project to apply these edits.</div>`
@@ -749,6 +759,15 @@ function createAssistantPanel(container) {
         div.appendChild(buildEditsCard(edits, taskProjectPath));
         feed.scrollTop = feed.scrollHeight;
       },
+      setReview(review) {
+        // The review event can arrive after setEdits already built the card (that's the
+        // normal order — edits, then review) — inject it into the existing card rather
+        // than requiring buildEditsCard to be re-called.
+        const reviewSlot = div.querySelector(".edits-card-review");
+        if (!reviewSlot) return; // no edits card yet — shouldn't happen given emission order, but never throw over it
+        reviewSlot.innerHTML = renderReviewBannerHtml(review);
+        feed.scrollTop = feed.scrollHeight;
+      },
       setStatus(status) {
         if (status === "cancelled") {
           div.querySelector(".assistant-output").textContent += "\n[cancelled]";
@@ -805,6 +824,7 @@ function createAssistantPanel(container) {
         onStep: (step) => stream.setStep(step),
         onOutput: (delta) => stream.appendOutput(delta),
         onEdits: (edits) => stream.setEdits(edits, taskProjectPath),
+        onReview: (review) => stream.setReview(review),
         onStatus: (status) => stream.setStatus(status),
         onError: (message) => stream.setError(message),
       });
@@ -985,6 +1005,7 @@ async function showTaskDetail(taskId) {
         onStep: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
         onOutput: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
         onEdits: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
+        onReview: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
         onStatus: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
       });
       loadTasksList(); // refresh the status badge in the list once it settles
@@ -1017,7 +1038,7 @@ function renderTaskDetail(task) {
     <div class="task-detail-edits"></div>
   `;
   if (task.edits?.length) {
-    detailEl.querySelector(".task-detail-edits").appendChild(buildEditsCard(task.edits, task.projectPath));
+    detailEl.querySelector(".task-detail-edits").appendChild(buildEditsCard(task.edits, task.projectPath, task.review));
   }
   if (cancellable) {
     const btn = detailEl.querySelector(".task-cancel-btn");

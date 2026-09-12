@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EDITS_MARKER, parseBuildResponse } from "../src/runners/anthropicRunner.js";
+import { EDITS_MARKER, parseBuildResponse, parseReview } from "../src/runners/anthropicRunner.js";
 import type { RunnerInput } from "../src/runners/types.js";
 
 function baseInput(overrides: Partial<RunnerInput> = {}): RunnerInput {
@@ -98,4 +98,24 @@ test("an edit missing required fields is dropped, valid ones still returned", ()
   assert.equal(edits.length, 1);
   assert.equal(edits[0].path, "x.ts");
   assert.equal(droppedCount, 3);
+});
+
+
+test("parseReview accepts a well-formed verdict JSON, fenced or not", () => {
+  const fenced = '```json\n{"verdict": "approve", "summary": "Looks correct."}\n```';
+  assert.deepEqual(parseReview(fenced), { verdict: "approve", summary: "Looks correct." });
+
+  const bare = '{"verdict": "concerns", "summary": "Missing input validation."}';
+  assert.deepEqual(parseReview(bare), { verdict: "concerns", summary: "Missing input validation." });
+});
+
+test("parseReview defaults to concerns (never approve) on malformed input, rather than crashing", () => {
+  const review = parseReview("not json at all");
+  assert.equal(review.verdict, "concerns");
+  assert.match(review.summary, /could not be parsed/);
+});
+
+test("parseReview defaults to concerns when the verdict field is missing or invalid", () => {
+  assert.equal(parseReview('{"summary": "no verdict field"}').verdict, "concerns");
+  assert.equal(parseReview('{"verdict": "maybe", "summary": "invalid enum value"}').verdict, "concerns");
 });

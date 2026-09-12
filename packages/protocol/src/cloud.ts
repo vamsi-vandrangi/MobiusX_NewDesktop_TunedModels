@@ -100,6 +100,25 @@ export interface ProposedEdit {
   content: string;
 }
 
+
+
+/**
+ * A minimal, real multi-agent primitive (PRD §11/§46): after build-mode
+ * edits are proposed, a second model call (a distinct "Code Reviewer
+ * Agent" persona — see anthropicRunner.ts's reviewEdits) assesses them
+ * BEFORE the user decides whether to Apply. Not a second opinion the user
+ * has to go request — it's produced automatically alongside the edits,
+ * the same way a human reviewer would look at a diff before it merges.
+ * The demo runner's version is a clearly-labeled scripted stand-in, same
+ * as its demo edits.
+ */
+export type ReviewVerdict = "approve" | "concerns";
+
+export interface EditReview {
+  verdict: ReviewVerdict;
+  summary: string;
+}
+
 export interface TaskDetail extends TaskSummary {
   steps: TaskStep[];
   /** Accumulated output text so far (final answer / plan / build-proposal text). */
@@ -107,6 +126,8 @@ export interface TaskDetail extends TaskSummary {
   error?: string;
   /** Present once a build-mode task has finished proposing changes. Empty/absent for ask & plan modes, and for build-mode tasks that didn't produce parseable edits. */
   edits?: ProposedEdit[];
+  /** Present once a build-mode task's edits have been through the second-pass Reviewer agent (see EditReview above). Never present without `edits` also being present. */
+  review?: EditReview;
 }
 
 export interface ListTasksResponse {
@@ -118,6 +139,7 @@ export type TaskEvent =
   | { type: "step"; step: TaskStep }
   | { type: "output"; delta: string }
   | { type: "edits"; edits: ProposedEdit[] }
+  | { type: "review"; review: EditReview }
   | { type: "status"; status: TaskStatus }
   | { type: "error"; message: string }
   | { type: "done" };

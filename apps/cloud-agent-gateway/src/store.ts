@@ -50,7 +50,7 @@ export async function getTask(id: string): Promise<TaskDetail | undefined> {
 export async function listTasks(): Promise<TaskSummary[]> {
   const map = await load();
   return [...map.values()]
-    .map(({ steps: _steps, output: _output, error: _error, edits: _edits, ...summary }) => summary)
+    .map(({ steps: _steps, output: _output, error: _error, edits: _edits, review: _review, ...summary }) => summary)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -69,6 +69,8 @@ export async function applyEvent(id: string, event: TaskEvent): Promise<void> {
     task.output += event.delta;
   } else if (event.type === "edits") {
     task.edits = event.edits;
+  } else if (event.type === "review") {
+    task.review = event.review;
   } else if (event.type === "status") {
     task.status = event.status;
   } else if (event.type === "error") {
