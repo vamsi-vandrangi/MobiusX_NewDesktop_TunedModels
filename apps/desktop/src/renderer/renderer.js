@@ -1,28 +1,27 @@
 const { agentBaseUrl, agentWsUrl, agentToken, openFolderDialog } = window.mobiusx;
 
-// ---- nav ----
-const VIEW_LABELS = {
-  "enterprise-knowledge": "Enterprise Knowledge",
-  "global-intelligence": "Global Intelligence",
-  projects: "Projects",
-  governance: "Governance",
-};
+// ============================================================
+// Nav / view switching
+// ============================================================
+const views = {};
+document.querySelectorAll(".view").forEach((el) => (views[el.id.replace("view-", "")] = el));
+
+function showView(name) {
+  for (const [key, el] of Object.entries(views)) el.hidden = key !== name;
+  document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  if (name === "changes") loadGit();
+}
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    const view = btn.dataset.view;
-    const isXCoder = view === "x-coder";
-    document.getElementById("view-x-coder").hidden = !isXCoder;
-    document.getElementById("view-placeholder").hidden = isXCoder;
-    if (!isXCoder) {
-      document.getElementById("placeholder-title").textContent = VIEW_LABELS[view] ?? view;
-    }
-  });
+  btn.addEventListener("click", () => showView(btn.dataset.view));
+});
+document.querySelectorAll("[data-view-link]").forEach((el) => {
+  el.addEventListener("click", () => showView(el.dataset.viewLink));
 });
 
-// ---- agent client ----
+// ============================================================
+// Agent client
+// ============================================================
 async function api(path, opts = {}) {
   const res = await fetch(agentBaseUrl + path, {
     ...opts,
@@ -35,36 +34,93 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
-const statusEl = document.getElementById("agent-status");
+const agentDot = document.getElementById("agent-dot");
+const agentSubstatus = document.getElementById("agent-substatus");
 
 async function checkAgent() {
   try {
     const health = await api("/health");
-    statusEl.textContent = `agent: ok (v${health.version})`;
-    statusEl.className = "status ok";
-  } catch (err) {
-    statusEl.textContent = "agent: unreachable";
-    statusEl.className = "status error";
+    agentDot.className = "dot ok";
+    agentSubstatus.textContent = `Connected · v${health.version}`;
+  } catch {
+    agentDot.className = "dot error";
+    agentSubstatus.textContent = "Unreachable";
   }
 }
 checkAgent();
 
-// ---- project open + file tree ----
-const projectPathEl = document.getElementById("project-path");
-const fileTreeEl = document.getElementById("file-tree");
+// ============================================================
+// Recent projects (localStorage-backed MRU — no cloud sync yet)
+// ============================================================
+const RECENTS_KEY = "mobiusx.recentProjects";
 
-document.getElementById("open-project-btn").addEventListener("click", async () => {
-  const folder = await openFolderDialog();
-  if (!folder) return;
-  projectPathEl.textContent = "Indexing…";
+function getRecents() {
   try {
-    const result = await api("/project/open", { method: "POST", body: JSON.stringify({ path: folder }) });
-    projectPathEl.textContent = `${result.path} (${result.fileCount} files${result.isGitRepo ? ", git" : ""})`;
-    await Promise.all([loadTree(), result.isGitRepo ? loadGit() : clearGit()]);
-  } catch (err) {
-    projectPathEl.textContent = `Failed to open project: ${err.message}`;
+    return JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]");
+  } catch {
+    return [];
   }
-});
+}
+
+function pushRecent(path) {
+  const list = getRecents().filter((p) => p !== path);
+  list.unshift(path);
+  try {
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 8)));
+  } catch {
+    /* private-mode / quota — non-fatal, just skip persisting */
+  }
+  renderRecents();
+}
+
+function renderRecents() {
+  const el = document.getElementById("recent-projects");
+  const list = getRecents();
+  el.innerHTML = "";
+  if (list.length === 0) {
+    el.innerHTML = "<div class='recent-empty'>No recent projects yet — open one to get started.</div>";
+    return;
+  }
+  for (const path of list) {
+    const row = document.createElement("div");
+    row.className = "recent-item";
+    const name = path.split("/").filter(Boolean).pop() || path;
+    row.innerHTML = `<span>${name}</span><span class="recent-item-path">${path}</span>`;
+    row.addEventListener("click", () => openProject(path));
+    el.appendChild(row);
+  }
+}
+renderRecents();
+
+// ============================================================
+// Project open + file tree
+// ============================================================
+const projectChipLabel = document.getElementById("project-chip-label");
+const fileTreeEl = document.getElementById("file-tree");
+let currentProjectPath = null;
+
+async function openProject(path) {
+  projectChipLabel.textContent = "Indexing…";
+  try {
+    const result = await api("/project/open", { method: "POST", body: JSON.stringify({ path }) });
+    currentProjectPath = result.path;
+    projectChipLabel.textContent = `${result.path.split("/").pop()} (${result.fileCount} files${result.isGitRepo ? ", git" : ""})`;
+    pushRecent(result.path);
+    closeAllTabs();
+    await loadTree();
+    showView("workspace");
+  } catch (err) {
+    projectChipLabel.textContent = `Failed: ${err.message}`;
+  }
+}
+
+async function pickAndOpenProject() {
+  const folder = await openFolderDialog();
+  if (folder) await openProject(folder);
+}
+
+document.getElementById("open-project-btn").addEventListener("click", pickAndOpenProject);
+document.getElementById("qa-open-project").addEventListener("click", pickAndOpenProject);
 
 function buildNestedTree(nodes) {
   const root = { children: new Map() };
@@ -105,9 +161,7 @@ function renderTreeNode(name, entry, depth, container) {
           if (aDir !== bDir) return aDir ? -1 : 1;
           return a[0].localeCompare(b[0]);
         });
-        for (const [childName, childEntry] of sorted) {
-          renderTreeNode(childName, childEntry, depth + 1, childWrap);
-        }
+        for (const [childName, childEntry] of sorted) renderTreeNode(childName, childEntry, depth + 1, childWrap);
       }
     });
   } else {
@@ -123,67 +177,88 @@ async function loadTree() {
   for (const [name, entry] of sorted) renderTreeNode(name, entry, 0, fileTreeEl);
 }
 
+// ============================================================
+// Tabbed editor
+// ============================================================
+const tabsBar = document.getElementById("tabs-bar");
+const editorContent = document.getElementById("editor-content");
+const openTabs = []; // { path, content, truncated }
+let activeTabPath = null;
+
+function closeAllTabs() {
+  openTabs.length = 0;
+  activeTabPath = null;
+  renderTabs();
+  editorContent.textContent = "Open a project, then select a file.";
+}
+
+function renderTabs() {
+  tabsBar.innerHTML = "";
+  for (const tab of openTabs) {
+    const div = document.createElement("div");
+    div.className = "file-tab" + (tab.path === activeTabPath ? " active" : "");
+    const name = tab.path.split("/").pop();
+    div.innerHTML = `<span>${name}</span><span class="file-tab-close">✕</span>`;
+    div.querySelector("span:first-child").addEventListener("click", () => activateTab(tab.path));
+    div.querySelector(".file-tab-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeTab(tab.path);
+    });
+    tabsBar.appendChild(div);
+  }
+}
+
+function activateTab(path) {
+  activeTabPath = path;
+  const tab = openTabs.find((t) => t.path === path);
+  editorContent.textContent = tab ? tab.content + (tab.truncated ? "\n\n… (truncated)" : "") : "";
+  renderTabs();
+}
+
+function closeTab(path) {
+  const idx = openTabs.findIndex((t) => t.path === path);
+  if (idx === -1) return;
+  openTabs.splice(idx, 1);
+  if (activeTabPath === path) {
+    activeTabPath = openTabs.length ? openTabs[Math.max(0, idx - 1)].path : null;
+    if (activeTabPath) activateTab(activeTabPath);
+    else {
+      editorContent.textContent = "Open a project, then select a file.";
+      renderTabs();
+    }
+  } else {
+    renderTabs();
+  }
+}
+
 async function openFile(path) {
-  document.getElementById("editor-title").textContent = path;
-  const editor = document.getElementById("editor-content");
-  editor.textContent = "Loading…";
-  try {
-    const { content, truncated } = await api(`/fs/read?path=${encodeURIComponent(path)}`);
-    editor.textContent = content + (truncated ? "\n\n… (truncated)" : "");
-  } catch (err) {
-    editor.textContent = `Failed to read file: ${err.message}`;
+  let tab = openTabs.find((t) => t.path === path);
+  if (!tab) {
+    try {
+      const data = await api(`/fs/read?path=${encodeURIComponent(path)}`);
+      tab = { path, content: data.content, truncated: data.truncated };
+      openTabs.push(tab);
+    } catch (err) {
+      tab = { path, content: `Failed to read file: ${err.message}`, truncated: false };
+      openTabs.push(tab);
+    }
   }
+  activateTab(path);
 }
 
-// ---- git panel ----
-function clearGit() {
-  document.getElementById("git-branch").textContent = "";
-  document.getElementById("git-status-list").innerHTML = "";
-  document.getElementById("git-log-list").innerHTML = "";
-}
-
-async function loadGit() {
-  try {
-    const status = await api("/git/status");
-    document.getElementById("git-branch").textContent =
-      `On ${status.branch ?? "(detached)"}` +
-      (status.ahead ? ` ↑${status.ahead}` : "") +
-      (status.behind ? ` ↓${status.behind}` : "");
-    const list = document.getElementById("git-status-list");
-    list.innerHTML = "";
-    if (status.entries.length === 0) {
-      list.innerHTML = "<div class='git-entry'>Clean working tree</div>";
-    }
-    for (const entry of status.entries) {
-      const div = document.createElement("div");
-      div.className = "git-entry";
-      div.innerHTML = `<span class="git-code">${entry.index}${entry.worktree}</span><span>${entry.path}</span>`;
-      list.appendChild(div);
-    }
-  } catch (err) {
-    document.getElementById("git-status-list").textContent = `git status failed: ${err.message}`;
-  }
-
-  try {
-    const log = await api("/git/log?limit=20");
-    const list = document.getElementById("git-log-list");
-    list.innerHTML = "";
-    for (const entry of log.entries) {
-      const div = document.createElement("div");
-      div.className = "log-entry";
-      div.innerHTML = `<span class="log-hash">${entry.hash.slice(0, 7)}</span> <span class="log-subject">${entry.subject}</span>`;
-      list.appendChild(div);
-    }
-  } catch (err) {
-    document.getElementById("git-log-list").textContent = `git log failed: ${err.message}`;
-  }
-}
-
-// ---- terminal ----
+// ============================================================
+// Terminal
+// ============================================================
 const terminalOutput = document.getElementById("terminal-output");
 const terminalInput = document.getElementById("terminal-input");
+const terminalPanel = document.getElementById("terminal-panel");
 let terminalSocket = null;
 let cmdCounter = 0;
+
+document.getElementById("terminal-toggle").addEventListener("click", () => {
+  const collapsed = terminalPanel.classList.toggle("collapsed");
+  document.getElementById("terminal-toggle").textContent = (collapsed ? "▸ " : "▾ ") + "Terminal";
+});
 
 function appendTerminalLine(text, cls) {
   const div = document.createElement("div");
@@ -218,4 +293,148 @@ terminalInput.addEventListener("keydown", (event) => {
   } else {
     appendTerminalLine("[not connected]", "stderr");
   }
+});
+
+// ============================================================
+// Changes (git) view
+// ============================================================
+async function loadGit() {
+  const branchEl = document.getElementById("git-branch");
+  const statusEl = document.getElementById("git-status-list");
+  const logEl = document.getElementById("git-log-list");
+  const diffEl = document.getElementById("diff-view");
+
+  if (!currentProjectPath) {
+    branchEl.textContent = "";
+    statusEl.innerHTML = "<div class='recent-empty'>Open a project to see its changes.</div>";
+    logEl.innerHTML = "";
+    diffEl.textContent = "Select a changed file to view its diff.";
+    return;
+  }
+
+  try {
+    const status = await api("/git/status");
+    branchEl.textContent =
+      `On ${status.branch ?? "(detached)"}` + (status.ahead ? ` ↑${status.ahead}` : "") + (status.behind ? ` ↓${status.behind}` : "");
+    statusEl.innerHTML = "";
+    if (status.entries.length === 0) {
+      statusEl.innerHTML = "<div class='recent-empty'>Clean working tree</div>";
+    }
+    for (const entry of status.entries) {
+      const div = document.createElement("div");
+      div.className = "git-entry";
+      div.innerHTML = `<span class="git-code">${entry.index}${entry.worktree}</span><span>${entry.path}</span>`;
+      div.addEventListener("click", async () => {
+        diffEl.textContent = "Loading diff…";
+        try {
+          const staged = entry.index !== " " && entry.index !== "?";
+          const { diff } = await api(`/git/diff?path=${encodeURIComponent(entry.path)}&staged=${staged}`);
+          diffEl.textContent = diff || "(no textual diff — binary file or no changes against this state)";
+        } catch (err) {
+          diffEl.textContent = `Failed to load diff: ${err.message}`;
+        }
+      });
+      statusEl.appendChild(div);
+    }
+  } catch (err) {
+    statusEl.innerHTML = `<div class='recent-empty'>git status failed: ${err.message}</div>`;
+  }
+
+  try {
+    const log = await api("/git/log?limit=20");
+    logEl.innerHTML = "";
+    for (const entry of log.entries) {
+      const div = document.createElement("div");
+      div.className = "log-entry";
+      div.innerHTML = `<span class="log-hash">${entry.hash.slice(0, 7)}</span> ${entry.subject}`;
+      logEl.appendChild(div);
+    }
+  } catch (err) {
+    logEl.textContent = `git log failed: ${err.message}`;
+  }
+}
+
+// ============================================================
+// AI Assistant panel (Ask/Plan/Build) — UI shell only.
+// MobiusX Cloud Agent integration is Phase 3 (see docs/ARCHITECTURE.md §12);
+// this deliberately does not fake a model response.
+// ============================================================
+function createAssistantPanel(container) {
+  container.innerHTML = `
+    <div class="assistant-header">
+      <button class="mode-btn active" data-mode="ask">Ask</button>
+      <button class="mode-btn" data-mode="plan">Plan</button>
+      <button class="mode-btn" data-mode="build">Build</button>
+    </div>
+    <div class="assistant-feed"></div>
+    <div class="assistant-input-row">
+      <input placeholder="Ask a follow-up question…" />
+      <button class="send-btn">→</button>
+    </div>
+  `;
+  const feed = container.querySelector(".assistant-feed");
+  const input = container.querySelector(".assistant-input-row input");
+  const sendBtn = container.querySelector(".send-btn");
+  const modeBtns = container.querySelectorAll(".mode-btn");
+  let mode = "ask";
+
+  modeBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      mode = btn.dataset.mode;
+      modeBtns.forEach((b) => b.classList.toggle("active", b === btn));
+    });
+  });
+
+  function addMsg(text, cls) {
+    const div = document.createElement("div");
+    div.className = `assistant-msg ${cls}`;
+    div.textContent = text;
+    feed.appendChild(div);
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  addMsg(
+    "MobiusX Cloud Agent isn't connected in this build yet (Phase 3). This panel shows the intended Ask / Plan / Build interaction — use the Terminal for real local commands in the meantime.",
+    "system",
+  );
+
+  function submit() {
+    const text = input.value.trim();
+    if (!text) return;
+    addMsg(text, "user");
+    input.value = "";
+    addMsg(`[${mode}] not yet wired to MobiusX Cloud — see docs/ARCHITECTURE.md §12 (Phase 3).`, "system");
+  }
+
+  sendBtn.addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submit();
+  });
+
+  return { addMsg };
+}
+
+createAssistantPanel(document.getElementById("assistant-embedded"));
+createAssistantPanel(document.getElementById("assistant-full"));
+
+// ============================================================
+// Home "ask" box — routes into the AI Assistant view
+// ============================================================
+document.querySelectorAll(".ask-modes .mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".ask-modes .mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
+  });
+});
+document.getElementById("home-ask-send").addEventListener("click", () => {
+  const val = document.getElementById("home-ask-input").value.trim();
+  showView("assistant");
+  if (val) {
+    document.getElementById("home-ask-input").value = "";
+    const input = document.querySelector("#assistant-full .assistant-input-row input");
+    input.value = val;
+    document.querySelector("#assistant-full .send-btn").click();
+  }
+});
+document.getElementById("home-ask-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("home-ask-send").click();
 });

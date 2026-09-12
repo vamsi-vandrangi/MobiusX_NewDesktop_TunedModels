@@ -7,56 +7,163 @@
 </head>
 <body>
   <div id="app">
-    <nav id="nav">
-      <div class="brand">MOBIUSX</div>
-      <button class="nav-item" data-view="enterprise-knowledge">Enterprise Knowledge</button>
-      <button class="nav-item" data-view="global-intelligence">Global Intelligence</button>
-      <button class="nav-item active" data-view="x-coder">Engineering Studio<br /><span class="nav-sub">X-Coder</span></button>
-      <button class="nav-item" data-view="projects">Projects</button>
-      <button class="nav-item" data-view="governance">Governance</button>
-    </nav>
+    <aside id="sidebar">
+      <div class="brand">
+        <span class="brand-mark">M</span>
+        <span class="brand-name">MobiusX</span>
+      </div>
+      <nav id="nav">
+        <button class="nav-item active" data-view="home"><span class="nav-icon">⌂</span>Home</button>
+        <button class="nav-item" data-view="assistant"><span class="nav-icon">✦</span>AI Assistant</button>
+        <button class="nav-item" data-view="workspace"><span class="nav-icon">▤</span>Workspace</button>
+        <button class="nav-item" data-view="repositories"><span class="nav-icon">⌥</span>Repositories</button>
+        <button class="nav-item" data-view="knowledge"><span class="nav-icon">◈</span>Knowledge</button>
+        <button class="nav-item" data-view="agents"><span class="nav-icon">◎</span>Agents</button>
+        <button class="nav-item" data-view="tasks"><span class="nav-icon">☑</span>Tasks</button>
+        <button class="nav-item" data-view="debug"><span class="nav-icon">◐</span>Debug</button>
+        <button class="nav-item" data-view="changes"><span class="nav-icon">±</span>Changes</button>
+        <button class="nav-item" data-view="artifacts"><span class="nav-icon">▣</span>Artifacts</button>
+        <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Settings</button>
+      </nav>
+      <div id="agent-indicator" class="agent-indicator">
+        <span id="agent-dot" class="dot"></span>
+        <div>
+          <div class="agent-label">Local Agent</div>
+          <div id="agent-substatus" class="agent-substatus">Connecting…</div>
+        </div>
+      </div>
+    </aside>
 
-    <main id="content">
-      <section id="view-placeholder" hidden>
-        <h2 id="placeholder-title"></h2>
-        <p>This lives on MobiusX Web for now — see docs/ARCHITECTURE.md §2 for the surface split.</p>
-      </section>
-
-      <section id="view-x-coder">
-        <header id="toolbar">
+    <div id="main">
+      <header id="topbar">
+        <input id="search" placeholder="Search anything…" />
+        <div id="project-chip">
+          <span id="project-chip-label">No project open</span>
           <button id="open-project-btn">Open Project…</button>
-          <span id="project-path">No project open</span>
-          <span id="agent-status" class="status">agent: connecting…</span>
-        </header>
-
-        <div id="workspace">
-          <div id="tree-panel" class="panel">
-            <h3>Files</h3>
-            <div id="file-tree"></div>
-          </div>
-
-          <div id="center-panel">
-            <div id="editor-panel" class="panel">
-              <h3 id="editor-title">Editor</h3>
-              <pre id="editor-content">Select a file to preview it.</pre>
-            </div>
-            <div id="terminal-panel" class="panel">
-              <h3>Terminal</h3>
-              <div id="terminal-output"></div>
-              <input id="terminal-input" placeholder="Type a command and press Enter…" />
-            </div>
-          </div>
-
-          <div id="git-panel" class="panel">
-            <h3>Git</h3>
-            <div id="git-branch"></div>
-            <div id="git-status-list"></div>
-            <h4>Recent commits</h4>
-            <div id="git-log-list"></div>
+        </div>
+        <div id="user-chip">
+          <span class="avatar">V</span>
+          <div>
+            <div class="user-name">Vamsi</div>
+            <div class="user-role">AI Architect</div>
           </div>
         </div>
-      </section>
-    </main>
+      </header>
+
+      <main id="content">
+        <!-- HOME -->
+        <section class="view" id="view-home">
+          <h1 id="home-greeting">Good morning, Vamsi</h1>
+          <p class="subtitle">Your AI engineering workspace</p>
+
+          <div class="ask-box">
+            <input id="home-ask-input" placeholder="Ask anything, or describe what you want to build…" />
+            <div class="ask-modes">
+              <button class="mode-btn active" data-mode="ask">Ask</button>
+              <button class="mode-btn" data-mode="plan">Plan</button>
+              <button class="mode-btn" data-mode="build">Build</button>
+              <button id="home-ask-send" class="send-btn">→</button>
+            </div>
+          </div>
+
+          <h3 class="section-title">Quick actions</h3>
+          <div class="quick-actions">
+            <button class="quick-action" id="qa-open-project">
+              <div class="qa-title">Open Project</div>
+              <div class="qa-sub">Select or create a workspace</div>
+            </button>
+            <button class="quick-action" data-view-link="knowledge">
+              <div class="qa-title">Search Knowledge</div>
+              <div class="qa-sub">Search enterprise knowledge</div>
+            </button>
+            <button class="quick-action" data-view-link="tasks">
+              <div class="qa-title">Create Task</div>
+              <div class="qa-sub">Start an AI agent task</div>
+            </button>
+            <button class="quick-action" data-view-link="changes">
+              <div class="qa-title">View Changes</div>
+              <div class="qa-sub">Review pending changes</div>
+            </button>
+          </div>
+
+          <h3 class="section-title">Recent projects</h3>
+          <div id="recent-projects" class="recent-list"></div>
+        </section>
+
+        <!-- AI ASSISTANT (full page) -->
+        <section class="view" id="view-assistant" hidden>
+          <div class="assistant-panel assistant-panel--full" id="assistant-full"></div>
+        </section>
+
+        <!-- WORKSPACE -->
+        <section class="view" id="view-workspace" hidden>
+          <div id="workspace">
+            <div id="tree-panel" class="panel">
+              <h3>Explorer</h3>
+              <div id="file-tree"></div>
+            </div>
+
+            <div id="center-panel">
+              <div id="tabs-bar"></div>
+              <div id="editor-panel" class="panel">
+                <pre id="editor-content">Open a project, then select a file.</pre>
+              </div>
+              <div id="terminal-bar">
+                <button id="terminal-toggle">▾ Terminal</button>
+              </div>
+              <div id="terminal-panel" class="panel">
+                <div id="terminal-output"></div>
+                <input id="terminal-input" placeholder="Type a command and press Enter…" />
+              </div>
+            </div>
+
+            <div class="assistant-panel" id="assistant-embedded"></div>
+          </div>
+        </section>
+
+        <!-- CHANGES -->
+        <section class="view" id="view-changes" hidden>
+          <h2>Changes</h2>
+          <div id="git-branch"></div>
+          <div id="changes-layout">
+            <div id="git-status-list" class="panel"></div>
+            <pre id="diff-view" class="panel">Select a changed file to view its diff.</pre>
+          </div>
+          <h3 class="section-title">Recent commits</h3>
+          <div id="git-log-list"></div>
+        </section>
+
+        <!-- PLACEHOLDER VIEWS -->
+        <section class="view placeholder-view" id="view-repositories" hidden>
+          <h2>Repositories</h2>
+          <p>Cross-repo linking and enterprise repo intelligence lands in a later phase. See <code>docs/ARCHITECTURE.md</code> §5.2.</p>
+        </section>
+        <section class="view placeholder-view" id="view-knowledge" hidden>
+          <h2>Knowledge</h2>
+          <p>Enterprise Knowledge stays primarily on MobiusX Web (see <code>docs/ARCHITECTURE.md</code> §2) — this is a read-only pass-through, not yet built.</p>
+        </section>
+        <section class="view placeholder-view" id="view-agents" hidden>
+          <h2>Agents</h2>
+          <p>Cloud Agent orchestration is Phase 3. See <code>docs/ARCHITECTURE.md</code> §12.</p>
+        </section>
+        <section class="view placeholder-view" id="view-tasks" hidden>
+          <h2>Tasks</h2>
+          <p>Long-running agent tasks (with plans, activity logs, model usage) are Phase 3, built on top of the Cloud Agent work.</p>
+        </section>
+        <section class="view placeholder-view" id="view-debug" hidden>
+          <h2>Intelligent Debugger</h2>
+          <p>Cross-system root-cause tracing (frontend → API → service → DB → infra) is Phase 2. See <code>docs/ARCHITECTURE.md</code> §5.3.</p>
+        </section>
+        <section class="view placeholder-view" id="view-artifacts" hidden>
+          <h2>Artifacts</h2>
+          <p>Generated artifacts (specs, diagrams, docs) from agent tasks — depends on Phase 3 Cloud Agents.</p>
+        </section>
+        <section class="view placeholder-view" id="view-settings" hidden>
+          <h2>Settings</h2>
+          <p>Workspace/application settings, authentication, and local agent permissions — not yet built for Phase 1.</p>
+        </section>
+      </main>
+    </div>
   </div>
   <script src="renderer.js"></script>
 </body>
