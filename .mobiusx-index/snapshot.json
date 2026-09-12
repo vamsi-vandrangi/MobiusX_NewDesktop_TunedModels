@@ -1,0 +1,642 @@
+{
+  "root": "/sessions/rcw-01ynoadjnf3fxb4tghs5bxja/mnt/CredenceX_WDC",
+  "generatedAt": "2026-09-12T14:09:45.154Z",
+  "rootHash": "02d4f40a68b63098b07a50c612b5fab385b8ed119c5320d218825dcb9d47deb0",
+  "nodes": {
+    ".gitignore": {
+      "type": "file",
+      "hash": "0cab356cc15f41129d922767690919bfe974346765e4cd7da09c74d0d3dea08a",
+      "size": 64,
+      "mtimeMs": 1789220090416.5828
+    },
+    "apps/desktop/package.json": {
+      "type": "file",
+      "hash": "f9cafe24d376653beb68646fa5f22160eb74fa54979f2ae09dba335ff423707c",
+      "size": 308,
+      "mtimeMs": 1789220883468.491
+    },
+    "apps/desktop/src/editor-surface": {
+      "type": "dir",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "children": []
+    },
+    "apps/desktop/src/main/main.js": {
+      "type": "file",
+      "hash": "9b15e47a0db62d5e3881ca16176ef48d9bf38872469f34a479c6a9e97c4bb71c",
+      "size": 3852,
+      "mtimeMs": 1789220899605.1238
+    },
+    "apps/desktop/src/main/preload.js": {
+      "type": "file",
+      "hash": "d8a4110d2f9dfd74ca4f870879cba40e8675ac624492590c718980526eaeb808",
+      "size": 632,
+      "mtimeMs": 1789220899610.3464
+    },
+    "apps/desktop/src/main": {
+      "type": "dir",
+      "hash": "f2afcc4b1bb3db05928a3a62a58e1a949e6e704ea9f0a39baf0ae88b9871f750",
+      "children": [
+        "main.js",
+        "preload.js"
+      ]
+    },
+    "apps/desktop/src/renderer/index.html": {
+      "type": "file",
+      "hash": "90417dc115d2e4165353181b7f6671142c3b86b8e6dca6ab5d83f9a1bb51462b",
+      "size": 8449,
+      "mtimeMs": 1789222111267.8848
+    },
+    "apps/desktop/src/renderer/renderer.js": {
+      "type": "file",
+      "hash": "d6e4fecafc781f9f123b9abb12c92ecb2bf5d7d2cf55aad5023f514f8cb1c5f4",
+      "size": 20187,
+      "mtimeMs": 1789222140156.3357
+    },
+    "apps/desktop/src/renderer/styles.css": {
+      "type": "file",
+      "hash": "4614266415374a3553356522acb4968644c4d2cc156677b6d0e7945408923c8a",
+      "size": 9987,
+      "mtimeMs": 1789222119104.802
+    },
+    "apps/desktop/src/renderer": {
+      "type": "dir",
+      "hash": "ec025cea2e29df6c2bbb19211e28d0f950b449238d5b13e97556fa2adc81171d",
+      "children": [
+        "index.html",
+        "renderer.js",
+        "styles.css"
+      ]
+    },
+    "apps/desktop/src": {
+      "type": "dir",
+      "hash": "3b053e8e96d0440c880e0615b14f3b823c5ef182689b3ec8f818ff8d0a23c2e1",
+      "children": [
+        "editor-surface",
+        "main",
+        "renderer"
+      ]
+    },
+    "apps/desktop": {
+      "type": "dir",
+      "hash": "a9e062864149d69e02b3feae3265f8a628a6786d1aa3719f3c1b613007603b19",
+      "children": [
+        "package.json",
+        "src"
+      ]
+    },
+    "apps/desktop-agent/package.json": {
+      "type": "file",
+      "hash": "fc0483f4bfca77f6fc804c16e08e15a56d16c1b6b057be3e1f03a038003097ea",
+      "size": 778,
+      "mtimeMs": 1789222068801.2324
+    },
+    "apps/desktop-agent/src/auth.ts": {
+      "type": "file",
+      "hash": "8f074a3454acf9d7c072fb3f1e5ca922cd8dc0563398571abbbc15b85e8d9662",
+      "size": 664,
+      "mtimeMs": 1789220795462.4084
+    },
+    "apps/desktop-agent/src/fsOps.ts": {
+      "type": "file",
+      "hash": "3b038a561062134ac4e0aaa7d7020dce7ee3c23eb16e8f8fce179fd5cf733361",
+      "size": 1988,
+      "mtimeMs": 1789220816040.574
+    },
+    "apps/desktop-agent/src/gitOps.ts": {
+      "type": "file",
+      "hash": "e3bb9783d847378dd7ce70ab131f9e9f9bc6290dd9224d3abda521c21ce759c2",
+      "size": 3330,
+      "mtimeMs": 1789222081830.543
+    },
+    "apps/desktop-agent/src/index.ts": {
+      "type": "file",
+      "hash": "850aec742124ee38e56d5560fd028ff7cec7ac833b7505e7ee8ed6f84289685d",
+      "size": 891,
+      "mtimeMs": 1789220854646.7007
+    },
+    "apps/desktop-agent/src/routes.ts": {
+      "type": "file",
+      "hash": "31d2516cc72b417d3d51c6e8bebced264bae0b6394491168c17e09efb4116e52",
+      "size": 5597,
+      "mtimeMs": 1789222099008.1855
+    },
+    "apps/desktop-agent/src/semanticOps.ts": {
+      "type": "file",
+      "hash": "6f4ceb73f3c4798ecc909b11f948caebcf7f2a3b42a166d0a086eb689f248f10",
+      "size": 1548,
+      "mtimeMs": 1789222077074.3835
+    },
+    "apps/desktop-agent/src/server.ts": {
+      "type": "file",
+      "hash": "efa4518a6d829873beee4c38d310d0b0ae2d3ebf6757faad3701672e9b491560",
+      "size": 1410,
+      "mtimeMs": 1789220977345.5962
+    },
+    "apps/desktop-agent/src/state.ts": {
+      "type": "file",
+      "hash": "232a56cd3dcebbd65d6dbd1cdfdd0cd8766c732d1578dfc6b31b352ebc221301",
+      "size": 408,
+      "mtimeMs": 1789222088612.1992
+    },
+    "apps/desktop-agent/src/terminalWs.ts": {
+      "type": "file",
+      "hash": "7033ecbd61d3bd7853e19b298818b88515229f3b5cf71dc7fcdb8a1332dd9e17",
+      "size": 2865,
+      "mtimeMs": 1789220826952.017
+    },
+    "apps/desktop-agent/src": {
+      "type": "dir",
+      "hash": "9b2ecf0a7fa6500f87fce6164847fa2a757576592164010c304a3caeaaf92c7e",
+      "children": [
+        "auth.ts",
+        "fsOps.ts",
+        "gitOps.ts",
+        "index.ts",
+        "routes.ts",
+        "semanticOps.ts",
+        "server.ts",
+        "state.ts",
+        "terminalWs.ts"
+      ]
+    },
+    "apps/desktop-agent/test/fsOps.test.ts": {
+      "type": "file",
+      "hash": "a99dd160f0b5b1a397eb941a0df5152c5fb4492422db04cb51d0dc4acae5907c",
+      "size": 1361,
+      "mtimeMs": 1789220854652.3137
+    },
+    "apps/desktop-agent/test": {
+      "type": "dir",
+      "hash": "da35e7dc69146631c61c72bf7e5a421b6208ff0fe58c3ce0dc3607edbcf9fe97",
+      "children": [
+        "fsOps.test.ts"
+      ]
+    },
+    "apps/desktop-agent/tsconfig.json": {
+      "type": "file",
+      "hash": "1a9f0873fec04475a675b9b11b9402a9eca94c930c65a199019538b9f521b861",
+      "size": 137,
+      "mtimeMs": 1789220795446.8381
+    },
+    "apps/desktop-agent": {
+      "type": "dir",
+      "hash": "6040ccb0691423fe5370250d9c2895d6cad6da1c02c6858ff2f43fea08d09f37",
+      "children": [
+        "package.json",
+        "src",
+        "test",
+        "tsconfig.json"
+      ]
+    },
+    "apps": {
+      "type": "dir",
+      "hash": "f34c9cff893e78997e7cac2172ec5e467a4a94783f5aa8da3351ae008e497392",
+      "children": [
+        "desktop",
+        "desktop-agent"
+      ]
+    },
+    "docs/ARCHITECTURE.md": {
+      "type": "file",
+      "hash": "e87f0ce173383122e70e72f4d9d47bbcae5a70c9589edf2904db9ca384db09ec",
+      "size": 19133,
+      "mtimeMs": 1789220076608.1782
+    },
+    "docs/phase-notes/README.md": {
+      "type": "file",
+      "hash": "0f39a623ab6fc7442a62aa8f0d0a35748c7b25dded492dae2144b331c894bc4c",
+      "size": 137,
+      "mtimeMs": 1789220090505.034
+    },
+    "docs/phase-notes": {
+      "type": "dir",
+      "hash": "d3112c24d9284cc4bb939df88bf3d6f7cfdecc6439133f628c830c30cdebdbb4",
+      "children": [
+        "README.md"
+      ]
+    },
+    "docs": {
+      "type": "dir",
+      "hash": "fe4a1b00d9e2f60de62373cbf7333b7668219ea592ad7157a02af5d9614510e6",
+      "children": [
+        "ARCHITECTURE.md",
+        "phase-notes"
+      ]
+    },
+    "package-lock.json": {
+      "type": "file",
+      "hash": "008f13acff997fc86743bfb057adc38fe93593f9876c9578a7edbabeb5f267f1",
+      "size": 86206,
+      "mtimeMs": 1789221782968.023
+    },
+    "package.json": {
+      "type": "file",
+      "hash": "4ab2b8e73f7e83e8c3e5bcc47a48fabf19e9c358c3fe82640aed53f94e23c1f0",
+      "size": 343,
+      "mtimeMs": 1789220090422.005
+    },
+    "packages/context-engine/examples/apply-change-demo.ts": {
+      "type": "file",
+      "hash": "10372272c3a590ad25623968c5f29ce293f5900802938c1efa38da744a6a7d94",
+      "size": 1727,
+      "mtimeMs": 1789220743039.543
+    },
+    "packages/context-engine/examples/large-tree-incremental-demo.ts": {
+      "type": "file",
+      "hash": "8a67b6072ac6c49e077e9e08f71223fed8f664463bde0171ae80bcf7f3206fa0",
+      "size": 2132,
+      "mtimeMs": 1789220743048.6138
+    },
+    "packages/context-engine/examples": {
+      "type": "dir",
+      "hash": "a87072a5cd5a0716c92811f7726a356e369dc89fa4b35cf2cbcaad22ee60a40a",
+      "children": [
+        "apply-change-demo.ts",
+        "large-tree-incremental-demo.ts"
+      ]
+    },
+    "packages/context-engine/package.json": {
+      "type": "file",
+      "hash": "a943be0e1a8a592bfc1c05222d5d24f2b94583adc91f5e1e9f5ce9bbbb265ab3",
+      "size": 580,
+      "mtimeMs": 1789220743064.8145
+    },
+    "packages/context-engine/README.md": {
+      "type": "file",
+      "hash": "affaba417461258cdb4d6dd7186c23530c7a2102781b4571221ffa5f7765f008",
+      "size": 271,
+      "mtimeMs": 1789220743424.8606
+    },
+    "packages/context-engine/src/cli.ts": {
+      "type": "file",
+      "hash": "31cac85dc36f524fac4562d44703135e038c091a7911af0a3f97d0ae25cd95f2",
+      "size": 3771,
+      "mtimeMs": 1789220742999.3967
+    },
+    "packages/context-engine/src/hash.ts": {
+      "type": "file",
+      "hash": "727fef134ce5f2383f8b2e04e5095804e346f7cd8af131484c5b6fe379bbeb49",
+      "size": 971,
+      "mtimeMs": 1789220742961.0676
+    },
+    "packages/context-engine/src/index.ts": {
+      "type": "file",
+      "hash": "ad2eca190b1d7473a986fc64dd19eb57ddaf1e894a8efbc276dd78bcbff2d4a2",
+      "size": 385,
+      "mtimeMs": 1789220742991.4946
+    },
+    "packages/context-engine/src/snapshot-store.ts": {
+      "type": "file",
+      "hash": "4a412818300b8a9d298d822c7c1bd511b0a57b5d4eb6cdd49075f2c988761181",
+      "size": 868,
+      "mtimeMs": 1789220742980.008
+    },
+    "packages/context-engine/src/tree.ts": {
+      "type": "file",
+      "hash": "508b14915a37ff81c480fc7916dffd68c1ca80cd418766d41049a0771a01ede5",
+      "size": 7693,
+      "mtimeMs": 1789220742974.4775
+    },
+    "packages/context-engine/src/types.ts": {
+      "type": "file",
+      "hash": "32f47c3abcec9f08b686824c4f91e82e1f05a7530acc445fc1e54fc57b9915ed",
+      "size": 1734,
+      "mtimeMs": 1789220742966.615
+    },
+    "packages/context-engine/src/watcher.ts": {
+      "type": "file",
+      "hash": "fca6613a70fb5174ee49567d7a56fac23e243b837148833450b6d24d941134df",
+      "size": 2450,
+      "mtimeMs": 1789220742985.4985
+    },
+    "packages/context-engine/src": {
+      "type": "dir",
+      "hash": "fe1db8d8cbcc904eac04f880e0563334de5cd5aea2d71456a2c2c5f7c1a69df6",
+      "children": [
+        "cli.ts",
+        "hash.ts",
+        "index.ts",
+        "snapshot-store.ts",
+        "tree.ts",
+        "types.ts",
+        "watcher.ts"
+      ]
+    },
+    "packages/context-engine/test/tree.test.ts": {
+      "type": "file",
+      "hash": "914c5e81521f0bfa642facc4ade4e6b24e68944ef12e5814de32432a654d6ebb",
+      "size": 4655,
+      "mtimeMs": 1789220743017.028
+    },
+    "packages/context-engine/test": {
+      "type": "dir",
+      "hash": "dbf6269c492a649a564f5b153d12a3d163f4592f4a31b15914dcbcf0c6de6de8",
+      "children": [
+        "tree.test.ts"
+      ]
+    },
+    "packages/context-engine/tsconfig.json": {
+      "type": "file",
+      "hash": "1a9f0873fec04475a675b9b11b9402a9eca94c930c65a199019538b9f521b861",
+      "size": 137,
+      "mtimeMs": 1789220743078.589
+    },
+    "packages/context-engine": {
+      "type": "dir",
+      "hash": "1347a0736db04cd4bc2ac083b1727a120dd5c82d11136196acac75818913454c",
+      "children": [
+        "examples",
+        "package.json",
+        "README.md",
+        "src",
+        "test",
+        "tsconfig.json"
+      ]
+    },
+    "packages/protocol/package.json": {
+      "type": "file",
+      "hash": "04824b3885d7c54706a2e919cdca3c336ef5ebd0128d8d71b716b8fe61b247e8",
+      "size": 488,
+      "mtimeMs": 1789220769335.1772
+    },
+    "packages/protocol/src/agent.ts": {
+      "type": "file",
+      "hash": "11e63f31ef21ecc57597e990c47988cb3a44b900262b1df9fe1041447b83cf75",
+      "size": 2241,
+      "mtimeMs": 1789220769354.1182
+    },
+    "packages/protocol/src/debug.ts": {
+      "type": "file",
+      "hash": "949333daf033fd7726c99f90f5745bf68364705dbd9d7a409deb054fb1d53be8",
+      "size": 1233,
+      "mtimeMs": 1789222061775.4067
+    },
+    "packages/protocol/src/index.ts": {
+      "type": "file",
+      "hash": "e34ff7f82391b94ea6e0462787abcd890acf99f80104a7077a477b6518d8f1c8",
+      "size": 56,
+      "mtimeMs": 1789222061787.2407
+    },
+    "packages/protocol/src": {
+      "type": "dir",
+      "hash": "d4b23e3c65d51ccdeaac327ea2bf336f77b7471232f81ead2aa22eb525b22f28",
+      "children": [
+        "agent.ts",
+        "debug.ts",
+        "index.ts"
+      ]
+    },
+    "packages/protocol/test/agent.test.ts": {
+      "type": "file",
+      "hash": "1ca8297a5bbcdb9ed3d7d7e91d74c16407e88a29bcf1175ea3c443b6dbc272f9",
+      "size": 606,
+      "mtimeMs": 1789220769367.9443
+    },
+    "packages/protocol/test": {
+      "type": "dir",
+      "hash": "9bb4b92ea67c52b969f2f902f8f732969152be572eda541dbcc264a7fd274629",
+      "children": [
+        "agent.test.ts"
+      ]
+    },
+    "packages/protocol/tsconfig.json": {
+      "type": "file",
+      "hash": "1a9f0873fec04475a675b9b11b9402a9eca94c930c65a199019538b9f521b861",
+      "size": 137,
+      "mtimeMs": 1789220769343.097
+    },
+    "packages/protocol": {
+      "type": "dir",
+      "hash": "10706b8791ca9a98657478f88e363dff174bc7bdc4d642a682b7dfd216edd6cd",
+      "children": [
+        "package.json",
+        "src",
+        "test",
+        "tsconfig.json"
+      ]
+    },
+    "packages/semantic-index/package.json": {
+      "type": "file",
+      "hash": "6e7d30ab61b844063492c6654c3640194a55c3ccc07cda8baeb7f86bec02a48c",
+      "size": 690,
+      "mtimeMs": 1789220743350.643
+    },
+    "packages/semantic-index/README.md": {
+      "type": "file",
+      "hash": "7300901f0f3394233b00d9f80c204b0c8b12b84f317246907cfdf86e32cc1161",
+      "size": 319,
+      "mtimeMs": 1789220743434.223
+    },
+    "packages/semantic-index/src/chunker.ts": {
+      "type": "file",
+      "hash": "2b934f3fc1b68160d14e7baa66ec68dcace9a5944753558234ef828571073924",
+      "size": 6192,
+      "mtimeMs": 1789220743168.2336
+    },
+    "packages/semantic-index/src/cli.ts": {
+      "type": "file",
+      "hash": "19c2bfaaf6f4607483bfac6057ac74f30be6796a5e3e034db45d3a321c9eff92",
+      "size": 2759,
+      "mtimeMs": 1789220743278.9504
+    },
+    "packages/semantic-index/src/embeddings/hashing.ts": {
+      "type": "file",
+      "hash": "e025b57b91310876c0fc85bff934d5c93dce8fe580b321efaf0813475423f047",
+      "size": 2415,
+      "mtimeMs": 1789220743222.5254
+    },
+    "packages/semantic-index/src/embeddings/ollama.ts": {
+      "type": "file",
+      "hash": "c8f9abb847f4d0bb1dc35039c3f42be68a4adc0f42df3e988da27101a807c8c2",
+      "size": 2453,
+      "mtimeMs": 1789220743233.3616
+    },
+    "packages/semantic-index/src/embeddings/provider.ts": {
+      "type": "file",
+      "hash": "fc4edfa08ab72c7a42ff68a0b66b8ce42c37e14aa4e1bfe125deda173eb6bae9",
+      "size": 498,
+      "mtimeMs": 1789220743212.4172
+    },
+    "packages/semantic-index/src/embeddings": {
+      "type": "dir",
+      "hash": "8811a5b63f59375268f98969bc0087373460a8be70833f6a7f5ba9f0e9c0b9d6",
+      "children": [
+        "hashing.ts",
+        "ollama.ts",
+        "provider.ts"
+      ]
+    },
+    "packages/semantic-index/src/index.ts": {
+      "type": "file",
+      "hash": "675b79aa63a3b6efd487825c916cce22f19a78ab472432cf0f067fbe5672daf3",
+      "size": 897,
+      "mtimeMs": 1789220743267.3882
+    },
+    "packages/semantic-index/src/languages.ts": {
+      "type": "file",
+      "hash": "2ff1b9bead4152fb5d53b7c474d8675f62ce9e27c4e0f1b440731de5af12ff40",
+      "size": 1378,
+      "mtimeMs": 1789220743145.4246
+    },
+    "packages/semantic-index/src/obfuscate.ts": {
+      "type": "file",
+      "hash": "93c7fcb115975de17f3e0d74ac7d8fc292f43e22051201cc702d6404a59d5b52",
+      "size": 3335,
+      "mtimeMs": 1789220743179.2864
+    },
+    "packages/semantic-index/src/parser-pool.ts": {
+      "type": "file",
+      "hash": "4603a9fa8da9278b240d452d7f95c8808412019938d623895c2e27ffaa880b41",
+      "size": 1189,
+      "mtimeMs": 1789220743154.178
+    },
+    "packages/semantic-index/src/query.ts": {
+      "type": "file",
+      "hash": "bc7d6c249d48a1e07a5178220ba06f80c8af654d58c58c52de07853b4ac32519",
+      "size": 6653,
+      "mtimeMs": 1789220743253.7769
+    },
+    "packages/semantic-index/src/tokens.ts": {
+      "type": "file",
+      "hash": "b6a0344865b8fd6e6d47048e7d93823404c5ea7172210b636cd47341b87a686b",
+      "size": 438,
+      "mtimeMs": 1789220743134.341
+    },
+    "packages/semantic-index/src/vector-store.ts": {
+      "type": "file",
+      "hash": "f7c75c16dd77a83c01bce48eba8f2a7a6e9c24454d3776b432b69c6136aa759b",
+      "size": 4550,
+      "mtimeMs": 1789220743244.1577
+    },
+    "packages/semantic-index/src/workspace-key.ts": {
+      "type": "file",
+      "hash": "cad245c6834fda834937bf34e2087f7a48dfd3fe7fe4feadebb14e670101c1e7",
+      "size": 702,
+      "mtimeMs": 1789220743191.5823
+    },
+    "packages/semantic-index/src": {
+      "type": "dir",
+      "hash": "2e2cbd9037a358c7fd20bb4aeeb2aef83942aac2fc3ccf4468444306945916c9",
+      "children": [
+        "chunker.ts",
+        "cli.ts",
+        "embeddings",
+        "index.ts",
+        "languages.ts",
+        "obfuscate.ts",
+        "parser-pool.ts",
+        "query.ts",
+        "tokens.ts",
+        "vector-store.ts",
+        "workspace-key.ts"
+      ]
+    },
+    "packages/semantic-index/test/chunker.test.ts": {
+      "type": "file",
+      "hash": "e83279edeb70e88b789ffb1173b8ab7f7ab27d2b9206b112a9956872bef9ef57",
+      "size": 2861,
+      "mtimeMs": 1789220743302.6816
+    },
+    "packages/semantic-index/test/embeddings.test.ts": {
+      "type": "file",
+      "hash": "69627273f0a36a7519448a17f1fbf545c8dfc05f304d3e4af2b00faa1b4899dd",
+      "size": 3137,
+      "mtimeMs": 1789220743325.1511
+    },
+    "packages/semantic-index/test/obfuscate.test.ts": {
+      "type": "file",
+      "hash": "ee844bba5719bc43da335f69794052f373997c2543852ec23f04730048462be8",
+      "size": 2349,
+      "mtimeMs": 1789220743312.477
+    },
+    "packages/semantic-index/test/query.test.ts": {
+      "type": "file",
+      "hash": "897b5017ddba2d13bceb649096e683e05f4da563aef94a3e8d3e5c26ae1ce03a",
+      "size": 4479,
+      "mtimeMs": 1789220743335.4749
+    },
+    "packages/semantic-index/test": {
+      "type": "dir",
+      "hash": "6fc16fad29a50b80bf94974a354a19e7fc380b2917e91583e8e54f2ec9bc0a19",
+      "children": [
+        "chunker.test.ts",
+        "embeddings.test.ts",
+        "obfuscate.test.ts",
+        "query.test.ts"
+      ]
+    },
+    "packages/semantic-index/tsconfig.json": {
+      "type": "file",
+      "hash": "1a9f0873fec04475a675b9b11b9402a9eca94c930c65a199019538b9f521b861",
+      "size": 137,
+      "mtimeMs": 1789220743368.0715
+    },
+    "packages/semantic-index": {
+      "type": "dir",
+      "hash": "5eee5ba642af325695b6070a18fb2935a1331206967104bb73a2373a5ab1704a",
+      "children": [
+        "package.json",
+        "README.md",
+        "src",
+        "test",
+        "tsconfig.json"
+      ]
+    },
+    "packages/ui-kit/package.json": {
+      "type": "file",
+      "hash": "3c2c79d65808d2c93761015de4df51eb605f0346753d5767fc0bfd24d6164c1f",
+      "size": 73,
+      "mtimeMs": 1789220090496.3396
+    },
+    "packages/ui-kit/README.md": {
+      "type": "file",
+      "hash": "c3c4698e2c07595301f1590b0adfc289b3a967b79ea12c90bb85559bf8a347b6",
+      "size": 132,
+      "mtimeMs": 1789220090500.931
+    },
+    "packages/ui-kit": {
+      "type": "dir",
+      "hash": "f9e45b89559fce6eedb3abd8ec1c7ddd724c921dc4e5a6b6b1b65448301bfdd1",
+      "children": [
+        "package.json",
+        "README.md"
+      ]
+    },
+    "packages": {
+      "type": "dir",
+      "hash": "dea71fb843948c6ac4594000e81f8154af3dfdb7808247ddec24ac7956230b91",
+      "children": [
+        "context-engine",
+        "protocol",
+        "semantic-index",
+        "ui-kit"
+      ]
+    },
+    "README.md": {
+      "type": "file",
+      "hash": "9088c24c04576a8628e311de5bf1dacb71f5b6be0edd44029c1f154988a1058c",
+      "size": 3301,
+      "mtimeMs": 1789221731323.3213
+    },
+    "tsconfig.base.json": {
+      "type": "file",
+      "hash": "57730ac4f016bdf041457eb66d92b163836906605606c4b2c972f8fdb2eceff5",
+      "size": 270,
+      "mtimeMs": 1789220743385.4353
+    },
+    "": {
+      "type": "dir",
+      "hash": "02d4f40a68b63098b07a50c612b5fab385b8ed119c5320d218825dcb9d47deb0",
+      "children": [
+        ".gitignore",
+        "apps",
+        "docs",
+        "package-lock.json",
+        "package.json",
+        "packages",
+        "README.md",
+        "tsconfig.base.json"
+      ]
+    }
+  }
+}

@@ -8,7 +8,8 @@ import type {
   OpenProjectResponse,
 } from "@mobiusx/protocol";
 import { buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
-import { gitDiff, gitLog, gitStatus, isGitRepo } from "./gitOps.js";
+import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
+import { buildSemanticIndex, searchSemanticIndex } from "./semanticOps.js";
 import { projectState } from "./state.js";
 
 export function buildRouter(): Router {
@@ -37,6 +38,7 @@ export function buildRouter(): Router {
     projectState.path = abs;
     projectState.snapshot = snapshot;
     projectState.isGitRepo = gitRepo;
+    projectState.semanticIndexBuilt = false;
 
     const body: OpenProjectResponse = {
       path: abs,
@@ -108,6 +110,63 @@ export function buildRouter(): Router {
       res.json(await gitDiff(projectState.path, path, staged === true || staged === ("true" as unknown as boolean)));
     } catch (err) {
       res.status(500).json({ error: "git diff failed", detail: (err as Error).message });
+    }
+  });
+
+  router.post("/debug/index", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const stats = await buildSemanticIndex(projectState.path);
+      projectState.semanticIndexBuilt = true;
+      res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: "index build failed", detail: (err as Error).message });
+    }
+  });
+
+  router.get("/debug/search", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const query = String(req.query.q ?? "").trim();
+    if (!query) {
+      res.status(400).json({ error: "q is required" });
+      return;
+    }
+    const k = Number(req.query.k ?? 8);
+    try {
+      let indexedJustNow = false;
+      if (!projectState.semanticIndexBuilt) {
+        await buildSemanticIndex(projectState.path);
+        projectState.semanticIndexBuilt = true;
+        indexedJustNow = true;
+      }
+      const result = await searchSemanticIndex(projectState.path, query, k);
+      res.json({ ...result, indexedJustNow });
+    } catch (err) {
+      res.status(500).json({ error: "search failed", detail: (err as Error).message });
+    }
+  });
+
+  router.get("/debug/history", async (req, res) => {
+    if (!projectState.path || !projectState.isGitRepo) {
+      res.status(409).json({ error: "no git repo open" });
+      return;
+    }
+    const relPath = String(req.query.path ?? "");
+    if (!relPath) {
+      res.status(400).json({ error: "path is required" });
+      return;
+    }
+    try {
+      const { entries } = await gitLogForPath(projectState.path, relPath, Number(req.query.limit ?? 10));
+      res.json({ path: relPath, entries });
+    } catch (err) {
+      res.status(500).json({ error: "history failed", detail: (err as Error).message });
     }
   });
 

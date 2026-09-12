@@ -13,9 +13,10 @@ Working, tested vertical slice:
 - `packages/context-engine`, `packages/semantic-index` — vendored from the MobiusX IDE project (Merkle indexer, Tree-sitter semantic chunking). 22 tests passing, unmodified from source.
 - `packages/protocol` — shared desktop↔agent HTTP/WS contracts.
 - `apps/desktop-agent` — Local Agent Service (Express + ws, loopback-only, bearer-token auth): project open (via context-engine), file tree, file read, git status/log/diff, and a command-exec terminal over WebSocket. Smoke-tested end to end against this repo itself.
-- `apps/desktop` — Electron shell v0 (no bundler): spawns the agent, workspace nav, file tree, git panel, terminal panel.
+- `apps/desktop` — Electron shell v0 (no bundler): spawns the agent, workspace nav, file tree, git panel, terminal panel, and a UI restyled to match the MobiusX Desktop prototype (sidebar IA, top bar, tabbed editor, AI Assistant panel).
+- `Debug` view — Phase 2 static slice: local semantic-ish code search (`@mobiusx/semantic-index`) correlated with per-file git history. Explicitly not live cross-system trace/log analysis (see docs/ARCHITECTURE.md §5.3/§12) — that needs real observability data and MobiusX Cloud (Phase 3).
 
-**Not yet done:** a real interactive PTY (current terminal is command-exec, not a full shell session — avoids native `node-pty` compilation for now); intelligent debugger (Phase 2); cloud agent integration (Phase 3); packaging/code signing.
+**Not yet done:** a real interactive PTY (current terminal is command-exec, not a full shell session — avoids native `node-pty` compilation for now); live cross-system tracing for the debugger; cloud agent integration / MobiusX Cloud Agent for the Ask/Plan/Build panel (Phase 3); packaging/code signing.
 
 ## Running it locally
 

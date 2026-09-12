@@ -107,6 +107,8 @@ async function openProject(path) {
     projectChipLabel.textContent = `${result.path.split("/").pop()} (${result.fileCount} files${result.isGitRepo ? ", git" : ""})`;
     pushRecent(result.path);
     closeAllTabs();
+    document.getElementById("debug-results").innerHTML = "";
+    document.getElementById("debug-index-status").textContent = "No index built yet for this project";
     await loadTree();
     showView("workspace");
   } catch (err) {
@@ -437,4 +439,83 @@ document.getElementById("home-ask-send").addEventListener("click", () => {
 });
 document.getElementById("home-ask-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("home-ask-send").click();
+});
+
+// ============================================================
+// Debug (Intelligent Debugger) view — static code search + git history.
+// Deliberately NOT live trace/log analysis — see the scope note in the UI
+// and docs/ARCHITECTURE.md §5.3 / §12 for why that's Phase 3, not this.
+// ============================================================
+const debugResultsEl = document.getElementById("debug-results");
+const debugIndexStatus = document.getElementById("debug-index-status");
+const debugQueryInput = document.getElementById("debug-query-input");
+
+function escapeHtml(str) {
+  return str.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+async function runDebugSearch() {
+  const query = debugQueryInput.value.trim();
+  if (!query) return;
+  if (!currentProjectPath) {
+    debugResultsEl.innerHTML = "<div class='debug-empty'>Open a project first.</div>";
+    return;
+  }
+
+  debugResultsEl.innerHTML = "<div class='debug-empty'>Searching…</div>";
+  try {
+    const result = await api(`/debug/search?q=${encodeURIComponent(query)}&k=8`);
+    debugIndexStatus.textContent = result.indexedJustNow
+      ? `Index built just now (${result.storeSize} chunks, ${result.provider})`
+      : `${result.storeSize} chunks indexed (${result.provider})`;
+
+    if (result.hits.length === 0) {
+      debugResultsEl.innerHTML = "<div class='debug-empty'>No matching code found for that description.</div>";
+      return;
+    }
+
+    debugResultsEl.innerHTML = "";
+    for (const hit of result.hits) {
+      const card = document.createElement("div");
+      card.className = "debug-hit";
+      card.innerHTML = `
+        <div class="debug-hit-head">
+          <span class="debug-hit-path">${escapeHtml(hit.relPath)}:${hit.startLine}-${hit.endLine} <span class="debug-hit-meta">(${hit.kind}, score ${hit.score.toFixed(3)})</span></span>
+        </div>
+        <pre class="debug-hit-snippet">${escapeHtml(hit.snippet)}</pre>
+        <div class="debug-hit-history">
+          <div class="debug-hit-history-title">Recent changes to this file</div>
+          <div class="debug-hit-history-list">Loading…</div>
+        </div>
+      `;
+      card.querySelector(".debug-hit-path").addEventListener("click", () => {
+        openFile(hit.relPath);
+        showView("workspace");
+      });
+      debugResultsEl.appendChild(card);
+
+      // Fire-and-forget per-card history lookup so one slow/failed file doesn't block the rest.
+      api(`/debug/history?path=${encodeURIComponent(hit.relPath)}&limit=5`)
+        .then((history) => {
+          const listEl = card.querySelector(".debug-hit-history-list");
+          if (history.entries.length === 0) {
+            listEl.textContent = "No history found (untracked or new file).";
+            return;
+          }
+          listEl.innerHTML = history.entries
+            .map((e) => `<div class="log-entry"><span class="log-hash">${e.hash.slice(0, 7)}</span> ${escapeHtml(e.subject)}</div>`)
+            .join("");
+        })
+        .catch((err) => {
+          card.querySelector(".debug-hit-history-list").textContent = `History unavailable: ${err.message}`;
+        });
+    }
+  } catch (err) {
+    debugResultsEl.innerHTML = `<div class='debug-empty'>Search failed: ${err.message}</div>`;
+  }
+}
+
+document.getElementById("debug-search-btn").addEventListener("click", runDebugSearch);
+debugQueryInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runDebugSearch();
 });

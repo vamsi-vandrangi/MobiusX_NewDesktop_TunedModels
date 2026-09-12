@@ -150,9 +150,24 @@
           <h2>Tasks</h2>
           <p>Long-running agent tasks (with plans, activity logs, model usage) are Phase 3, built on top of the Cloud Agent work.</p>
         </section>
-        <section class="view placeholder-view" id="view-debug" hidden>
+        <section class="view" id="view-debug" hidden>
           <h2>Intelligent Debugger</h2>
-          <p>Cross-system root-cause tracing (frontend → API → service → DB → infra) is Phase 2. See <code>docs/ARCHITECTURE.md</code> §5.3.</p>
+          <p class="scope-note">
+            Static code intelligence: semantic-ish code search (local, no cloud) correlated with git history
+            for the files that turn up. This is <strong>not</strong> live log/trace/metric analysis across a
+            running system — that needs real observability data and MobiusX Cloud, which is Phase 3. Treat
+            results as "code and history worth looking at," not an automated root-cause verdict.
+          </p>
+
+          <div class="ask-box">
+            <input id="debug-query-input" placeholder="Describe the issue, e.g. \"payment retry backoff logic\"…" />
+            <div class="ask-modes">
+              <span id="debug-index-status" class="status-text">No index built yet for this project</span>
+              <button id="debug-search-btn" class="send-btn">→</button>
+            </div>
+          </div>
+
+          <div id="debug-results" class="debug-results"></div>
         </section>
         <section class="view placeholder-view" id="view-artifacts" hidden>
           <h2>Artifacts</h2>

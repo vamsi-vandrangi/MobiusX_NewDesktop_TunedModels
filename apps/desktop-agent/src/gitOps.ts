@@ -82,3 +82,17 @@ export async function gitDiff(cwd: string, path: string, staged = false): Promis
   const { stdout } = await runGit(cwd, args);
   return { path, diff: stdout };
 }
+
+export async function gitLogForPath(cwd: string, path: string, limit = 20): Promise<GitLogResponse> {
+  const format = "%H%x1f%an%x1f%aI%x1f%s%x1e";
+  const { stdout } = await runGit(cwd, ["log", "-n", String(limit), `--pretty=format:${format}`, "--", path]);
+  const entries: GitLogEntry[] = stdout
+    .split("\x1e")
+    .map((rec) => rec.trim())
+    .filter((rec) => rec.length > 0)
+    .map((rec) => {
+      const [hash, author, date, subject] = rec.split("\x1f");
+      return { hash, author, date, subject };
+    });
+  return { entries };
+}

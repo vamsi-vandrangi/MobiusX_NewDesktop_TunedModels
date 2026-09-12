@@ -293,7 +293,7 @@ MobiusX_WDC/
 | Phase | Scope |
 |---|---|
 | **1** | Desktop Agent + X-Coder workspace shell + local repository access + Git + terminal. Vendor in `context-engine`/`semantic-index` from `mobiusx-ide`. |
-| **2** | Intelligent AI Debugger — cross-system tracing, architecture/dependency understanding (§5.3). |
+| **2** | Intelligent AI Debugger — static slice shipped: semantic-ish local code search (`@mobiusx/semantic-index`, hashing-lexical embeddings) correlated with per-file git history, exposed via `/debug/index`, `/debug/search`, `/debug/history` and a real Debug view in the shell. Cross-system tracing against live logs/traces/metrics (§5.3's actual differentiator) still needs real observability integration and MobiusX Cloud — that's Phase 3, not done. |
 | **3** | Cloud Agents — autonomous, longer-running engineering tasks initiated from desktop, resumable on web. |
 | **4** | Enterprise Knowledge + Global Intelligence integration into the desktop workspace (read/query surfaces, not full admin). |
 | **5** | Enterprise-grade governance, security policy enforcement, and self-hosted/private deployment options. |
