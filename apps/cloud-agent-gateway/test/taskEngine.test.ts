@@ -8,7 +8,7 @@ import { join } from "node:path";
 const dataDir = await mkdtemp(join(tmpdir(), "mobiusx-cloud-test-"));
 process.env.MOBIUSX_CLOUD_DATA_DIR = dataDir;
 
-const { startTask, getTask } = await import("../src/taskEngine.js");
+const { startTask, getTask, cancelTask } = await import("../src/taskEngine.js");
 const { listTasks } = await import("../src/store.js");
 
 function waitUntilDone(id: string, timeoutMs = 5000): Promise<void> {
@@ -16,7 +16,7 @@ function waitUntilDone(id: string, timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
     const tick = async () => {
       const task = await getTask(id);
-      if (task && (task.status === "completed" || task.status === "failed")) {
+      if (task && (task.status === "completed" || task.status === "failed" || task.status === "cancelled")) {
         resolve();
         return;
       }
@@ -65,4 +65,30 @@ test("build mode never claims to modify files", async () => {
   await waitUntilDone(summary.id);
   const task = await getTask(summary.id);
   assert.match(task!.output, /does not modify files automatically/);
+});
+
+test("cancelTask aborts a running demo task and marks it cancelled, not failed", async () => {
+  const summary = await startTask({ mode: "build", prompt: "long-running thing to cancel" });
+  assert.equal(summary.status, "queued");
+
+  // Cancel almost immediately — before the demo runner's first scripted step
+  // (350-700ms) has a chance to finish — to prove the abort actually
+  // interrupts in-flight work rather than the task just running to completion.
+  const cancelled = cancelTask(summary.id);
+  assert.equal(cancelled, true);
+
+  await waitUntilDone(summary.id);
+
+  const task = await getTask(summary.id);
+  assert.ok(task);
+  assert.equal(task!.status, "cancelled");
+  assert.ok(!task!.output.includes("does not modify files automatically")); // never reached the completed output
+});
+
+test("cancelTask on an unknown or already-finished task returns false", async () => {
+  assert.equal(cancelTask("no-such-task-id"), false);
+
+  const summary = await startTask({ mode: "ask", prompt: "quick one" });
+  await waitUntilDone(summary.id);
+  assert.equal(cancelTask(summary.id), false); // already completed by the time we get here
 });

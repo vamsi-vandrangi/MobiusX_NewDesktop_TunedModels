@@ -4,10 +4,11 @@ import type { AgentRunner, RunnerInput } from "./types.js";
 /**
  * Always available, no external dependency. Demonstrates the real task
  * lifecycle (steps, streamed output, status transitions, persistence,
- * resumability) end-to-end — but the "reasoning" is scripted, not a model
- * call. Every output this runner produces says so explicitly; it never
- * pretends to be a real answer. See runnerSelector.ts for how a real model
- * runner (e.g. AnthropicRunner) takes over when the user configures one.
+ * resumability, cancellation) end-to-end — but the "reasoning" is scripted,
+ * not a model call. Every output this runner produces says so explicitly;
+ * it never pretends to be a real answer. See runnerSelector.ts for how a
+ * real model runner (e.g. AnthropicRunner) takes over when the user
+ * configures one.
  */
 export const demoRunner: AgentRunner = {
   name: "demo",
@@ -15,16 +16,25 @@ export const demoRunner: AgentRunner = {
     const steps = stepsFor(input.mode);
     emit({ type: "status", status: "running" });
 
-    for (const label of steps) {
-      const step = { id: cryptoId(), label, status: "in_progress" as const, startedAt: new Date().toISOString() };
-      emit({ type: "step", step });
-      await delay(350 + Math.random() * 350);
-      emit({ type: "step", step: { ...step, status: "completed", completedAt: new Date().toISOString() } });
-    }
+    try {
+      for (const label of steps) {
+        const step = { id: cryptoId(), label, status: "in_progress" as const, startedAt: new Date().toISOString() };
+        emit({ type: "step", step });
+        await delay(350 + Math.random() * 350, input.signal);
+        emit({ type: "step", step: { ...step, status: "completed", completedAt: new Date().toISOString() } });
+      }
 
-    emit({ type: "output", delta: renderOutput(input) });
-    emit({ type: "status", status: "completed" });
-    emit({ type: "done" });
+      emit({ type: "output", delta: renderOutput(input) });
+      emit({ type: "status", status: "completed" });
+      emit({ type: "done" });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        emit({ type: "status", status: "cancelled" });
+        emit({ type: "done" });
+        return;
+      }
+      throw err;
+    }
   },
 };
 
@@ -51,8 +61,29 @@ function renderOutput(input: RunnerInput): string {
   return `${banner}Proposed-changes summary for: "${input.prompt}"\n\nThis reference gateway does not modify files automatically — "build" mode only drafts a description of the change for human review, by design (see docs/ARCHITECTURE.md §8's approval step). A real model would draft the actual diff description here.${context}`;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Rejects with a named AbortError (matching the DOM/fetch convention) the moment `signal` aborts, so callers can `if (err.name === "AbortError")` regardless of whether the abort came from a timer or a fetch call. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(abortError());
+      },
+      { once: true },
+    );
+  });
+}
+
+function abortError(): Error {
+  const err = new Error("Task cancelled");
+  err.name = "AbortError";
+  return err;
 }
 
 function cryptoId(): string {

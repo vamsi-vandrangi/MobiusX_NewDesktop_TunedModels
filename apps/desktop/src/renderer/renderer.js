@@ -452,14 +452,21 @@ function createAssistantPanel(container) {
   function addStreamingMsg() {
     const div = document.createElement("div");
     div.className = "assistant-msg system streaming";
-    div.innerHTML = `<div class="assistant-steps"></div><div class="assistant-output"></div>`;
+    div.innerHTML = `
+      <div class="assistant-stream-head">
+        <div class="assistant-steps"></div>
+        <button class="assistant-stop-btn" disabled title="Cancel this task">■ Stop</button>
+      </div>
+      <div class="assistant-output"></div>
+    `;
     feed.appendChild(div);
     feed.scrollTop = feed.scrollHeight;
+    const stopBtn = div.querySelector(".assistant-stop-btn");
     return {
+      stopBtn,
       setStep(step) {
         const stepsEl = div.querySelector(".assistant-steps");
         const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "…" : "·";
-        const id = `step-${step.id}`;
         let line = stepsEl.querySelector(`[data-step="${step.id}"]`);
         if (!line) {
           line = document.createElement("div");
@@ -472,8 +479,17 @@ function createAssistantPanel(container) {
         div.querySelector(".assistant-output").textContent += delta;
         feed.scrollTop = feed.scrollHeight;
       },
+      setStatus(status) {
+        if (status === "cancelled") {
+          div.querySelector(".assistant-output").textContent += "\n[cancelled]";
+        }
+        if (status === "completed" || status === "cancelled" || status === "failed") {
+          stopBtn.remove();
+        }
+      },
       setError(message) {
         div.querySelector(".assistant-output").textContent += `\n[error] ${message}`;
+        stopBtn.remove();
       },
     };
   }
@@ -503,11 +519,24 @@ function createAssistantPanel(container) {
         }),
       });
       stream.appendOutput(`[runner: ${task.runner}]\n`);
+      stream.stopBtn.disabled = false;
+      stream.stopBtn.addEventListener("click", async () => {
+        stream.stopBtn.disabled = true;
+        stream.stopBtn.textContent = "Stopping…";
+        try {
+          await cloudApi(`/tasks/${task.id}/cancel`, { method: "POST" });
+        } catch (err) {
+          stream.stopBtn.disabled = false;
+          stream.stopBtn.textContent = `Cancel failed: ${err.message}`;
+        }
+      });
       await streamTask(task.id, {
         onStep: (step) => stream.setStep(step),
         onOutput: (delta) => stream.appendOutput(delta),
+        onStatus: (status) => stream.setStatus(status),
         onError: (message) => stream.setError(message),
       });
+      stream.stopBtn.remove();
     } catch (err) {
       stream.setError(err.message);
     }
@@ -695,6 +724,7 @@ async function showTaskDetail(taskId) {
 function renderTaskDetail(task) {
   if (task.id !== activeTaskId) return; // a newer selection has since superseded this render
   const detailEl = document.getElementById("task-detail");
+  const cancellable = task.status === "queued" || task.status === "running";
   detailEl.innerHTML = `
     <div class="task-detail-header">
       <div class="task-row-prompt">${escapeHtml(task.prompt)}</div>
@@ -702,6 +732,7 @@ function renderTaskDetail(task) {
         <span class="task-mode-badge">${task.mode}</span>
         <span class="task-status ${task.status}">${task.status}</span>
         <span>runner: ${task.runner}</span>
+        ${cancellable ? `<button class="task-cancel-btn">■ Cancel</button>` : ""}
       </div>
     </div>
     <div class="task-detail-steps">
@@ -711,4 +742,19 @@ function renderTaskDetail(task) {
     </div>
     <pre class="task-detail-output">${escapeHtml(task.output || (task.status === "failed" ? task.error ?? "" : "…"))}</pre>
   `;
+  if (cancellable) {
+    const btn = detailEl.querySelector(".task-cancel-btn");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Cancelling…";
+      try {
+        await cloudApi(`/tasks/${task.id}/cancel`, { method: "POST" });
+        // The in-flight streamTask() subscription in showTaskDetail() will
+        // pick up the resulting "status: cancelled" event and re-render.
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = `Cancel failed: ${err.message}`;
+      }
+    });
+  }
 }

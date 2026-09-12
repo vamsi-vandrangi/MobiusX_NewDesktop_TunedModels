@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { CreateTaskRequest, CreateTaskResponse, ListTasksResponse } from "@mobiusx/protocol";
 import { getTask, listTasks } from "./store.js";
-import { startTask } from "./taskEngine.js";
+import { cancelTask, startTask } from "./taskEngine.js";
 
 export function buildRouter(): Router {
   const router = Router();
@@ -33,6 +33,25 @@ export function buildRouter(): Router {
       return;
     }
     res.json(task);
+  });
+
+  router.post("/tasks/:id/cancel", async (req, res) => {
+    const task = await getTask(req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    if (task.status !== "queued" && task.status !== "running") {
+      res.status(409).json({ error: `task is already ${task.status}, nothing to cancel` });
+      return;
+    }
+    const cancelled = cancelTask(req.params.id);
+    if (!cancelled) {
+      // Finished between the getTask() check above and here — inherently racy, and fine to report as a no-op.
+      res.status(409).json({ error: "task is no longer running" });
+      return;
+    }
+    res.status(202).json({ ok: true });
   });
 
   return router;

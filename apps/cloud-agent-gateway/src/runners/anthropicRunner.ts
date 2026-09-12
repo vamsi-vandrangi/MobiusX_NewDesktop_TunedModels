@@ -7,8 +7,13 @@ import type { AgentRunner, RunnerInput } from "./types.js";
  * ever hardcoded or defaulted here: this gateway ships with no credentials
  * and no assumed model version, on purpose (model availability changes,
  * and a wrong hardcoded model string fails louder than just staying on the
- * demo runner). Single request/response, not token-level streaming yet —
- * see apps/cloud-agent-gateway/README.md for that follow-up.
+ * demo runner).
+ *
+ * Streams token-by-token via the Messages API's `stream: true` mode (SSE),
+ * forwarding each `text_delta` as an "output" TaskEvent as it arrives —
+ * the same live-typing experience Claude/Cursor's own chat UIs give.
+ * `input.signal` is passed straight to `fetch`, so cancelling a task here
+ * aborts the in-flight HTTP request itself, not just the UI's view of it.
  */
 export function isAnthropicConfigured(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_MODEL);
@@ -28,13 +33,19 @@ export const anthropicRunner: AgentRunner = {
     }
 
     emit({ type: "status", status: "running" });
-    const step = { id: stepId(), label: "Calling Anthropic API", status: "in_progress" as const, startedAt: new Date().toISOString() };
+    const step = {
+      id: stepId(),
+      label: "Streaming response from Anthropic API",
+      status: "in_progress" as const,
+      startedAt: new Date().toISOString(),
+    };
     emit({ type: "step", step });
 
     try {
       const systemPrompt = systemPromptFor(input);
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
+        signal: input.signal,
         headers: {
           "content-type": "application/json",
           "x-api-key": apiKey,
@@ -45,6 +56,7 @@ export const anthropicRunner: AgentRunner = {
           max_tokens: 1024,
           system: systemPrompt,
           messages: [{ role: "user", content: input.prompt }],
+          stream: true,
         }),
       });
 
@@ -52,23 +64,74 @@ export const anthropicRunner: AgentRunner = {
         const body = await res.text();
         throw new Error(`Anthropic API returned ${res.status}: ${body.slice(0, 500)}`);
       }
+      if (!res.body) {
+        throw new Error("Anthropic API response had no body to stream");
+      }
 
-      const data = (await res.json()) as { content?: { type: string; text?: string }[] };
-      const text = (data.content ?? [])
-        .filter((block) => block.type === "text" && typeof block.text === "string")
-        .map((block) => block.text)
-        .join("");
+      const sawText = await streamSse(res.body, (delta) => emit({ type: "output", delta }));
 
+      if (!sawText) emit({ type: "output", delta: "(model returned no text content)" });
       emit({ type: "step", step: { ...step, status: "completed", completedAt: new Date().toISOString() } });
-      emit({ type: "output", delta: text || "(model returned no text content)" });
       emit({ type: "status", status: "completed" });
       emit({ type: "done" });
     } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        emit({ type: "status", status: "cancelled" });
+        emit({ type: "done" });
+        return;
+      }
       emit({ type: "error", message: (err as Error).message });
       emit({ type: "done" });
     }
   },
 };
+
+/**
+ * Reads an Anthropic Messages API SSE stream, forwarding each `text_delta`
+ * chunk's text via `onText` as it arrives. Returns whether any text was
+ * seen at all, so the caller can fall back to a placeholder if not.
+ * See https://docs.claude.com/en/api/messages-streaming for the event shapes.
+ */
+async function streamSse(body: ReadableStream<Uint8Array>, onText: (text: string) => void): Promise<boolean> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let sawText = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const dataLine = rawEvent.split("\n").find((line) => line.startsWith("data:"));
+        if (!dataLine) continue;
+
+        let parsed: { type?: string; delta?: { type?: string; text?: string }; error?: { message?: string } };
+        try {
+          parsed = JSON.parse(dataLine.slice(5).trim());
+        } catch {
+          continue; // malformed/partial event line — skip rather than crash the whole task on one bad chunk
+        }
+
+        if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta" && parsed.delta.text) {
+          onText(parsed.delta.text);
+          sawText = true;
+        } else if (parsed.type === "error") {
+          throw new Error(parsed.error?.message ?? "Anthropic stream reported an error");
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return sawText;
+}
 
 function systemPromptFor(input: RunnerInput): string {
   const base =

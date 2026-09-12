@@ -241,6 +241,13 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 .task-status.completed { color: #6fcf73; }
 .task-status.running, .task-status.queued { color: #e0b96f; }
 .task-status.failed { color: #e0685f; }
+.task-status.cancelled { color: #8a8b92; }
+.task-cancel-btn, .assistant-stop-btn {
+  background: #2a1f22; border: 1px solid #5a3339; color: #e0928f; border-radius: 4px;
+  padding: 2px 8px; font-size: 10px; cursor: pointer;
+}
+.task-cancel-btn:hover, .assistant-stop-btn:hover:not(:disabled) { background: #3a262a; }
+.task-cancel-btn:disabled, .assistant-stop-btn:disabled { opacity: 0.55; cursor: default; }
 .task-detail-header { padding: 12px 14px; border-bottom: 1px solid #232429; }
 .task-detail-steps { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
 .task-step-row { font-size: 12px; display: flex; gap: 8px; align-items: center; }
@@ -253,5 +260,6 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 }
 
 /* ---- Assistant streaming message ---- */
-.assistant-msg.streaming .assistant-steps { font-size: 11px; color: #7a7b81; margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+.assistant-stream-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.assistant-msg.streaming .assistant-steps { font-size: 11px; color: #7a7b81; display: flex; flex-direction: column; gap: 2px; }
 .assistant-msg.streaming .assistant-output { margin-top: 6px; white-space: pre-wrap; }
