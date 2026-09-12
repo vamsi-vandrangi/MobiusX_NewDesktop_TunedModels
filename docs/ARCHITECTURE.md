@@ -294,7 +294,7 @@ MobiusX_WDC/
 |---|---|
 | **1** | Desktop Agent + X-Coder workspace shell + local repository access + Git + terminal. Vendor in `context-engine`/`semantic-index` from `mobiusx-ide`. |
 | **2** | Intelligent AI Debugger — static slice shipped: semantic-ish local code search (`@mobiusx/semantic-index`, hashing-lexical embeddings) correlated with per-file git history, exposed via `/debug/index`, `/debug/search`, `/debug/history` and a real Debug view in the shell. Cross-system tracing against live logs/traces/metrics (§5.3's actual differentiator) still needs real observability integration and MobiusX Cloud — that's Phase 3, not done. |
-| **3** | Cloud Agents — autonomous, longer-running engineering tasks initiated from desktop, resumable on web. |
+| **3** | Cloud Agents — local reference slice shipped: `apps/cloud-agent-gateway` implements the real task lifecycle (create/queue/stream/persist, resumable across a gateway restart) with a pluggable runner — a demo runner by default, or a real (single-request, non-streaming) Anthropic call if the user supplies their own `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`. Grounded in local context via Phase 2's semantic search. This is explicitly NOT MobiusX's real production Cloud (RAG/EK/GI) — see §12 and the gateway's own README for the swap-in path. Still open: real production-backend integration, token-level streaming, multi-agent workflows, task cancellation, resumption on a real web client. |
 | **4** | Enterprise Knowledge + Global Intelligence integration into the desktop workspace (read/query surfaces, not full admin). |
 | **5** | Enterprise-grade governance, security policy enforcement, and self-hosted/private deployment options. |
 

@@ -1,4 +1,4 @@
-const { agentBaseUrl, agentWsUrl, agentToken, openFolderDialog } = window.mobiusx;
+const { agentBaseUrl, agentWsUrl, agentToken, cloudBaseUrl, cloudWsUrl, cloudToken, openFolderDialog } = window.mobiusx;
 
 // ============================================================
 // Nav / view switching
@@ -10,6 +10,7 @@ function showView(name) {
   for (const [key, el] of Object.entries(views)) el.hidden = key !== name;
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name === "changes") loadGit();
+  if (name === "tasks") loadTasksList();
 }
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -357,9 +358,61 @@ async function loadGit() {
 }
 
 // ============================================================
-// AI Assistant panel (Ask/Plan/Build) — UI shell only.
-// MobiusX Cloud Agent integration is Phase 3 (see docs/ARCHITECTURE.md §12);
-// this deliberately does not fake a model response.
+// Cloud Agent Gateway client (Phase 3) — a LOCAL REFERENCE implementation,
+// not MobiusX's real production Cloud. See apps/cloud-agent-gateway/README.md
+// and docs/ARCHITECTURE.md §12.
+// ============================================================
+async function cloudApi(path, opts = {}) {
+  const res = await fetch(cloudBaseUrl + path, {
+    ...opts,
+    headers: { ...(opts.headers || {}), Authorization: `Bearer ${cloudToken}`, "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ? `${body.error}${body.detail ? ": " + body.detail : ""}` : `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Best-effort: ground a cloud task in locally-relevant code via Phase 2's semantic search. Never blocks submission on failure. */
+async function findRelevantFiles(query) {
+  if (!currentProjectPath) return [];
+  try {
+    const result = await api(`/debug/search?q=${encodeURIComponent(query)}&k=3`);
+    return result.hits.map((h) => ({ relPath: h.relPath, snippet: h.snippet }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Creates a task, streams its progress into the given render callbacks, and
+ * resolves once the task reaches a terminal state. Shared by the assistant
+ * panel and the Tasks view's live detail pane.
+ */
+function streamTask(taskId, { onStep, onOutput, onStatus, onError, onDone }) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`${cloudWsUrl}/tasks/${taskId}/stream?token=${encodeURIComponent(cloudToken)}`);
+    ws.addEventListener("message", (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === "step") onStep?.(msg.step);
+      else if (msg.type === "output") onOutput?.(msg.delta);
+      else if (msg.type === "status") onStatus?.(msg.status);
+      else if (msg.type === "error") onError?.(msg.message);
+      else if (msg.type === "done") {
+        ws.close();
+        resolve();
+      }
+    });
+    ws.addEventListener("error", () => {
+      onError?.("stream connection error");
+      resolve();
+    });
+  });
+}
+
+// ============================================================
+// AI Assistant panel (Ask/Plan/Build) — wired to the Cloud Agent Gateway.
 // ============================================================
 function createAssistantPanel(container) {
   container.innerHTML = `
@@ -393,19 +446,71 @@ function createAssistantPanel(container) {
     div.textContent = text;
     feed.appendChild(div);
     feed.scrollTop = feed.scrollHeight;
+    return div;
+  }
+
+  function addStreamingMsg() {
+    const div = document.createElement("div");
+    div.className = "assistant-msg system streaming";
+    div.innerHTML = `<div class="assistant-steps"></div><div class="assistant-output"></div>`;
+    feed.appendChild(div);
+    feed.scrollTop = feed.scrollHeight;
+    return {
+      setStep(step) {
+        const stepsEl = div.querySelector(".assistant-steps");
+        const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "…" : "·";
+        const id = `step-${step.id}`;
+        let line = stepsEl.querySelector(`[data-step="${step.id}"]`);
+        if (!line) {
+          line = document.createElement("div");
+          line.dataset.step = step.id;
+          stepsEl.appendChild(line);
+        }
+        line.textContent = `${marker} ${step.label}`;
+      },
+      appendOutput(delta) {
+        div.querySelector(".assistant-output").textContent += delta;
+        feed.scrollTop = feed.scrollHeight;
+      },
+      setError(message) {
+        div.querySelector(".assistant-output").textContent += `\n[error] ${message}`;
+      },
+    };
   }
 
   addMsg(
-    "MobiusX Cloud Agent isn't connected in this build yet (Phase 3). This panel shows the intended Ask / Plan / Build interaction — use the Terminal for real local commands in the meantime.",
+    cloudBaseUrl
+      ? "Connected to the local Cloud Agent Gateway (reference implementation — see docs/ARCHITECTURE.md §12). Ask / Plan / Build below is real, but reasoning quality depends on whether a real model is configured; each response says which runner served it."
+      : "Cloud Agent Gateway did not start — Ask/Plan/Build is unavailable this session.",
     "system",
   );
 
-  function submit() {
+  async function submit() {
     const text = input.value.trim();
-    if (!text) return;
+    if (!text || !cloudBaseUrl) return;
     addMsg(text, "user");
     input.value = "";
-    addMsg(`[${mode}] not yet wired to MobiusX Cloud — see docs/ARCHITECTURE.md §12 (Phase 3).`, "system");
+
+    const stream = addStreamingMsg();
+    try {
+      const relevantFiles = await findRelevantFiles(text);
+      const { task } = await cloudApi("/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          mode,
+          prompt: text,
+          projectContext: currentProjectPath ? { projectPath: currentProjectPath, relevantFiles } : undefined,
+        }),
+      });
+      stream.appendOutput(`[runner: ${task.runner}]\n`);
+      await streamTask(task.id, {
+        onStep: (step) => stream.setStep(step),
+        onOutput: (delta) => stream.appendOutput(delta),
+        onError: (message) => stream.setError(message),
+      });
+    } catch (err) {
+      stream.setError(err.message);
+    }
   }
 
   sendBtn.addEventListener("click", submit);
@@ -519,3 +624,91 @@ document.getElementById("debug-search-btn").addEventListener("click", runDebugSe
 debugQueryInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") runDebugSearch();
 });
+
+// ============================================================
+// Tasks view — list + detail, backed by the Cloud Agent Gateway.
+// ============================================================
+let activeTaskId = null;
+
+function formatTaskTime(iso) {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+async function loadTasksList() {
+  const listEl = document.getElementById("tasks-list");
+  if (!cloudBaseUrl) {
+    listEl.innerHTML = "<div class='debug-empty'>Cloud Agent Gateway is not running.</div>";
+    return;
+  }
+  try {
+    const { tasks } = await cloudApi("/tasks");
+    listEl.innerHTML = "";
+    if (tasks.length === 0) {
+      listEl.innerHTML = "<div class='debug-empty'>No tasks yet — send something from the AI Assistant panel.</div>";
+      return;
+    }
+    for (const task of tasks) {
+      const row = document.createElement("div");
+      row.className = "task-row" + (task.id === activeTaskId ? " active" : "");
+      row.innerHTML = `
+        <div class="task-row-prompt">${escapeHtml(task.prompt)}</div>
+        <div class="task-row-meta">
+          <span class="task-mode-badge">${task.mode}</span>
+          <span class="task-status ${task.status}">${task.status}</span>
+          <span>${formatTaskTime(task.createdAt)}</span>
+        </div>
+      `;
+      row.addEventListener("click", () => showTaskDetail(task.id));
+      listEl.appendChild(row);
+    }
+  } catch (err) {
+    listEl.innerHTML = `<div class='debug-empty'>Failed to load tasks: ${err.message}</div>`;
+  }
+}
+
+async function showTaskDetail(taskId) {
+  activeTaskId = taskId;
+  document.querySelectorAll(".task-row").forEach((el) => el.classList.remove("active"));
+  const detailEl = document.getElementById("task-detail");
+
+  try {
+    const task = await cloudApi(`/tasks/${taskId}`);
+    renderTaskDetail(task);
+
+    if (task.status === "queued" || task.status === "running") {
+      await streamTask(taskId, {
+        onStep: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
+        onOutput: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
+        onStatus: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
+      });
+      loadTasksList(); // refresh the status badge in the list once it settles
+    }
+  } catch (err) {
+    detailEl.innerHTML = `<div class='debug-empty'>Failed to load task: ${err.message}</div>`;
+  }
+}
+
+function renderTaskDetail(task) {
+  if (task.id !== activeTaskId) return; // a newer selection has since superseded this render
+  const detailEl = document.getElementById("task-detail");
+  detailEl.innerHTML = `
+    <div class="task-detail-header">
+      <div class="task-row-prompt">${escapeHtml(task.prompt)}</div>
+      <div class="task-row-meta">
+        <span class="task-mode-badge">${task.mode}</span>
+        <span class="task-status ${task.status}">${task.status}</span>
+        <span>runner: ${task.runner}</span>
+      </div>
+    </div>
+    <div class="task-detail-steps">
+      ${task.steps
+        .map((s) => `<div class="task-step-row"><span class="task-step-dot ${s.status}"></span>${escapeHtml(s.label)}</div>`)
+        .join("")}
+    </div>
+    <pre class="task-detail-output">${escapeHtml(task.output || (task.status === "failed" ? task.error ?? "" : "…"))}</pre>
+  `;
+}

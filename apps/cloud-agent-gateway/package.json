@@ -1,0 +1,26 @@
+{
+  "name": "@mobiusx/cloud-agent-gateway",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "description": "Local reference implementation of the MobiusX desktop<->cloud task contract (Phase 3) — NOT the real production MobiusX Cloud backend. See src/index.ts and docs/ARCHITECTURE.md §12.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@mobiusx/protocol": "*",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.1",
+    "@types/node": "^22.7.5",
+    "@types/express": "^4.17.21",
+    "@types/ws": "^8.5.12"
+  }
+}

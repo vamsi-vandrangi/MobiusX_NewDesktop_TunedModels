@@ -146,9 +146,19 @@
           <h2>Agents</h2>
           <p>Cloud Agent orchestration is Phase 3. See <code>docs/ARCHITECTURE.md</code> §12.</p>
         </section>
-        <section class="view placeholder-view" id="view-tasks" hidden>
+        <section class="view" id="view-tasks" hidden>
           <h2>Tasks</h2>
-          <p>Long-running agent tasks (with plans, activity logs, model usage) are Phase 3, built on top of the Cloud Agent work.</p>
+          <p class="scope-note">
+            Tasks run on the local reference Cloud Agent Gateway (see docs/ARCHITECTURE.md §12) — real task lifecycle
+            and persistence, but the reasoning is the demo runner unless you've configured a real model
+            (<code>ANTHROPIC_API_KEY</code> + <code>ANTHROPIC_MODEL</code>). Each task shows which runner served it.
+          </p>
+          <div id="tasks-layout">
+            <div id="tasks-list" class="panel"></div>
+            <div id="task-detail" class="panel">
+              <div class="debug-empty">Select a task to see its plan and output.</div>
+            </div>
+          </div>
         </section>
         <section class="view" id="view-debug" hidden>
           <h2>Intelligent Debugger</h2>

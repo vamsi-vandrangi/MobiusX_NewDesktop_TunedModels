@@ -1,20 +1,27 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
-function readAgentInfo() {
-  const flag = process.argv.find((a) => a.startsWith("--mobiusx-agent="));
+function readFlag(name) {
+  const prefix = `--${name}=`;
+  const flag = process.argv.find((a) => a.startsWith(prefix));
   if (!flag) return { port: null, token: null };
   try {
-    return JSON.parse(flag.slice("--mobiusx-agent=".length));
+    return JSON.parse(flag.slice(prefix.length));
   } catch {
     return { port: null, token: null };
   }
 }
 
-const { port, token } = readAgentInfo();
+const agent = readFlag("mobiusx-agent");
+const cloud = readFlag("mobiusx-cloud");
 
 contextBridge.exposeInMainWorld("mobiusx", {
-  agentBaseUrl: port ? `http://127.0.0.1:${port}` : null,
-  agentWsUrl: port ? `ws://127.0.0.1:${port}` : null,
-  agentToken: token,
+  agentBaseUrl: agent.port ? `http://127.0.0.1:${agent.port}` : null,
+  agentWsUrl: agent.port ? `ws://127.0.0.1:${agent.port}` : null,
+  agentToken: agent.token,
+
+  cloudBaseUrl: cloud.port ? `http://127.0.0.1:${cloud.port}` : null,
+  cloudWsUrl: cloud.port ? `ws://127.0.0.1:${cloud.port}` : null,
+  cloudToken: cloud.token,
+
   openFolderDialog: () => ipcRenderer.invoke("dialog:openFolder"),
 });

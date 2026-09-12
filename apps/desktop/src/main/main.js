@@ -3,37 +3,42 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 
-const AGENT_DIR = path.join(__dirname, "..", "..", "..", "desktop-agent");
-const READY_PREFIX = "MOBIUSX_AGENT_READY ";
-const AGENT_START_TIMEOUT_MS = 15000;
+const APPS_DIR = path.join(__dirname, "..", "..", "..");
+const START_TIMEOUT_MS = 15000;
 
-let agentProcess = null;
+const childProcesses = [];
 let mainWindow = null;
 
 function resolveTsxBin() {
   // Hoisted to the workspace root by npm workspaces.
   const bin = process.platform === "win32" ? "tsx.cmd" : "tsx";
-  return path.join(__dirname, "..", "..", "..", "..", "node_modules", ".bin", bin);
+  return path.join(APPS_DIR, "..", "node_modules", ".bin", bin);
 }
 
-/** Spawns the Local Agent Service and resolves once it reports its port+token on stdout. */
-function startAgent() {
+/**
+ * Spawns a sibling Node service (desktop-agent or cloud-agent-gateway) and
+ * resolves once it prints its `<readyPrefix> {"port":...,"token":...}`
+ * handshake line on stdout — the same pattern both services use so this one
+ * function can start either of them.
+ */
+function startService({ label, dir, readyPrefix, env }) {
   return new Promise((resolve, reject) => {
-    const builtEntry = path.join(AGENT_DIR, "dist", "index.js");
+    const builtEntry = path.join(dir, "dist", "index.js");
     const useBuilt = fs.existsSync(builtEntry);
+    const spawnEnv = { ...process.env, ...env };
 
     const child = useBuilt
-      ? spawn(process.execPath, [builtEntry], { cwd: AGENT_DIR })
-      : spawn(resolveTsxBin(), [path.join(AGENT_DIR, "src", "index.ts")], { cwd: AGENT_DIR });
+      ? spawn(process.execPath, [builtEntry], { cwd: dir, env: spawnEnv })
+      : spawn(resolveTsxBin(), [path.join(dir, "src", "index.ts")], { cwd: dir, env: spawnEnv });
 
     let settled = false;
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
         child.kill();
-        reject(new Error("desktop-agent did not report ready within " + AGENT_START_TIMEOUT_MS + "ms"));
+        reject(new Error(`${label} did not report ready within ${START_TIMEOUT_MS}ms`));
       }
-    }, AGENT_START_TIMEOUT_MS);
+    }, START_TIMEOUT_MS);
 
     let buffered = "";
     child.stdout.on("data", (chunk) => {
@@ -41,21 +46,21 @@ function startAgent() {
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
       for (const line of lines) {
-        if (line.startsWith(READY_PREFIX) && !settled) {
+        if (line.startsWith(readyPrefix) && !settled) {
           settled = true;
           clearTimeout(timeout);
           try {
-            const { port, token } = JSON.parse(line.slice(READY_PREFIX.length));
+            const { port, token } = JSON.parse(line.slice(readyPrefix.length));
             resolve({ port, token });
           } catch (err) {
             reject(err);
           }
         } else if (line.trim().length > 0) {
-          console.log("[desktop-agent]", line);
+          console.log(`[${label}]`, line);
         }
       }
     });
-    child.stderr.on("data", (chunk) => console.error("[desktop-agent:err]", chunk.toString("utf8")));
+    child.stderr.on("data", (chunk) => console.error(`[${label}:err]`, chunk.toString("utf8")));
     child.on("error", (err) => {
       if (!settled) {
         settled = true;
@@ -67,23 +72,44 @@ function startAgent() {
       if (!settled) {
         settled = true;
         clearTimeout(timeout);
-        reject(new Error("desktop-agent exited early with code " + code));
+        reject(new Error(`${label} exited early with code ${code}`));
       }
     });
 
-    agentProcess = child;
+    childProcesses.push(child);
+  });
+}
+
+function startAgent() {
+  return startService({
+    label: "desktop-agent",
+    dir: path.join(APPS_DIR, "desktop-agent"),
+    readyPrefix: "MOBIUSX_AGENT_READY ",
+  });
+}
+
+function startCloudGateway() {
+  // ANTHROPIC_API_KEY / ANTHROPIC_MODEL, if the user has them set in their
+  // own shell environment, pass straight through — this process never sets
+  // or hardcodes either. See apps/cloud-agent-gateway/README.md.
+  return startService({
+    label: "cloud-agent-gateway",
+    dir: path.join(APPS_DIR, "cloud-agent-gateway"),
+    readyPrefix: "MOBIUSX_CLOUD_READY ",
   });
 }
 
 async function createWindow() {
   let agentInfo;
+  let cloudInfo;
   try {
-    agentInfo = await startAgent();
+    // Independent services — start them concurrently rather than serially.
+    [agentInfo, cloudInfo] = await Promise.all([startAgent(), startCloudGateway()]);
   } catch (err) {
     dialog.showErrorBox(
-      "MobiusX Desktop — Local Agent failed to start",
+      "MobiusX Desktop — a background service failed to start",
       String(err && err.message ? err.message : err) +
-        "\n\nRun `npm install` at the repo root, then `npm run build -w apps/desktop-agent` and try again.",
+        '\n\nRun `npm install` at the repo root, then `npm run build -w apps/desktop-agent -w apps/cloud-agent-gateway` and try again.',
     );
     app.quit();
     return;
@@ -95,7 +121,10 @@ async function createWindow() {
     title: "MobiusX Desktop",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
-      additionalArguments: [`--mobiusx-agent=${JSON.stringify(agentInfo)}`],
+      additionalArguments: [
+        `--mobiusx-agent=${JSON.stringify(agentInfo)}`,
+        `--mobiusx-cloud=${JSON.stringify(cloudInfo)}`,
+      ],
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -121,5 +150,5 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", () => {
-  if (agentProcess) agentProcess.kill();
+  for (const child of childProcesses) child.kill();
 });

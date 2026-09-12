@@ -224,3 +224,34 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 .debug-hit-history-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #6d6e75; margin-bottom: 4px; }
 .debug-hit-history .log-entry { padding: 3px 0; border: none; font-size: 11px; }
 .debug-empty { color: #6d6e75; }
+
+/* ---- Tasks view ---- */
+#tasks-layout { display: flex; gap: 12px; height: calc(100% - 110px); margin-top: 16px; }
+#tasks-list { width: 320px; flex-shrink: 0; border: 1px solid #232429; border-radius: 8px; }
+#task-detail { flex: 1; border: 1px solid #232429; border-radius: 8px; }
+.task-row {
+  padding: 10px 12px; border-bottom: 1px solid #1c1d21; cursor: pointer; display: flex; flex-direction: column; gap: 3px;
+}
+.task-row:hover { background: #1b1c21; }
+.task-row.active { background: #1e2434; }
+.task-row-prompt { font-size: 12px; }
+.task-row-meta { font-size: 10px; color: #6d6e75; display: flex; gap: 6px; align-items: center; }
+.task-mode-badge { text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 5px; border-radius: 3px; background: #232429; }
+.task-status { padding: 1px 5px; border-radius: 3px; }
+.task-status.completed { color: #6fcf73; }
+.task-status.running, .task-status.queued { color: #e0b96f; }
+.task-status.failed { color: #e0685f; }
+.task-detail-header { padding: 12px 14px; border-bottom: 1px solid #232429; }
+.task-detail-steps { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.task-step-row { font-size: 12px; display: flex; gap: 8px; align-items: center; }
+.task-step-dot { width: 7px; height: 7px; border-radius: 50%; background: #3a3b41; flex-shrink: 0; }
+.task-step-dot.completed { background: #6fcf73; }
+.task-step-dot.in_progress { background: #e0b96f; }
+.task-detail-output {
+  margin: 12px 14px; white-space: pre-wrap; font-family: "SF Mono", Menlo, monospace; font-size: 12px;
+  background: #101113; border: 1px solid #232429; border-radius: 6px; padding: 10px;
+}
+
+/* ---- Assistant streaming message ---- */
+.assistant-msg.streaming .assistant-steps { font-size: 11px; color: #7a7b81; margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+.assistant-msg.streaming .assistant-output { margin-top: 6px; white-space: pre-wrap; }
