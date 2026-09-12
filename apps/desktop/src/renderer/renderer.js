@@ -261,6 +261,8 @@ async function openFile(path) {
 // ============================================================
 const terminalPanel = document.getElementById("terminal-panel");
 const terminalContainer = document.getElementById("terminal-xterm");
+const terminalApprovalBanner = document.getElementById("terminal-approval-banner");
+const terminalApprovalText = document.getElementById("terminal-approval-text");
 let terminalSocket = null;
 let terminalReconnectTimer = null;
 
@@ -296,33 +298,80 @@ function fitAndSendSize() {
   sendTerminalMessage({ type: "resize", cols: term.cols, rows: term.rows });
 }
 
+function hideTerminalApproval() {
+  terminalApprovalBanner.hidden = true;
+  terminalApprovalText.textContent = "";
+}
+
+function showTerminalApproval(labels) {
+  terminalApprovalText.textContent = `Held for approval — ${labels}`;
+  terminalApprovalBanner.hidden = false;
+}
+
+document.getElementById("terminal-approve-btn").addEventListener("click", () => {
+  sendTerminalMessage({ type: "approve" });
+  hideTerminalApproval();
+  term.focus();
+});
+document.getElementById("terminal-reject-btn").addEventListener("click", () => {
+  sendTerminalMessage({ type: "reject" });
+  hideTerminalApproval();
+  term.focus();
+});
+
 function connectTerminal() {
   clearTimeout(terminalReconnectTimer);
-  terminalSocket = new WebSocket(`${agentWsUrl}/terminal?token=${encodeURIComponent(agentToken)}`);
-  terminalSocket.addEventListener("open", () => {
+  hideTerminalApproval(); // a fresh connection has no pending hold from the previous one
+  const ws = new WebSocket(`${agentWsUrl}/terminal?token=${encodeURIComponent(agentToken)}`);
+  terminalSocket = ws;
+  ws.addEventListener("open", () => {
     term.reset();
     fitAndSendSize();
   });
-  terminalSocket.addEventListener("close", () => {
+  ws.addEventListener("close", () => {
+    // If a newer connection has already replaced this one (e.g. a deliberate
+    // reconnect from Settings), this stale socket's close is expected —
+    // don't also schedule a second, redundant reconnect for it.
+    if (terminalSocket !== ws) return;
+    hideTerminalApproval();
     term.write("\r\n\x1b[90m[disconnected — retrying in 2s]\x1b[0m\r\n");
     terminalReconnectTimer = setTimeout(connectTerminal, 2000);
   });
-  terminalSocket.addEventListener("error", () => {
+  ws.addEventListener("error", () => {
     term.write("\r\n\x1b[31m[terminal socket error]\x1b[0m\r\n");
   });
-  terminalSocket.addEventListener("message", (event) => {
+  ws.addEventListener("message", (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === "output") term.write(msg.data);
     else if (msg.type === "exit") term.write(`\r\n\x1b[90m[process exited${msg.code !== null ? ` (code ${msg.code})` : ""}]\x1b[0m\r\n`);
     else if (msg.type === "error") term.write(`\r\n\x1b[31m[error] ${msg.message}\x1b[0m\r\n`);
     else if (msg.type === "policy") {
-      // Phase 5 command guard — reactive, best-effort (see apps/desktop-agent/src/policy.ts).
       const labels = msg.matches.map((m) => m.description).join("; ");
-      term.write(`\r\n\x1b[41m\x1b[97m[command guard] flagged & interrupted: ${labels}\x1b[0m\r\n`);
+      if (msg.requiresApproval) {
+        // Approval Engine (guarded mode) — the flagged command's Enter
+        // keystroke is being held server-side; nothing reaches the shell
+        // until Approve/Reject resolves it. See terminalWs.ts's doc comment.
+        showTerminalApproval(labels);
+      } else {
+        // Phase 5 command guard, "off" mode — reactive, best-effort (see
+        // apps/desktop-agent/src/policy.ts): the command already ran.
+        term.write(`\r\n\x1b[41m\x1b[97m[command guard] flagged & interrupted: ${labels}\x1b[0m\r\n`);
+      }
     }
   });
 }
 connectTerminal();
+
+/** Used by the Settings view's "Reconnect Terminal" button so a changed
+ * terminalApprovalMode (read once per connection by the agent) actually
+ * takes effect on the terminal that's already open, without waiting for
+ * an unrelated disconnect. Safe to call any time — connectTerminal()'s
+ * stale-socket guard above means the old connection's "close" handler
+ * won't also schedule a redundant second reconnect. */
+function reconnectTerminalNow() {
+  clearTimeout(terminalReconnectTimer);
+  connectTerminal();
+}
 
 term.onData((data) => sendTerminalMessage({ type: "input", data }));
 
@@ -1129,9 +1178,46 @@ async function loadAuditLog() {
   }
 }
 
+// ---- Terminal Approval (Approval Engine: guarded autonomy level) ----
+const terminalApprovalModeStatusEl = document.getElementById("terminal-approval-mode-status");
+const terminalApprovalModeInputs = document.querySelectorAll('input[name="terminal-approval-mode"]');
+
+async function loadTerminalApprovalSettings() {
+  try {
+    const settings = await api("/settings");
+    terminalApprovalModeInputs.forEach((input) => {
+      input.checked = input.value === settings.terminalApprovalMode;
+    });
+    terminalApprovalModeStatusEl.textContent = "";
+  } catch (err) {
+    terminalApprovalModeStatusEl.textContent = `Failed to load: ${err.message}`;
+  }
+}
+
+terminalApprovalModeInputs.forEach((input) => {
+  input.addEventListener("change", async (e) => {
+    if (!e.target.checked) return;
+    const mode = e.target.value;
+    terminalApprovalModeStatusEl.textContent = "Saving…";
+    try {
+      await api("/settings", { method: "PUT", body: JSON.stringify({ terminalApprovalMode: mode }) });
+      terminalApprovalModeStatusEl.textContent = "Saved — click “Reconnect Terminal” to apply it now.";
+    } catch (err) {
+      terminalApprovalModeStatusEl.textContent = `Failed to save: ${err.message}`;
+      await loadTerminalApprovalSettings(); // revert the radio to whatever's actually persisted
+    }
+  });
+});
+
+document.getElementById("terminal-reconnect-btn").addEventListener("click", () => {
+  reconnectTerminalNow();
+  terminalApprovalModeStatusEl.textContent = "Reconnected.";
+});
+
 function loadSettings() {
   loadPolicy();
   loadAuditLog();
+  loadTerminalApprovalSettings();
 }
 
 document.getElementById("audit-refresh-btn").addEventListener("click", loadAuditLog);

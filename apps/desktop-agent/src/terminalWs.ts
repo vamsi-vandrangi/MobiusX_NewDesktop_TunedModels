@@ -3,11 +3,12 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import * as pty from "node-pty";
 import { appendAuditEntry } from "@mobiusx/audit-log";
-import type { TerminalClientMessage, TerminalServerMessage } from "@mobiusx/protocol";
+import type { PolicyMatch, TerminalClientMessage, TerminalServerMessage } from "@mobiusx/protocol";
 import { isTokenValid } from "./auth.js";
 import { projectState } from "./state.js";
 import { LineTracker } from "./lineTracker.js";
 import { BUILTIN_POLICY, evaluateLine, loadProjectPolicy } from "./policy.js";
+import { getSettings } from "./settings.js";
 
 /**
  * Real interactive PTY (node-pty), replacing Phase 1's command-exec
@@ -29,10 +30,26 @@ import { BUILTIN_POLICY, evaluateLine, loadProjectPolicy } from "./policy.js";
  * Phase 5 adds a best-effort command guard on top: every submitted line
  * is checked against BUILTIN_POLICY (+ any project .mobiusx/policy.json)
  * and, on a match, flagged to the client, logged to the shared audit log,
- * and followed by a best-effort Ctrl+C. See policy.ts's doc comment for
- * why this is advisory, not a hard security boundary — that's an
- * intrinsic consequence of forwarding a real PTY's keystrokes live, not a
- * shortcut taken here.
+ * and (in the default "off" AgentSettings.terminalApprovalMode) followed
+ * by a best-effort Ctrl+C. See policy.ts's doc comment for why this is
+ * advisory, not a hard security boundary — that's an intrinsic consequence
+ * of forwarding a real PTY's keystrokes live, not a shortcut taken here.
+ *
+ * Approval Engine: when terminalApprovalMode is "guarded", a flagged line
+ * is caught BEFORE it reaches the shell instead of after. The chunk that
+ * completes the line (in practice almost always just the Enter keystroke,
+ * since everything typed before it was already forwarded live and is
+ * already visible on screen) is held in a per-connection pendingApproval
+ * slot rather than written to the pty, and a requiresApproval:true policy
+ * message is sent instead. The client resolves it with an explicit
+ * "approve" (the held chunk is written through) or "reject" (discarded,
+ * and Ctrl+U clears the shell's line buffer, which holds exactly the
+ * flagged text since its terminator was never sent). Further "input"
+ * messages are ignored while a decision is outstanding, so a held command
+ * can't be silently raced by more keystrokes. This inherits the same
+ * "advisory, not a hard boundary" caveat as the reactive mode: a single
+ * chunk that both types text and completes a flagged line in one write
+ * (e.g. a multi-line paste) is held as a whole rather than split.
  */
 export function attachTerminalServer(server: import("node:http").Server, token: string): void {
   const wss = new WebSocketServer({ noServer: true });
@@ -54,6 +71,9 @@ export function attachTerminalServer(server: import("node:http").Server, token: 
   wss.on("connection", async (ws: WebSocket) => {
     const shell = defaultShell();
     const cwd = projectState.path ?? process.cwd();
+    const settings = await getSettings();
+    const guarded = settings.terminalApprovalMode === "guarded";
+    let pendingApproval: { chunk: string; line: string; matches: PolicyMatch[] } | null = null;
 
     let ptyProcess: pty.IPty;
     try {
@@ -90,10 +110,46 @@ export function attachTerminalServer(server: import("node:http").Server, token: 
       }
 
       if (msg.type === "input") {
-        // Forward immediately, unconditionally — this is what preserves full
-        // interactivity (arrow-key history, tab completion, Ctrl+C all working
-        // exactly like a native terminal). The guard below is a reaction to
-        // what was just sent, never a gate in front of it.
+        if (pendingApproval) {
+          // A decision is outstanding — ignore further keystrokes rather than
+          // let new input interleave with a held, possibly-dangerous command.
+          return;
+        }
+
+        if (guarded) {
+          const completed = tracker.feed(msg.data);
+          let flagged: { line: string; matches: PolicyMatch[] } | undefined;
+          for (const line of completed) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const matches = evaluateLine(trimmed, policyRules);
+            if (matches.length > 0) {
+              flagged = { line: trimmed, matches };
+              break;
+            }
+          }
+
+          if (flagged) {
+            pendingApproval = { chunk: msg.data, line: flagged.line, matches: flagged.matches };
+            send(ws, { type: "policy", matches: flagged.matches, requiresApproval: true });
+            void appendAuditEntry({
+              source: "desktop-agent",
+              category: "terminal-command-guard",
+              severity: "warning",
+              summary: `Command guard held for approval (${flagged.matches.map((m) => m.ruleId).join(", ")}): ${flagged.line}`,
+              detail: { command: flagged.line, matches: flagged.matches, cwd, mode: "guarded" },
+            });
+            // Deliberately NOT written to the pty — this is the gate.
+            return;
+          }
+
+          ptyProcess.write(msg.data);
+          return;
+        }
+
+        // terminalApprovalMode "off" (default): unchanged from Phase 5 —
+        // forward immediately, unconditionally, then react to any flagged
+        // completed line with a best-effort Ctrl+C after the fact.
         ptyProcess.write(msg.data);
 
         for (const line of tracker.feed(msg.data)) {
@@ -113,6 +169,35 @@ export function attachTerminalServer(server: import("node:http").Server, token: 
           // Best-effort interrupt. Too late for something that completes
           // instantly; can still stop a long-running or slow-starting one.
           ptyProcess.write("\x03");
+        }
+      } else if (msg.type === "approve") {
+        if (pendingApproval) {
+          const { chunk, line, matches } = pendingApproval;
+          pendingApproval = null;
+          ptyProcess.write(chunk);
+          void appendAuditEntry({
+            source: "desktop-agent",
+            category: "terminal-command-guard",
+            severity: "info",
+            summary: `Command guard hold approved by user: ${line}`,
+            detail: { command: line, matches, cwd, decision: "approve" },
+          });
+        }
+      } else if (msg.type === "reject") {
+        if (pendingApproval) {
+          const { line, matches } = pendingApproval;
+          pendingApproval = null;
+          // Ctrl+U clears the shell's current line buffer, which holds
+          // exactly the flagged text since its terminating keystroke was
+          // withheld rather than forwarded.
+          ptyProcess.write("\x15");
+          void appendAuditEntry({
+            source: "desktop-agent",
+            category: "terminal-command-guard",
+            severity: "info",
+            summary: `Command guard hold rejected by user: ${line}`,
+            detail: { command: line, matches, cwd, decision: "reject" },
+          });
         }
       } else if (msg.type === "resize") {
         // Guard against a stale/garbage size crashing the underlying PTY ioctl.

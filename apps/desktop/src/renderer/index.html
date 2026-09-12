@@ -113,6 +113,13 @@
               <div id="terminal-bar">
                 <button id="terminal-toggle">▾ Terminal</button>
               </div>
+              <div id="terminal-approval-banner" class="terminal-approval-banner" hidden>
+                <span id="terminal-approval-text"></span>
+                <div class="terminal-approval-actions">
+                  <button id="terminal-approve-btn" class="terminal-approve-btn">Approve</button>
+                  <button id="terminal-reject-btn" class="terminal-reject-btn">Reject</button>
+                </div>
+              </div>
               <div id="terminal-panel" class="panel">
                 <div id="terminal-xterm"></div>
               </div>
@@ -187,17 +194,44 @@
         <section class="view" id="view-settings" hidden>
           <h2>Settings</h2>
           <p class="scope-note">
-            Phase 5 local-reference slice: a terminal command guard and a secret scan on outbound task
-            context, both with a shared audit trail. This is <strong>advisory</strong>, single-user
-            governance — not enterprise policy management (no multi-tenant auth, no centrally-pushed org
-            policy) and, for the terminal specifically, not a security sandbox: anyone with terminal access
-            to this machine can bypass it. See docs/ARCHITECTURE.md §12 and the root README.
+            A terminal command guard (with an optional guarded hold-for-approval mode) and a secret
+            scan on outbound task context, both with a shared audit trail. This is
+            <strong>advisory</strong>, single-user governance — not enterprise policy management (no
+            multi-tenant auth, no centrally-pushed org policy) and, for the terminal specifically, not
+            a security sandbox: anyone with terminal access to this machine can bypass it. See
+            docs/ARCHITECTURE.md §12 and the root README.
           </p>
 
           <div class="settings-section">
             <h3>Command Guard <span class="status-text">(terminal — best-effort, reactive)</span></h3>
             <p id="policy-project-note" class="scope-note-small"></p>
             <div id="policy-rules" class="policy-rules"></div>
+          </div>
+
+          <div class="settings-section">
+            <h3>Terminal Approval <span class="status-text">(autonomy level)</span></h3>
+            <p class="scope-note-small">
+              "Off" is the reactive guard above: a flagged command still reaches the shell, then gets
+              a best-effort Ctrl+C. "Guarded" catches a flagged command's Enter keystroke before it
+              ever reaches the shell and holds it until you click Approve or Reject in the terminal
+              panel. Same advisory caveat as above — this is not a security sandbox. Changing this
+              only affects the terminal's <em>next</em> connection; use "Reconnect Terminal" below to
+              apply it to the one currently open.
+            </p>
+            <div class="terminal-approval-mode-options">
+              <label class="terminal-approval-mode-option">
+                <input type="radio" name="terminal-approval-mode" value="off" />
+                Off — reactive Ctrl+C after the fact
+              </label>
+              <label class="terminal-approval-mode-option">
+                <input type="radio" name="terminal-approval-mode" value="guarded" />
+                Guarded — hold for explicit Approve/Reject
+              </label>
+            </div>
+            <div class="terminal-approval-mode-footer">
+              <span id="terminal-approval-mode-status" class="terminal-approval-mode-status"></span>
+              <button id="terminal-reconnect-btn" class="refresh-btn">Reconnect Terminal</button>
+            </div>
           </div>
 
           <div class="settings-section">

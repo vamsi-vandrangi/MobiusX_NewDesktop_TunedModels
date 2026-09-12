@@ -163,6 +163,23 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 #terminal-toggle { background: transparent; border: none; color: #9a9ba1; padding: 2px 4px; }
 #terminal-panel { flex-shrink: 0; height: 220px; border-right: none; background: #101113; display: flex; flex-direction: column; }
 #terminal-panel.collapsed { display: none; }
+
+/* Approval Engine: guarded terminal mode's hold prompt — only shown when
+   a policy-matching line's completing keystroke is being withheld server-side. */
+.terminal-approval-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: #3a1f1f; border-bottom: 1px solid #5a2c2c; padding: 7px 10px;
+  font-size: 12px; color: #f0c8c4; flex-shrink: 0;
+}
+.terminal-approval-banner[hidden] { display: none; }
+.terminal-approval-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.terminal-approve-btn, .terminal-reject-btn {
+  border-radius: 5px; padding: 3px 10px; font-size: 11.5px; cursor: pointer; border: 1px solid transparent;
+}
+.terminal-approve-btn { background: #2a3a1e; color: #9fd47c; border-color: #3d5a2c; }
+.terminal-approve-btn:hover { background: #345024; }
+.terminal-reject-btn { background: #3a1f1f; color: #e0928f; border-color: #5a2c2c; }
+.terminal-reject-btn:hover { background: #4a2626; }
 /* xterm.js manages its own internal canvas/rows — this just gives it a sized, padded box to fill. */
 #terminal-xterm { flex: 1; padding: 4px 6px; overflow: hidden; }
 #terminal-xterm .xterm { height: 100%; }
@@ -280,6 +297,16 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 .policy-rule-scope.project { background: #2a3a1e; color: #9fd47c; }
 .policy-rule-id { font-family: monospace; color: #cfd0d4; flex-shrink: 0; }
 .policy-rule-desc { color: #9a9ba1; }
+
+.terminal-approval-mode-options { display: flex; flex-direction: column; gap: 6px; }
+.terminal-approval-mode-option {
+  display: flex; align-items: center; gap: 8px; background: #16171b; border: 1px solid #232429;
+  border-radius: 6px; padding: 8px 10px; font-size: 12.5px; color: #cfd0d4; cursor: pointer;
+}
+.terminal-approval-mode-option:hover { border-color: #3a3b41; }
+.terminal-approval-mode-footer { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.terminal-approval-mode-status { font-size: 11.5px; color: #6d6e75; }
+
 .audit-log { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; max-height: 360px; overflow: auto; }
 .audit-entry { background: #16171b; border: 1px solid #232429; border-left: 3px solid #3a3b41; border-radius: 6px; padding: 8px 10px; }
 .audit-entry.warning { border-left-color: #e0b96f; }

@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { appendAuditEntry, readAuditLog } from "@mobiusx/audit-log";
 import type {
+  AgentSettings,
   ApplyEditsRequest,
   ApplyEditsResponse,
   AuditLogResponse,
@@ -16,6 +17,7 @@ import type {
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { verifyProject } from "./verify.js";
+import { getSettings, updateSettings } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
 import { buildSemanticIndex, searchSemanticIndex } from "./semanticOps.js";
@@ -265,6 +267,23 @@ export function buildRouter(): Router {
       projectPolicyPath: path,
       projectPolicyError: error,
     };
+    res.json(body);
+  });
+
+  // Approval Engine (PRD §34-35): the one real, working autonomy-level
+  // control this repo ships today — see AgentSettings's doc comment.
+  router.get("/settings", async (_req, res) => {
+    const body: AgentSettings = await getSettings();
+    res.json(body);
+  });
+
+  router.put("/settings", async (req, res) => {
+    const patch = req.body as Partial<AgentSettings>;
+    if (patch.terminalApprovalMode !== undefined && patch.terminalApprovalMode !== "off" && patch.terminalApprovalMode !== "guarded") {
+      res.status(400).json({ error: "terminalApprovalMode must be 'off' or 'guarded'" });
+      return;
+    }
+    const body: AgentSettings = await updateSettings(patch);
     res.json(body);
   });
 

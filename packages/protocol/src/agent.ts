@@ -114,6 +114,27 @@ export interface ApplyEditsResponse {
 }
 
 /**
+ * GET/PUT /settings — desktop-agent-wide, single-user configuration (PRD
+ * §34-35, "Approval Engine" / configurable autonomy levels). Kept
+ * deliberately small: one real, working control rather than a menu of
+ * settings that don't do anything yet.
+ */
+export interface AgentSettings {
+  /**
+   * Terminal command-guard autonomy level. "off" (default) is today's
+   * reactive-only behavior — a flagged command still runs, interrupted
+   * only best-effort after the fact (see policy.ts). "guarded" holds a
+   * flagged line's terminating keystroke and requires an explicit
+   * Approve/Reject (see the new TerminalClientMessage variants below)
+   * before it ever reaches the shell — see terminalWs.ts for exactly
+   * what "hold" means and its limits. Read once per terminal
+   * connection: changing this takes effect on the NEXT terminal
+   * connection, not retroactively on one already open.
+   */
+  terminalApprovalMode: "off" | "guarded";
+}
+
+/**
  * Body/response of POST /verify — "Verification Engine" (PRD §22): runs
  * the OPEN PROJECT's own verification scripts (from its package.json —
  * never commands the AI invents) and reports real pass/fail evidence, not
@@ -153,15 +174,32 @@ export interface VerifyResponse {
  * arrow keys, etc. arrive as their usual escape sequences), and "resize"
  * keeps the PTY's own notion of terminal size in sync with the panel so
  * full-screen programs (vim, htop, a REPL) render correctly.
+ *
+ * "approve"/"reject" only mean anything while AgentSettings.terminalApprovalMode
+ * is "guarded" AND the server has a held command awaiting a decision (a
+ * "policy" message arrived with requiresApproval: true) — see
+ * terminalWs.ts. Sent with no other payload since there is at most one
+ * pending decision per connection.
  */
 export type TerminalClientMessage =
   | { type: "input"; data: string }
-  | { type: "resize"; cols: number; rows: number };
+  | { type: "resize"; cols: number; rows: number }
+  | { type: "approve" }
+  | { type: "reject" };
 
 /** Messages sent from the agent back to the renderer over /terminal. */
 export type TerminalServerMessage =
   | { type: "output"; data: string }
   | { type: "exit"; code: number | null; signal?: number }
   | { type: "error"; message: string }
-  /** A submitted command line matched a Phase 5 command-guard rule (see apps/desktop-agent/src/policy.ts) — sent alongside a best-effort interrupt, not a block; the command may already be running. */
-  | { type: "policy"; matches: PolicyMatch[] };
+  /**
+   * A submitted command line matched a Phase 5 command-guard rule (see
+   * apps/desktop-agent/src/policy.ts). When `requiresApproval` is absent
+   * or false (the "off" autonomy level, or guard-matches that aren't
+   * gated), this is purely informational — sent alongside a best-effort
+   * interrupt, the command may already be running. When `requiresApproval`
+   * is true (the "guarded" autonomy level), the command's terminating
+   * keystroke has been HELD, not yet sent to the shell — the renderer
+   * must send back "approve" or "reject" for it to be resolved.
+   */
+  | { type: "policy"; matches: PolicyMatch[]; requiresApproval?: boolean };
