@@ -33,6 +33,8 @@ The Electron shell needs to be installed and launched from a real terminal on yo
 npm run start -w apps/desktop
 ```
 
+**Known gotcha:** if `node_modules` was ever installed from a bridged/sandboxed shell (a Linux VM, CI, etc.) rather than natively on your Mac, `node_modules/electron` will hold a Linux binary and `npm run start` fails with `spawn ... errno -8` (ENOEXEC) — Electron's postinstall only fetches the binary matching whatever machine ran `npm install`. Fix: `rm -rf node_modules && npm install` from a real terminal on the machine you intend to run it on.
+
 ## Structure
 
 - `apps/desktop` — Electron shell (workspace UI, AI Workspace pane, embeds the MobiusX IDE editor surface)
