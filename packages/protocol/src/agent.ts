@@ -114,6 +114,38 @@ export interface ApplyEditsResponse {
 }
 
 /**
+ * Body/response of POST /verify — "Verification Engine" (PRD §22): runs
+ * the OPEN PROJECT's own verification scripts (from its package.json —
+ * never commands the AI invents) and reports real pass/fail evidence, not
+ * a claim. This is deliberately narrow for v1: root package.json `scripts`
+ * only (a known limitation for monorepos — see
+ * apps/desktop-agent/src/verify.ts#detectVerificationSteps), run via
+ * `npm run <script>`, each with a bounded timeout and bounded captured
+ * output. No request body is needed — it always verifies whichever
+ * project is currently open (see projectState in desktop-agent).
+ */
+export interface VerificationStep {
+  id: string;
+  /** Human label, e.g. "Build (npm run build)". */
+  label: string;
+  /** The exact command that was run. */
+  command: string;
+  status: "passed" | "failed" | "timed_out";
+  exitCode: number | null;
+  /** Combined stdout+stderr, bounded — see `truncated`. */
+  output: string;
+  truncated: boolean;
+  durationMs: number;
+}
+
+export interface VerifyResponse {
+  projectPath: string;
+  /** "no-verification-available" means no known script (build/test/typecheck/lint) was found in package.json — not a failure, just nothing to run. */
+  overall: "passed" | "failed" | "no-verification-available";
+  steps: VerificationStep[];
+}
+
+/**
  * Messages sent from the renderer, over the /terminal WebSocket, to the
  * agent. A real PTY session (see apps/desktop-agent/src/terminalWs.ts) is
  * raw byte pass-through, not request/response commands: "input" carries

@@ -549,7 +549,9 @@ function buildEditsCard(edits, taskProjectPath) {
     <div class="edits-card-actions">
       <button class="edits-apply-btn" ${agentBaseUrl && !projectMismatch ? "" : "disabled"}>Apply</button>
       <span class="edits-apply-result"></span>
+      <button class="edits-verify-btn" hidden>Run verification</button>
     </div>
+    <div class="verify-results" hidden></div>
   `;
   const list = card.querySelector(".edits-card-list");
 
@@ -615,11 +617,59 @@ function buildEditsCard(edits, taskProjectPath) {
         fileEl.querySelector(".edits-file-head").appendChild(status);
       });
       await refreshAfterApply(results.filter((r) => r.status === "applied").map((r) => r.path));
+      if (appliedCount > 0) verifyBtn.hidden = false;
     } catch (err) {
       applyBtn.disabled = false;
       applyBtn.textContent = "Apply";
       resultEl.textContent = `Failed: ${err.message}`;
     }
+  });
+
+  // ---- Verification Engine (PRD §22): real build/test evidence, not a claim ----
+  const verifyBtn = card.querySelector(".edits-verify-btn");
+  const verifyResultsEl = card.querySelector(".verify-results");
+  verifyBtn.addEventListener("click", async () => {
+    verifyBtn.disabled = true;
+    verifyBtn.textContent = "Verifying…";
+    verifyResultsEl.hidden = false;
+    verifyResultsEl.innerHTML = `<div class="verify-pending">Running the project's build/test scripts…</div>`;
+    try {
+      const result = await api("/verify", { method: "POST" });
+      if (result.overall === "no-verification-available") {
+        verifyResultsEl.innerHTML = `<div class="verify-none">No build/test/lint/typecheck script found in this project's package.json — nothing to verify.</div>`;
+      } else {
+        const passedCount = result.steps.filter((s) => s.status === "passed").length;
+        verifyResultsEl.innerHTML = `
+          <div class="verify-summary ${result.overall}">${result.overall === "passed" ? "✓" : "✗"} Verification ${result.overall} — ${passedCount}/${result.steps.length} step(s) passed</div>
+          <div class="verify-steps"></div>
+        `;
+        const stepsEl = verifyResultsEl.querySelector(".verify-steps");
+        for (const step of result.steps) {
+          const stepEl = document.createElement("div");
+          stepEl.className = "verify-step";
+          const icon = step.status === "passed" ? "✓" : step.status === "timed_out" ? "⏱" : "✗";
+          stepEl.innerHTML = `
+            <div class="verify-step-head">
+              <span class="verify-step-status ${step.status}">${icon}</span>
+              <span class="verify-step-label">${escapeHtml(step.label)}</span>
+              <span class="verify-step-meta">${step.durationMs}ms${step.exitCode !== null ? `, exit ${step.exitCode}` : ""}</span>
+              <button class="verify-step-toggle">Show output</button>
+            </div>
+            <pre class="verify-step-output" hidden>${escapeHtml(step.output)}${step.truncated ? "\n… (truncated)" : ""}</pre>
+          `;
+          stepEl.querySelector(".verify-step-toggle").addEventListener("click", () => {
+            const out = stepEl.querySelector(".verify-step-output");
+            out.hidden = !out.hidden;
+            stepEl.querySelector(".verify-step-toggle").textContent = out.hidden ? "Show output" : "Hide output";
+          });
+          stepsEl.appendChild(stepEl);
+        }
+      }
+    } catch (err) {
+      verifyResultsEl.innerHTML = `<div class="verify-none">Verification failed to run: ${escapeHtml(err.message)}</div>`;
+    }
+    verifyBtn.disabled = false;
+    verifyBtn.textContent = "Run verification again";
   });
 
   return card;

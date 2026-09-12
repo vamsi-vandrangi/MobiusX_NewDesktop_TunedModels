@@ -331,3 +331,35 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 .edits-apply-btn:hover:not(:disabled) { background: #1c3320; }
 .edits-apply-btn:disabled { opacity: 0.5; cursor: default; }
 .edits-apply-result { font-size: 11px; color: #9a9ba1; }
+
+/* ---- Verification Engine (real build/test evidence after Apply) ---- */
+.edits-verify-btn {
+  background: #161e28; border: 1px solid #2a4258; color: #7cb3d4; border-radius: 6px;
+  padding: 4px 12px; font-size: 11.5px; cursor: pointer; font-weight: 600;
+}
+.edits-verify-btn:hover:not(:disabled) { background: #1c2a38; }
+.edits-verify-btn:disabled { opacity: 0.6; cursor: default; }
+.verify-results { margin-top: 10px; border-top: 1px solid #232429; padding-top: 8px; }
+.verify-pending, .verify-none { font-size: 11.5px; color: #9a9ba1; }
+.verify-summary { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.verify-summary.passed { color: #6fcf73; }
+.verify-summary.failed { color: #e0928f; }
+.verify-steps { display: flex; flex-direction: column; gap: 4px; }
+.verify-step { background: #101113; border: 1px solid #232429; border-radius: 6px; padding: 5px 8px; }
+.verify-step-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; flex-wrap: wrap; }
+.verify-step-status { width: 14px; text-align: center; flex-shrink: 0; }
+.verify-step-status.passed { color: #6fcf73; }
+.verify-step-status.failed { color: #e0928f; }
+.verify-step-status.timed_out { color: #e0b96f; }
+.verify-step-label { font-family: monospace; color: #cfd0d4; flex: 1; }
+.verify-step-meta { color: #6d6e75; font-size: 10px; flex-shrink: 0; }
+.verify-step-toggle {
+  background: transparent; border: 1px solid #2a2b31; color: #9a9ba1; border-radius: 4px;
+  padding: 2px 7px; font-size: 10px; cursor: pointer; flex-shrink: 0;
+}
+.verify-step-toggle:hover { color: #cfd0d4; border-color: #3a3b41; }
+.verify-step-output {
+  margin: 6px 0 0; padding: 6px; max-height: 260px; overflow: auto; white-space: pre-wrap;
+  font-family: "SF Mono", Menlo, monospace; font-size: 10.5px; color: #9a9ba1;
+  background: #0b0c0d; border-radius: 4px;
+}

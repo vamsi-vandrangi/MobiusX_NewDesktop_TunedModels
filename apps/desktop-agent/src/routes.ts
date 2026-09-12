@@ -12,8 +12,10 @@ import type {
   OpenProjectRequest,
   OpenProjectResponse,
   ProposedEdit,
+  VerifyResponse,
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
+import { verifyProject } from "./verify.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
 import { buildSemanticIndex, searchSemanticIndex } from "./semanticOps.js";
@@ -123,6 +125,33 @@ export function buildRouter(): Router {
       res.json(body);
     } catch (err) {
       res.status(500).json({ error: "apply-edits failed", detail: (err as Error).message });
+    }
+  });
+
+  // Verification Engine (PRD §22): runs the open project's own build/test/
+  // lint/typecheck npm scripts and reports real pass/fail evidence — never
+  // just trusting an AI's claim that a change works. See verify.ts's doc
+  // comment for the v1 scope (root package.json scripts only).
+  router.post("/verify", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: VerifyResponse = await verifyProject(projectState.path);
+      if (result.overall !== "no-verification-available") {
+        const passedCount = result.steps.filter((s) => s.status === "passed").length;
+        void appendAuditEntry({
+          source: "desktop-agent",
+          category: "verification",
+          severity: result.overall === "passed" ? "info" : "warning",
+          summary: `Verification ${result.overall} (${passedCount}/${result.steps.length} step(s) passed) in ${projectState.path}`,
+          detail: { projectPath: projectState.path, overall: result.overall, steps: result.steps.map((s) => ({ label: s.label, status: s.status, exitCode: s.exitCode })) },
+        });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "verify failed", detail: (err as Error).message });
     }
   });
 
