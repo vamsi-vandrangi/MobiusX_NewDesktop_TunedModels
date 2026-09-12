@@ -18,8 +18,18 @@ export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancel
 
 export interface ProjectContext {
   projectPath?: string;
-  /** Optional relevant-code hints, e.g. top hits from a Phase 2 /debug/search — keeps the cloud call grounded in local context without shipping the whole repo. */
-  relevantFiles?: { relPath: string; snippet: string }[];
+  /**
+   * Optional relevant-code hints, e.g. top hits from a Phase 2 /debug/search
+   * — keeps the cloud call grounded in local context without shipping the
+   * whole repo. `snippet` is always a short excerpt for display/prompting.
+   * `content`, when present, is the FULL current file content — the desktop
+   * only attaches this for build-mode requests (see renderer.js
+   * findRelevantFiles) and it is what gates whether the model is allowed to
+   * propose a "modify" edit for that path (see taskEngine's edit-safety
+   * check): a file the model was never shown in full can't be silently
+   * overwritten.
+   */
+  relevantFiles?: { relPath: string; snippet: string; content?: string }[];
 }
 
 export interface CreateTaskRequest {
@@ -41,6 +51,14 @@ export interface TaskSummary {
   updatedAt: string;
   /** Which runner actually served this task — "demo" (always available) or a real model runner name. Never hidden from the caller. */
   runner: string;
+  /**
+   * The project this task's context (if any) was grounded in — copied from
+   * CreateTaskRequest.projectContext.projectPath at creation, so the Tasks
+   * view can tell whether a build-mode task's ProposedEdit[] apply against
+   * whichever project is currently open in the desktop agent (see
+   * renderer.js's buildEditsCard) rather than assuming they always match.
+   */
+  projectPath?: string;
 }
 
 export interface TaskStep {
@@ -51,21 +69,45 @@ export interface TaskStep {
   completedAt?: string;
 }
 
+/**
+ * A single file-level change proposed by a build-mode task. Always a FULL
+ * replacement file body, never a unified diff/patch — the model returns the
+ * complete new content for each changed file, and any diff shown to the
+ * user is computed client-side purely for review (see renderer.js). This
+ * keeps "apply" a plain write instead of a patch-application step that can
+ * fail to line up against the file on disk.
+ *
+ * "modify" is only honored by the desktop agent if the target path already
+ * exists; "create" is only honored if it does not — see
+ * apps/desktop-agent/src/fsOps.ts#applyEdits. Nothing is ever applied
+ * automatically: this type only ever appears as a *proposal* pending
+ * explicit user approval (see ApplyEditsRequest in agent.ts).
+ */
+export interface ProposedEdit {
+  /** Project-relative path (never absolute — same convention as FsNode/FsReadResponse). */
+  path: string;
+  action: "modify" | "create";
+  content: string;
+}
+
 export interface TaskDetail extends TaskSummary {
   steps: TaskStep[];
   /** Accumulated output text so far (final answer / plan / build-proposal text). */
   output: string;
   error?: string;
+  /** Present once a build-mode task has finished proposing changes. Empty/absent for ask & plan modes, and for build-mode tasks that didn't produce parseable edits. */
+  edits?: ProposedEdit[];
 }
 
 export interface ListTasksResponse {
   tasks: TaskSummary[];
 }
 
-/** Streamed over the /tasks/:id/stream WebSocket, and also what GET /tasks/:id's `steps`/`output` are built from server-side. */
+/** Streamed over the /tasks/:id/stream WebSocket, and also what GET /tasks/:id's `steps`/`output`/`edits` are built from server-side. */
 export type TaskEvent =
   | { type: "step"; step: TaskStep }
   | { type: "output"; delta: string }
+  | { type: "edits"; edits: ProposedEdit[] }
   | { type: "status"; status: TaskStatus }
   | { type: "error"; message: string }
   | { type: "done" };

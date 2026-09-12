@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanAndRedact } from "../src/policy/secretScan.js";
+import { scanAndRedact, scanForSecrets } from "../src/index.js";
 
 test("redacts an AWS access key and reports the match", () => {
   const { text, matches } = scanAndRedact('const key = "AKIAABCDEFGHIJKLMNOP";');
@@ -60,4 +60,16 @@ test("ordinary code with no secrets passes through unchanged and unflagged", () 
   const { text, matches } = scanAndRedact(code);
   assert.equal(text, code);
   assert.deepEqual(matches, []);
+});
+
+test("scanForSecrets detects without altering the text", () => {
+  const src = 'const key = "AKIAABCDEFGHIJKLMNOP";';
+  const matches = scanForSecrets(src);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].ruleId, "aws-access-key");
+});
+
+test("scanForSecrets reports no matches for ordinary code", () => {
+  const code = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
+  assert.deepEqual(scanForSecrets(code), []);
 });

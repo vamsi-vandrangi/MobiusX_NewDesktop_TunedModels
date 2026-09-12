@@ -417,12 +417,34 @@ async function cloudApi(path, opts = {}) {
   return res.json();
 }
 
-/** Best-effort: ground a cloud task in locally-relevant code via Phase 2's semantic search. Never blocks submission on failure. */
-async function findRelevantFiles(query) {
+/**
+ * Best-effort: ground a cloud task in locally-relevant code via Phase 2's
+ * semantic search. Never blocks submission on failure.
+ *
+ * For build mode specifically, this also fetches each hit's FULL current
+ * content via /fs/read (not just the search snippet) and attaches it as
+ * relevantFiles[].content. That's the safety invariant the gateway and the
+ * desktop agent both enforce (see cloud.ts's ProjectContext doc comment,
+ * taskEngine.ts's redaction pass, and anthropicRunner.ts's systemPromptFor):
+ * the model can only propose a "modify" edit for a path it was actually
+ * shown in full here — never a file it only ever saw a snippet of.
+ */
+async function findRelevantFiles(query, mode) {
   if (!currentProjectPath) return [];
   try {
     const result = await api(`/debug/search?q=${encodeURIComponent(query)}&k=3`);
-    return result.hits.map((h) => ({ relPath: h.relPath, snippet: h.snippet }));
+    const hits = result.hits.map((h) => ({ relPath: h.relPath, snippet: h.snippet }));
+    if (mode !== "build") return hits;
+    return await Promise.all(
+      hits.map(async (h) => {
+        try {
+          const file = await api(`/fs/read?path=${encodeURIComponent(h.relPath)}`);
+          return { ...h, content: file.content };
+        } catch {
+          return h; // fall back to snippet-only for this file rather than failing the whole request
+        }
+      }),
+    );
   } catch {
     return [];
   }
@@ -433,13 +455,14 @@ async function findRelevantFiles(query) {
  * resolves once the task reaches a terminal state. Shared by the assistant
  * panel and the Tasks view's live detail pane.
  */
-function streamTask(taskId, { onStep, onOutput, onStatus, onError, onDone }) {
+function streamTask(taskId, { onStep, onOutput, onEdits, onStatus, onError, onDone }) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`${cloudWsUrl}/tasks/${taskId}/stream?token=${encodeURIComponent(cloudToken)}`);
     ws.addEventListener("message", (event) => {
       const msg = JSON.parse(event.data);
       if (msg.type === "step") onStep?.(msg.step);
       else if (msg.type === "output") onOutput?.(msg.delta);
+      else if (msg.type === "edits") onEdits?.(msg.edits);
       else if (msg.type === "status") onStatus?.(msg.status);
       else if (msg.type === "error") onError?.(msg.message);
       else if (msg.type === "done") {
@@ -452,6 +475,154 @@ function streamTask(taskId, { onStep, onOutput, onStatus, onError, onDone }) {
       resolve();
     });
   });
+}
+
+// ============================================================
+// Proposed-edits review UI — shared by the AI Assistant panel and the
+// Tasks view's detail pane. Renders each build-mode ProposedEdit (see
+// @mobiusx/protocol) as a file card with an on-demand diff (computed
+// client-side via jsdiff — see index.html's <script> tag — never sent
+// anywhere), and an Apply button that is the ONLY UI path that ever calls
+// the desktop agent's POST /fs/apply-edits (see fsOps.ts#applyEdits) —
+// nothing here writes to disk itself.
+// ============================================================
+
+/** Renders a unified-style line diff as HTML. Falls back to plain (escaped) new-content text if the diff library somehow isn't loaded, rather than throwing. */
+function renderDiffHtml(oldStr, newStr) {
+  if (typeof Diff === "undefined") {
+    return `<div class="diff-line diff-context">${escapeHtml(newStr ?? "")}</div>`;
+  }
+  const parts = Diff.diffLines(oldStr ?? "", newStr ?? "");
+  return parts
+    .map((part) => {
+      const cls = part.added ? "diff-added" : part.removed ? "diff-removed" : "diff-context";
+      const prefix = part.added ? "+" : part.removed ? "-" : " ";
+      const lines = part.value.split("\n");
+      if (lines[lines.length - 1] === "") lines.pop(); // trailing split artifact from a final newline
+      return lines.map((line) => `<div class="diff-line ${cls}">${prefix} ${escapeHtml(line)}</div>`).join("");
+    })
+    .join("");
+}
+
+/** Best-effort: refreshes the file tree and any already-open tabs for files an apply just touched. Never throws — a stale tree/tab is a cosmetic problem, not a reason to hide that the apply itself succeeded. */
+async function refreshAfterApply(appliedRelPaths) {
+  try {
+    if (currentProjectPath) await loadTree();
+  } catch {
+    /* cosmetic — ignore */
+  }
+  for (const relPath of appliedRelPaths) {
+    const tab = openTabs.find((t) => t.path === relPath);
+    if (!tab) continue;
+    try {
+      const data = await api(`/fs/read?path=${encodeURIComponent(relPath)}`);
+      tab.content = data.content;
+      tab.truncated = data.truncated;
+      if (activeTabPath === relPath) activateTab(relPath);
+    } catch {
+      /* cosmetic — ignore */
+    }
+  }
+}
+
+/**
+ * Builds the "Proposed changes" card for a set of edits. `edits` is never
+ * mutated. `taskProjectPath` (when known — see TaskSummary.projectPath) is
+ * checked against whichever project is currently open in the desktop
+ * agent: applying against the wrong open project would silently write
+ * these files somewhere the user didn't intend, so a mismatch disables
+ * Apply with an explicit explanation instead of guessing.
+ */
+function buildEditsCard(edits, taskProjectPath) {
+  const projectMismatch = Boolean(taskProjectPath) && taskProjectPath !== currentProjectPath;
+
+  const card = document.createElement("div");
+  card.className = "edits-card";
+  card.innerHTML = `
+    <div class="edits-card-head">Proposed changes — ${edits.length} file${edits.length === 1 ? "" : "s"}</div>
+    ${
+      projectMismatch
+        ? `<div class="edits-card-warning">This task ran against <code>${escapeHtml(taskProjectPath)}</code>, but that isn't the project currently open (${currentProjectPath ? `<code>${escapeHtml(currentProjectPath)}</code>` : "none"}). Open that project to apply these edits.</div>`
+        : ""
+    }
+    <div class="edits-card-list"></div>
+    <div class="edits-card-actions">
+      <button class="edits-apply-btn" ${agentBaseUrl && !projectMismatch ? "" : "disabled"}>Apply</button>
+      <span class="edits-apply-result"></span>
+    </div>
+  `;
+  const list = card.querySelector(".edits-card-list");
+
+  for (const edit of edits) {
+    const item = document.createElement("div");
+    item.className = "edits-file";
+    item.innerHTML = `
+      <div class="edits-file-head">
+        <span class="edits-file-badge ${edit.action}">${edit.action}</span>
+        <span class="edits-file-path">${escapeHtml(edit.path)}</span>
+        <button class="edits-file-toggle">Show diff</button>
+      </div>
+      <pre class="edits-file-diff" hidden></pre>
+    `;
+    const toggleBtn = item.querySelector(".edits-file-toggle");
+    const diffEl = item.querySelector(".edits-file-diff");
+    let loaded = false;
+    toggleBtn.addEventListener("click", async () => {
+      if (diffEl.hidden) {
+        if (!loaded) {
+          loaded = true;
+          let oldContent = "";
+          if (edit.action === "modify" && currentProjectPath) {
+            try {
+              const file = await api(`/fs/read?path=${encodeURIComponent(edit.path)}`);
+              oldContent = file.content;
+            } catch {
+              // file may since have been moved/deleted — diff against empty rather than failing the card
+            }
+          }
+          diffEl.innerHTML = renderDiffHtml(oldContent, edit.content);
+        }
+        diffEl.hidden = false;
+        toggleBtn.textContent = "Hide diff";
+      } else {
+        diffEl.hidden = true;
+        toggleBtn.textContent = "Show diff";
+      }
+    });
+    list.appendChild(item);
+  }
+
+  const applyBtn = card.querySelector(".edits-apply-btn");
+  const resultEl = card.querySelector(".edits-apply-result");
+  applyBtn.addEventListener("click", async () => {
+    if (!currentProjectPath) {
+      resultEl.textContent = "Open a project first.";
+      return;
+    }
+    applyBtn.disabled = true;
+    applyBtn.textContent = "Applying…";
+    try {
+      const { results } = await api("/fs/apply-edits", { method: "POST", body: JSON.stringify({ edits }) });
+      const appliedCount = results.filter((r) => r.status === "applied").length;
+      resultEl.textContent = `Applied ${appliedCount}/${results.length}`;
+      applyBtn.textContent = "Applied";
+      results.forEach((r, i) => {
+        const fileEl = list.children[i];
+        if (!fileEl) return;
+        const status = document.createElement("span");
+        status.className = `edits-file-status ${r.status}`;
+        status.textContent = r.status === "applied" ? "✓ applied" : `skipped — ${r.reason ?? "unknown reason"}`;
+        fileEl.querySelector(".edits-file-head").appendChild(status);
+      });
+      await refreshAfterApply(results.filter((r) => r.status === "applied").map((r) => r.path));
+    } catch (err) {
+      applyBtn.disabled = false;
+      applyBtn.textContent = "Apply";
+      resultEl.textContent = `Failed: ${err.message}`;
+    }
+  });
+
+  return card;
 }
 
 // ============================================================
@@ -522,6 +693,11 @@ function createAssistantPanel(container) {
         div.querySelector(".assistant-output").textContent += delta;
         feed.scrollTop = feed.scrollHeight;
       },
+      setEdits(edits, taskProjectPath) {
+        if (!edits?.length) return;
+        div.appendChild(buildEditsCard(edits, taskProjectPath));
+        feed.scrollTop = feed.scrollHeight;
+      },
       setStatus(status) {
         if (status === "cancelled") {
           div.querySelector(".assistant-output").textContent += "\n[cancelled]";
@@ -551,14 +727,15 @@ function createAssistantPanel(container) {
     input.value = "";
 
     const stream = addStreamingMsg();
+    const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
     try {
-      const relevantFiles = await findRelevantFiles(text);
+      const relevantFiles = await findRelevantFiles(text, mode);
       const { task } = await cloudApi("/tasks", {
         method: "POST",
         body: JSON.stringify({
           mode,
           prompt: text,
-          projectContext: currentProjectPath ? { projectPath: currentProjectPath, relevantFiles } : undefined,
+          projectContext: taskProjectPath ? { projectPath: taskProjectPath, relevantFiles } : undefined,
         }),
       });
       stream.appendOutput(`[runner: ${task.runner}]\n`);
@@ -576,6 +753,7 @@ function createAssistantPanel(container) {
       await streamTask(task.id, {
         onStep: (step) => stream.setStep(step),
         onOutput: (delta) => stream.appendOutput(delta),
+        onEdits: (edits) => stream.setEdits(edits, taskProjectPath),
         onStatus: (status) => stream.setStatus(status),
         onError: (message) => stream.setError(message),
       });
@@ -755,6 +933,7 @@ async function showTaskDetail(taskId) {
       await streamTask(taskId, {
         onStep: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
         onOutput: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
+        onEdits: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
         onStatus: async () => renderTaskDetail(await cloudApi(`/tasks/${taskId}`)),
       });
       loadTasksList(); // refresh the status badge in the list once it settles
@@ -784,7 +963,11 @@ function renderTaskDetail(task) {
         .join("")}
     </div>
     <pre class="task-detail-output">${escapeHtml(task.output || (task.status === "failed" ? task.error ?? "" : "…"))}</pre>
+    <div class="task-detail-edits"></div>
   `;
+  if (task.edits?.length) {
+    detailEl.querySelector(".task-detail-edits").appendChild(buildEditsCard(task.edits, task.projectPath));
+  }
   if (cancellable) {
     const btn = detailEl.querySelector(".task-cancel-btn");
     btn.addEventListener("click", async () => {

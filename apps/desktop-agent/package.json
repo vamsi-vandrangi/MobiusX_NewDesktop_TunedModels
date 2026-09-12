@@ -15,6 +15,7 @@
     "@mobiusx/audit-log": "*",
     "@mobiusx/context-engine": "*",
     "@mobiusx/protocol": "*",
+    "@mobiusx/secret-scan": "*",
     "@mobiusx/semantic-index": "*",
     "express": "^4.21.2",
     "node-pty": "^1.1.0",

@@ -60,11 +60,31 @@ test("listTasks reflects created tasks, most recent first", async () => {
   assert.ok(ids.indexOf(second.id) < ids.indexOf(first.id));
 });
 
-test("build mode never claims to modify files", async () => {
+test("build mode never claims the gateway itself writes to disk", async () => {
   const summary = await startTask({ mode: "build", prompt: "add retry jitter" });
   await waitUntilDone(summary.id);
   const task = await getTask(summary.id);
-  assert.match(task!.output, /does not modify files automatically/);
+  assert.match(task!.output, /gateway never writes to disk itself/);
+});
+
+test("build mode proposes a clearly-labeled demo edit that only desktop-agent could apply", async () => {
+  const summary = await startTask({ mode: "build", prompt: "add retry jitter" });
+  await waitUntilDone(summary.id);
+  const task = await getTask(summary.id);
+  assert.equal(task!.edits?.length, 1);
+  const edit = task!.edits![0];
+  assert.equal(edit.action, "create");
+  assert.equal(edit.path, "MOBIUSX_DEMO_EDIT.md");
+  assert.match(edit.content, /not real AI-generated code/);
+});
+
+test("ask and plan modes never propose edits", async () => {
+  for (const mode of ["ask", "plan"] as const) {
+    const summary = await startTask({ mode, prompt: "explain this function" });
+    await waitUntilDone(summary.id);
+    const task = await getTask(summary.id);
+    assert.equal(task!.edits, undefined);
+  }
 });
 
 test("cancelTask aborts a running demo task and marks it cancelled, not failed", async () => {

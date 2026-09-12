@@ -7,6 +7,7 @@
  */
 
 import type { PolicyMatch } from "./governance.js";
+import type { ProposedEdit } from "./cloud.js";
 
 export interface AgentHandshake {
   /** Port the agent is listening on (loopback only). */
@@ -86,6 +87,30 @@ export interface GitDiffResponse {
 export interface ApiError {
   error: string;
   detail?: string;
+}
+
+/**
+ * Body of POST /fs/apply-edits — the ONLY path by which generated code ever
+ * reaches disk, and only ever in response to the user clicking "Apply" on a
+ * reviewed set of ProposedEdit entries (see cloud.ts). The desktop agent
+ * re-validates every edit itself (path-traversal guard, modify-must-exist /
+ * create-must-not-exist, a flag-only secret scan) rather than trusting that
+ * the caller already did — see apps/desktop-agent/src/fsOps.ts#applyEdits.
+ */
+export interface ApplyEditsRequest {
+  edits: ProposedEdit[];
+}
+
+export interface AppliedEditResult {
+  path: string;
+  action: "modify" | "create";
+  status: "applied" | "skipped";
+  /** Present when status is "skipped" — e.g. "file already exists" for a create, "file not found" for a modify, "path escapes project root", or "possible secret-shaped content — review manually". */
+  reason?: string;
+}
+
+export interface ApplyEditsResponse {
+  results: AppliedEditResult[];
 }
 
 /**

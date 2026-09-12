@@ -14,6 +14,7 @@
   "dependencies": {
     "@mobiusx/audit-log": "*",
     "@mobiusx/protocol": "*",
+    "@mobiusx/secret-scan": "*",
     "express": "^4.21.2",
     "ws": "^8.18.0"
   },

@@ -25,6 +25,7 @@ export const demoRunner: AgentRunner = {
       }
 
       emit({ type: "output", delta: renderOutput(input) });
+      if (input.mode === "build") emit({ type: "edits", edits: [demoEdit(input)] });
       emit({ type: "status", status: "completed" });
       emit({ type: "done" });
     } catch (err) {
@@ -58,7 +59,25 @@ function renderOutput(input: RunnerInput): string {
   if (input.mode === "plan") {
     return `${banner}Draft plan for: "${input.prompt}"\n\n1. Investigate the relevant code paths\n2. Identify the smallest change that addresses this\n3. Write/update tests\n4. Open a PR for human review\n\n(A real model would replace this with a plan grounded in your actual codebase.)${context}`;
   }
-  return `${banner}Proposed-changes summary for: "${input.prompt}"\n\nThis reference gateway does not modify files automatically — "build" mode only drafts a description of the change for human review, by design (see docs/ARCHITECTURE.md §8's approval step). A real model would draft the actual diff description here.${context}`;
+  return `${banner}Proposed-changes summary for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "build" mode proposes full-file-content edits (below) that only desktop-agent ever writes to disk, and only once you review and click Apply (see docs/ARCHITECTURE.md §8's approval step). Below is a clearly-labeled DEMO edit so you can exercise that full propose → review → apply flow without a real model configured. A real model (see README) would propose an edit addressing your actual prompt instead.${context}`;
+}
+
+/**
+ * A single, obviously-fake proposed edit so the propose -> review -> apply
+ * pipeline (see ProposedEdit in @mobiusx/protocol and fsOps.ts#applyEdits)
+ * is exercisable end-to-end with no model configured. Always creates the
+ * same clearly-labeled file — never touches anything that could look like
+ * a real change — and the desktop agent still applies its normal
+ * create-must-not-exist check, so re-running this twice against the same
+ * project correctly reports the second one as skipped, not silently
+ * overwritten.
+ */
+function demoEdit(input: RunnerInput): { path: string; action: "create"; content: string } {
+  return {
+    path: "MOBIUSX_DEMO_EDIT.md",
+    action: "create",
+    content: `# Demo edit (not real AI-generated code)\n\nThis file was created by the cloud-agent-gateway's **demo runner**, not a real\nmodel. No ANTHROPIC_API_KEY is configured, so there is no real reasoning\nbehind this change — it exists only to prove that MobiusX.ai WDC's\npropose -> review -> apply pipeline works end-to-end:\n\n1. The gateway proposed this file (a "build" task).\n2. You reviewed it in the AI Assistant panel / Tasks view.\n3. You clicked Apply, and the desktop agent wrote it to disk exactly here.\n\nOriginal prompt: "${input.prompt}"\n\nSafe to delete. Configure a real model (see apps/cloud-agent-gateway/README.md) to get actual generated edits instead of this placeholder.\n`,
+  };
 }
 
 /** Rejects with a named AbortError (matching the DOM/fetch convention) the moment `signal` aborts, so callers can `if (err.name === "AbortError")` regardless of whether the abort came from a timer or a fetch call. */

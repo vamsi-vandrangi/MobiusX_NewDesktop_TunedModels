@@ -1,16 +1,19 @@
 import { Router } from "express";
 import { stat } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
-import { readAuditLog } from "@mobiusx/audit-log";
+import { appendAuditEntry, readAuditLog } from "@mobiusx/audit-log";
 import type {
+  ApplyEditsRequest,
+  ApplyEditsResponse,
   AuditLogResponse,
   EffectivePolicyResponse,
   FsTreeResponse,
   GitDiffRequest,
   OpenProjectRequest,
   OpenProjectResponse,
+  ProposedEdit,
 } from "@mobiusx/protocol";
-import { buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
+import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
 import { buildSemanticIndex, searchSemanticIndex } from "./semanticOps.js";
@@ -72,6 +75,54 @@ export function buildRouter(): Router {
       res.json(body);
     } catch (err) {
       res.status(400).json({ error: "read failed", detail: (err as Error).message });
+    }
+  });
+
+  // The only endpoint that ever writes AI-generated content to disk — see
+  // fsOps.ts#applyEdits's doc comment for the full safety contract (path
+  // containment, modify-must-exist / create-must-not-exist, a flag-only
+  // secret scan). The desktop shell only calls this after the user reviews
+  // a task's proposed edits and clicks Apply — nothing upstream of this
+  // route enforces that; it's a UI-level gate, which is why this route
+  // re-validates everything itself rather than trusting the caller.
+  router.post("/fs/apply-edits", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const { edits } = req.body as ApplyEditsRequest;
+    if (!Array.isArray(edits) || edits.length === 0) {
+      res.status(400).json({ error: "edits must be a non-empty array" });
+      return;
+    }
+    const valid = edits.every(
+      (e): e is ProposedEdit =>
+        e &&
+        typeof e.path === "string" &&
+        e.path.length > 0 &&
+        (e.action === "modify" || e.action === "create") &&
+        typeof e.content === "string",
+    );
+    if (!valid) {
+      res.status(400).json({ error: "each edit needs path (string), action ('modify'|'create'), content (string)" });
+      return;
+    }
+
+    try {
+      const results = await applyEdits(projectState.path, edits);
+      const appliedCount = results.filter((r) => r.status === "applied").length;
+      const skippedCount = results.length - appliedCount;
+      void appendAuditEntry({
+        source: "desktop-agent",
+        category: "applied-edits",
+        severity: skippedCount > 0 ? "warning" : "info",
+        summary: `Applied ${appliedCount}/${results.length} proposed edit(s) in ${projectState.path}${skippedCount > 0 ? ` (${skippedCount} skipped)` : ""}`,
+        detail: { projectPath: projectState.path, results },
+      });
+      const body: ApplyEditsResponse = { results };
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "apply-edits failed", detail: (err as Error).message });
     }
   });
 

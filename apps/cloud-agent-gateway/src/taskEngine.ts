@@ -4,7 +4,7 @@ import type { CreateTaskRequest, ProjectContext, TaskEvent, TaskSummary } from "
 import { applyEvent, createTask, getTask } from "./store.js";
 import { broadcast } from "./wsHub.js";
 import { selectRunner } from "./runners/runnerSelector.js";
-import { scanAndRedact } from "./policy/secretScan.js";
+import { scanAndRedact } from "@mobiusx/secret-scan";
 
 /** In-flight tasks only — cleared as soon as a task reaches a terminal state, so cancelTask() naturally reports "not running" for anything already finished (or unknown). Not persisted: a cancel request only makes sense against a task this process is actively running. */
 const controllers = new Map<string, AbortController>();
@@ -29,6 +29,7 @@ export async function startTask(req: CreateTaskRequest): Promise<TaskSummary> {
     createdAt: now,
     updatedAt: now,
     runner: runner.name,
+    projectPath: req.projectContext?.projectPath,
   };
   await createTask(id, summary);
 
@@ -82,7 +83,7 @@ export function cancelTask(id: string): boolean {
   return true;
 }
 
-/** Redacts every relevantFiles[].snippet in place (returning a new object — the input isn't mutated) and reports how much was redacted, so the runner this feeds never sees the original secret text. */
+/** Redacts every relevantFiles[].snippet (and .content, when present — see below) in place (returning a new object — the input isn't mutated) and reports how much was redacted, so the runner this feeds never sees the original secret text. */
 function redactProjectContext(ctx?: ProjectContext): {
   projectContext?: ProjectContext;
   redactedCount: number;
@@ -93,11 +94,16 @@ function redactProjectContext(ctx?: ProjectContext): {
   let redactedCount = 0;
   const ruleIds = new Set<string>();
   const relevantFiles = ctx.relevantFiles.map((file) => {
-    const { text, matches } = scanAndRedact(file.snippet);
+    const snippetResult = scanAndRedact(file.snippet);
+    // Build-mode requests attach full file content (see ProjectContext.relevantFiles
+    // in cloud.ts) — it needs the same redaction pass as the snippet, since it's the
+    // same "about to leave the machine" boundary this function exists to enforce.
+    const contentResult = file.content !== undefined ? scanAndRedact(file.content) : undefined;
+    const matches = [...snippetResult.matches, ...(contentResult?.matches ?? [])];
     if (matches.length === 0) return file;
     redactedCount += matches.length;
     for (const m of matches) ruleIds.add(m.ruleId);
-    return { ...file, snippet: text };
+    return { ...file, snippet: snippetResult.text, ...(contentResult ? { content: contentResult.text } : {}) };
   });
 
   return { projectContext: { ...ctx, relevantFiles }, redactedCount, redactedRules: [...ruleIds] };
