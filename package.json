@@ -1,0 +1,13 @@
+{
+  "name": "mobiusx-wdc",
+  "private": true,
+  "version": "0.0.1",
+  "description": "MobiusX.ai Desktop — workspace shell, local agent, and shared packages for the MobiusX desktop surface",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "echo \"Phase 1 not started yet — see docs/ARCHITECTURE.md\""
+  }
+}
