@@ -1,5 +1,18 @@
 {
   "name": "@mobiusx/protocol",
+  "version": "0.0.1",
   "private": true,
-  "version": "0.0.1"
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "description": "Shared message/contract types for desktop <-> local agent, and (future) desktop <-> MobiusX Cloud",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.1",
+    "@types/node": "^22.7.5"
+  }
 }

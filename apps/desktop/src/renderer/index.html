@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MobiusX Desktop</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <nav id="nav">
+      <div class="brand">MOBIUSX</div>
+      <button class="nav-item" data-view="enterprise-knowledge">Enterprise Knowledge</button>
+      <button class="nav-item" data-view="global-intelligence">Global Intelligence</button>
+      <button class="nav-item active" data-view="x-coder">Engineering Studio<br /><span class="nav-sub">X-Coder</span></button>
+      <button class="nav-item" data-view="projects">Projects</button>
+      <button class="nav-item" data-view="governance">Governance</button>
+    </nav>
+
+    <main id="content">
+      <section id="view-placeholder" hidden>
+        <h2 id="placeholder-title"></h2>
+        <p>This lives on MobiusX Web for now — see docs/ARCHITECTURE.md §2 for the surface split.</p>
+      </section>
+
+      <section id="view-x-coder">
+        <header id="toolbar">
+          <button id="open-project-btn">Open Project…</button>
+          <span id="project-path">No project open</span>
+          <span id="agent-status" class="status">agent: connecting…</span>
+        </header>
+
+        <div id="workspace">
+          <div id="tree-panel" class="panel">
+            <h3>Files</h3>
+            <div id="file-tree"></div>
+          </div>
+
+          <div id="center-panel">
+            <div id="editor-panel" class="panel">
+              <h3 id="editor-title">Editor</h3>
+              <pre id="editor-content">Select a file to preview it.</pre>
+            </div>
+            <div id="terminal-panel" class="panel">
+              <h3>Terminal</h3>
+              <div id="terminal-output"></div>
+              <input id="terminal-input" placeholder="Type a command and press Enter…" />
+            </div>
+          </div>
+
+          <div id="git-panel" class="panel">
+            <h3>Git</h3>
+            <div id="git-branch"></div>
+            <div id="git-status-list"></div>
+            <h4>Recent commits</h4>
+            <div id="git-log-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>

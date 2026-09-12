@@ -1,5 +1,24 @@
 {
   "name": "@mobiusx/context-engine",
-  "private": true,
-  "version": "0.0.1"
+  "version": "0.1.0",
+  "description": "MobiusX IDE Context Engine — Merkle-tree incremental indexer (Phase 0)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "mobiusx-index": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts",
+    "cli": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.1",
+    "@types/node": "^22.7.5"
+  }
 }

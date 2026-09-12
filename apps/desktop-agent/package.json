@@ -1,5 +1,27 @@
 {
   "name": "@mobiusx/desktop-agent",
+  "version": "0.0.1",
   "private": true,
-  "version": "0.0.1"
+  "type": "module",
+  "main": "dist/index.js",
+  "description": "MobiusX Desktop Local Agent Service — filesystem, git, and terminal access for the desktop shell (Phase 1)",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@mobiusx/context-engine": "*",
+    "@mobiusx/protocol": "*",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.1",
+    "@types/node": "^22.7.5",
+    "@types/express": "^4.17.21",
+    "@types/ws": "^8.5.12"
+  }
 }
