@@ -12,7 +12,17 @@
  * less churn once that integration is scoped) — see docs/ARCHITECTURE.md §12.
  */
 
-export type AgentMode = "ask" | "plan" | "build";
+/**
+ * "spec" (PRD §8, Requirements Engineering) reuses the exact same
+ * propose-edits/review/apply pipeline "build" uses — a generated spec is
+ * just a markdown file under `.mobiusx/specs/` proposed as a `create`
+ * ProposedEdit, so it goes through the same diff review and explicit
+ * Apply step as any other AI-generated file (see taskEngine.ts,
+ * anthropicRunner.ts's MODES_WITH_STRUCTURED_EDITS, and
+ * apps/desktop-agent/src/fsOps.ts#applyEdits). It never touches existing
+ * code — only ever proposes a brand-new spec file.
+ */
+export type AgentMode = "ask" | "plan" | "build" | "spec";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 

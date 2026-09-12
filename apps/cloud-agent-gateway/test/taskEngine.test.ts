@@ -87,6 +87,19 @@ test("ask and plan modes never propose edits", async () => {
   }
 });
 
+test("spec mode proposes a clearly-labeled demo spec under .mobiusx/specs/", async () => {
+  const summary = await startTask({ mode: "spec", prompt: "subscription management" });
+  await waitUntilDone(summary.id);
+  const task = await getTask(summary.id);
+  assert.equal(task!.edits?.length, 1);
+  const edit = task!.edits![0];
+  assert.equal(edit.action, "create");
+  assert.equal(edit.path, ".mobiusx/specs/demo-spec.md");
+  assert.match(edit.content, /not a real requirements analysis/);
+  assert.match(edit.content, /## Functional Requirements/);
+  assert.match(edit.content, /## Acceptance Criteria/);
+});
+
 test("cancelTask aborts a running demo task and marks it cancelled, not failed", async () => {
   const summary = await startTask({ mode: "build", prompt: "long-running thing to cancel" });
   assert.equal(summary.status, "queued");

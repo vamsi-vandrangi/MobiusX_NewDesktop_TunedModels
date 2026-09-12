@@ -16,20 +16,25 @@ import type { AgentRunner, RunnerInput } from "./types.js";
  * cancelling a task here aborts the in-flight HTTP request itself, not
  * just the UI's view of it.
  *
- * "build" mode is a deliberate exception to live streaming: the model is
- * instructed to end its response with a structured JSON block describing
- * proposed file edits (see EDITS_MARKER below), and that block has to be
- * parsed as a whole, not token-by-token — so for build mode this runner
- * buffers the full response, then emits the prose portion as one "output"
- * event followed by an "edits" event, rather than the live deltas ask/plan
- * get. This is a real, documented trade-off, not an oversight.
+ * "build" and "spec" modes are a deliberate exception to live streaming:
+ * the model is instructed to end its response with a structured JSON block
+ * describing proposed file edits (see EDITS_MARKER below — "spec" mode
+ * proposes a single new requirements-spec markdown file the same way
+ * "build" proposes code changes), and that block has to be parsed as a
+ * whole, not token-by-token — so for these modes this runner buffers the
+ * full response, then emits the prose portion as one "output" event
+ * followed by an "edits" event, rather than the live deltas ask/plan get.
+ * This is a real, documented trade-off, not an oversight.
  */
 export function isAnthropicConfigured(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_MODEL);
 }
 
-/** Marks the boundary between the model's human-readable summary and the machine-readable edits JSON block in a build-mode response. Never shown to the user. */
+/** Marks the boundary between the model's human-readable summary and the machine-readable edits JSON block in a build/spec-mode response. Never shown to the user. */
 export const EDITS_MARKER = "===MOBIUSX_EDITS===";
+
+/** Modes whose response is buffered and parsed for a structured ProposedEdit[] block, rather than streamed live token-by-token — see the module doc comment above. */
+const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec"]);
 
 export const anthropicRunner: AgentRunner = {
   name: "anthropic",
@@ -81,7 +86,7 @@ export const anthropicRunner: AgentRunner = {
       }
 
       let sawText: boolean;
-      if (input.mode === "build") {
+      if (MODES_WITH_STRUCTURED_EDITS.has(input.mode)) {
         let fullText = "";
         sawText = await streamSse(res.body, (delta) => {
           fullText += delta;
@@ -254,6 +259,18 @@ function systemPromptFor(input: RunnerInput): string {
       "You are the MobiusX Desktop AI Assistant. Draft a concrete, numbered implementation plan — do not write full code." +
       relevantFilesContext(input, false)
     );
+  }
+  if (input.mode === "spec") {
+    return [
+      "You are the MobiusX Desktop AI Assistant in SPEC mode — a Requirements Engineering assistant (not a coder in this mode).",
+      "Given the user's natural-language request, write a structured requirements specification as a single markdown document with EXACTLY these sections, in this order: '## Overview', '## Functional Requirements' (numbered), '## Non-Functional Requirements' (numbered), '## Constraints & Assumptions', '## Risks', '## Acceptance Criteria' (as Given/When/Then scenarios).",
+      "If the request is ambiguous or missing information a real spec would need, do not guess silently — add those as explicit open questions under a '## Open Questions' section instead of inventing requirements the user never stated.",
+      "First, write a one-to-two-sentence prose summary of what you're specifying.",
+      `Then, on its own line, output exactly ${EDITS_MARKER} followed by a single fenced json code block with this exact shape:`,
+      '{"edits": [{"path": ".mobiusx/specs/<kebab-case-slug>.md", "action": "create", "content": "the complete markdown spec document"}]}',
+      "Choose a short, descriptive kebab-case slug for the filename based on the feature being specified (e.g. \".mobiusx/specs/subscription-management.md\"). Always use action \"create\" — never \"modify\" in this mode.",
+      relevantFilesContext(input, false),
+    ].join("\n");
   }
 
   const fullContentPaths = (input.projectContext?.relevantFiles ?? [])

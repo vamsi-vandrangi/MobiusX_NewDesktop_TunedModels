@@ -684,6 +684,7 @@ function createAssistantPanel(container) {
       <button class="mode-btn active" data-mode="ask">Ask</button>
       <button class="mode-btn" data-mode="plan">Plan</button>
       <button class="mode-btn" data-mode="build">Build</button>
+      <button class="mode-btn" data-mode="spec" title="Requirements Engineering — generates a structured spec file for review, doesn't write code">Spec</button>
     </div>
     <div class="assistant-feed"></div>
     <div class="assistant-input-row">
