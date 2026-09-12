@@ -6,6 +6,8 @@
  * AgentHandshake). Nothing here is exposed to the network.
  */
 
+import type { PolicyMatch } from "./governance.js";
+
 export interface AgentHandshake {
   /** Port the agent is listening on (loopback only). */
   port: number;
@@ -103,4 +105,6 @@ export type TerminalClientMessage =
 export type TerminalServerMessage =
   | { type: "output"; data: string }
   | { type: "exit"; code: number | null; signal?: number }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** A submitted command line matched a Phase 5 command-guard rule (see apps/desktop-agent/src/policy.ts) — sent alongside a best-effort interrupt, not a block; the command may already be running. */
+  | { type: "policy"; matches: PolicyMatch[] };

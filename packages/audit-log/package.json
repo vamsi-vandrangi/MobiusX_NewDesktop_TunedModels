@@ -1,0 +1,21 @@
+{
+  "name": "@mobiusx/audit-log",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "description": "Shared append-only local audit log for Phase 5 governance events (terminal command guard, secret redaction) — desktop-agent and cloud-agent-gateway both write to the same file",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@mobiusx/protocol": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.1",
+    "@types/node": "^22.7.5"
+  }
+}

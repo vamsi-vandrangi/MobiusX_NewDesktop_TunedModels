@@ -8,6 +8,8 @@ Any task — either runner — can be cancelled mid-flight via `POST /tasks/:id/
 
 "Build" mode deliberately never modifies files automatically, with either runner — it only drafts a description of the proposed change, consistent with the human-approval step in docs/ARCHITECTURE.md §8.
 
+**Phase 5:** before any task's `projectContext.relevantFiles` snippets reach a runner, `src/policy/secretScan.ts` scans them for secret-shaped text (AWS keys, API keys, PEM private key blocks, hardcoded password assignments, JWTs, GitHub/Slack tokens) and redacts matches in place — so a hardcoded credential that Phase 2's semantic search happens to surface never reaches the Anthropic API call, or the demo runner's echoed context. Redactions are recorded as the task's first step (visible in the AI Assistant panel and Tasks view) and written to the shared audit log (`@mobiusx/audit-log`, `~/.mobiusx/audit.jsonl`). It's a regex scanner, not a real secret-detection engine — no entropy scoring, no provider validation — treat it as a floor, not a guarantee.
+
 ## Running
 
 ```
@@ -31,4 +33,4 @@ Point the desktop shell at a different base URL that implements this same contra
 
 - No auth beyond a per-process bearer token (fine for "one local desktop app talking to one locally-spawned process"; not how a real multi-user cloud service would authenticate).
 - Cancellation is in-memory only (`taskEngine.ts`'s `AbortController` map) — it doesn't survive a gateway process restart. A task still "running" per `tasks.json` after a restart can no longer be cancelled by id (there's no controller left to abort); it will simply never reach a terminal state until the process that owned it is gone. This mirrors demoRunner/anthropicRunner having no persisted "resume from where I left off" behavior either.
-- No real interactive terminal (`node-pty`) for the desktop shell yet, and no Phase 5 governance/policy-enforcement layer — see docs/ARCHITECTURE.md §12 for both.
+- The secret scanner is regex-only (see above) — no entropy scoring, no provider-specific validation, and it only covers `relevantFiles` snippets, not the prompt text itself or runner output.

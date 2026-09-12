@@ -92,3 +92,31 @@ test("cancelTask on an unknown or already-finished task returns false", async ()
   await waitUntilDone(summary.id);
   assert.equal(cancelTask(summary.id), false); // already completed by the time we get here
 });
+
+test("startTask redacts secrets from relevantFiles context before the runner ever sees them", async () => {
+  const summary = await startTask({
+    mode: "ask",
+    prompt: "what does this file do?",
+    projectContext: {
+      projectPath: "/fake/project",
+      relevantFiles: [
+        { relPath: "config.ts", snippet: 'export const AWS_KEY = "AKIAABCDEFGHIJKLMNOP";' },
+        { relPath: "safe.ts", snippet: "export const add = (a: number, b: number) => a + b;" },
+      ],
+    },
+  });
+  await waitUntilDone(summary.id);
+
+  const task = await getTask(summary.id);
+  assert.ok(task);
+  // The redaction step should be recorded, and be the first step.
+  const redactionStep = task!.steps.find((s) => s.label.includes("Redacted"));
+  assert.ok(redactionStep, "expected a redaction step to be recorded");
+  assert.equal(task!.steps[0].id, redactionStep!.id);
+  assert.match(redactionStep!.label, /aws-access-key/);
+
+  // The demo runner's own output (which echoes back projectContext.relevantFiles' relPaths, not
+  // their contents) never had the raw secret text to begin with, but assert the negative anyway
+  // as a guard against a future runner change accidentally leaking it.
+  assert.ok(!task!.output.includes("AKIAABCDEFGHIJKLMNOP"));
+});

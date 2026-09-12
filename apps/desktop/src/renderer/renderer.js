@@ -11,6 +11,7 @@ function showView(name) {
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (name === "changes") loadGit();
   if (name === "tasks") loadTasksList();
+  if (name === "settings") loadSettings();
 }
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -314,6 +315,11 @@ function connectTerminal() {
     if (msg.type === "output") term.write(msg.data);
     else if (msg.type === "exit") term.write(`\r\n\x1b[90m[process exited${msg.code !== null ? ` (code ${msg.code})` : ""}]\x1b[0m\r\n`);
     else if (msg.type === "error") term.write(`\r\n\x1b[31m[error] ${msg.message}\x1b[0m\r\n`);
+    else if (msg.type === "policy") {
+      // Phase 5 command guard — reactive, best-effort (see apps/desktop-agent/src/policy.ts).
+      const labels = msg.matches.map((m) => m.description).join("; ");
+      term.write(`\r\n\x1b[41m\x1b[97m[command guard] flagged & interrupted: ${labels}\x1b[0m\r\n`);
+    }
   });
 }
 connectTerminal();
@@ -795,3 +801,82 @@ function renderTaskDetail(task) {
     });
   }
 }
+
+// ============================================================
+// Settings — Phase 5 local-reference slice: the terminal command guard's
+// effective policy and the shared audit log (desktop-agent + cloud-agent-
+// gateway both write to it). Advisory governance, not enterprise policy
+// management or a security sandbox — see the scope note in the view itself.
+// ============================================================
+function formatAuditTime(iso) {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+async function loadPolicy() {
+  const rulesEl = document.getElementById("policy-rules");
+  const noteEl = document.getElementById("policy-project-note");
+  try {
+    const policy = await api("/policy");
+    if (policy.projectPolicyError) {
+      noteEl.innerHTML = `<span class="policy-error">⚠ ${escapeHtml(policy.projectPolicyError)}</span>`;
+    } else if (policy.projectPolicyPath) {
+      noteEl.textContent = `Project policy loaded from ${policy.projectPolicyPath} — ${policy.project.length} extra rule(s), added on top of the built-ins below (a project can only add rules, never remove or weaken one).`;
+    } else {
+      noteEl.textContent = "No project .mobiusx/policy.json found — only the built-in rules below are active. A project can add its own by creating one (see docs/ARCHITECTURE.md §12).";
+    }
+
+    const allRules = [...policy.builtIn.map((r) => ({ ...r, scope: "built-in" })), ...policy.project.map((r) => ({ ...r, scope: "project" }))];
+    rulesEl.innerHTML = allRules
+      .map(
+        (r) => `
+      <div class="policy-rule">
+        <span class="policy-rule-scope ${r.scope}">${r.scope}</span>
+        <span class="policy-rule-id">${escapeHtml(r.id)}</span>
+        <span class="policy-rule-desc">${escapeHtml(r.description)}</span>
+      </div>`,
+      )
+      .join("");
+  } catch (err) {
+    rulesEl.innerHTML = `<div class="debug-empty">Failed to load policy: ${err.message}</div>`;
+  }
+}
+
+async function loadAuditLog() {
+  const el = document.getElementById("audit-log");
+  el.innerHTML = "<div class='debug-empty'>Loading…</div>";
+  try {
+    const { entries } = await api("/audit?limit=100");
+    if (entries.length === 0) {
+      el.innerHTML = "<div class='debug-empty'>No audit entries yet — they'll appear here when the command guard flags something or a task's context gets redacted.</div>";
+      return;
+    }
+    el.innerHTML = entries
+      .slice()
+      .reverse()
+      .map(
+        (e) => `
+      <div class="audit-entry ${e.severity}">
+        <div class="audit-entry-head">
+          <span class="audit-entry-time">${formatAuditTime(e.timestamp)}</span>
+          <span class="audit-entry-source">${escapeHtml(e.source)}</span>
+          <span class="audit-entry-category">${escapeHtml(e.category)}</span>
+        </div>
+        <div class="audit-entry-summary">${escapeHtml(e.summary)}</div>
+      </div>`,
+      )
+      .join("");
+  } catch (err) {
+    el.innerHTML = `<div class="debug-empty">Failed to load audit log: ${err.message}</div>`;
+  }
+}
+
+function loadSettings() {
+  loadPolicy();
+  loadAuditLog();
+}
+
+document.getElementById("audit-refresh-btn").addEventListener("click", loadAuditLog);

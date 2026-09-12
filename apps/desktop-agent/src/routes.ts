@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { stat } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
+import { readAuditLog } from "@mobiusx/audit-log";
 import type {
+  AuditLogResponse,
+  EffectivePolicyResponse,
   FsTreeResponse,
   GitDiffRequest,
   OpenProjectRequest,
@@ -9,6 +12,7 @@ import type {
 } from "@mobiusx/protocol";
 import { buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
+import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
 import { buildSemanticIndex, searchSemanticIndex } from "./semanticOps.js";
 import { projectState } from "./state.js";
 
@@ -168,6 +172,26 @@ export function buildRouter(): Router {
     } catch (err) {
       res.status(500).json({ error: "history failed", detail: (err as Error).message });
     }
+  });
+
+  // Phase 5 (local-reference slice): surfaces the terminal command guard's
+  // effective ruleset and the shared audit log. See policy.ts's doc comment
+  // for the "advisory, not a sandbox" framing this UI needs to carry through.
+  router.get("/policy", async (_req, res) => {
+    const { rules, path, error } = await loadProjectPolicy(projectState.path);
+    const body: EffectivePolicyResponse = {
+      builtIn: BUILTIN_POLICY,
+      project: rules,
+      projectPolicyPath: path,
+      projectPolicyError: error,
+    };
+    res.json(body);
+  });
+
+  router.get("/audit", async (req, res) => {
+    const limit = Number(req.query.limit ?? 100);
+    const body: AuditLogResponse = { entries: await readAuditLog(Number.isFinite(limit) ? limit : 100) };
+    res.json(body);
   });
 
   return router;

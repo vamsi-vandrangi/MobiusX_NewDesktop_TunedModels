@@ -258,3 +258,31 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 .assistant-stream-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 4px; }
 .assistant-msg.streaming .assistant-steps { font-size: 11px; color: #7a7b81; display: flex; flex-direction: column; gap: 2px; }
 .assistant-msg.streaming .assistant-output { margin-top: 6px; white-space: pre-wrap; }
+
+/* ---- Settings view (Phase 5: command guard policy + audit log) ---- */
+.settings-section { margin-top: 22px; max-width: 900px; }
+.settings-section h3 { margin: 0 0 8px; font-size: 13px; color: #cfd0d4; }
+.settings-section-head { display: flex; align-items: center; justify-content: space-between; }
+.scope-note-small { color: #6d6e75; font-size: 11.5px; line-height: 1.5; margin: 0 0 10px; }
+.policy-error { color: #e0928f; }
+.refresh-btn {
+  background: #17181a; border: 1px solid #232429; color: #9a9ba1; border-radius: 6px;
+  padding: 4px 10px; font-size: 11px; cursor: pointer;
+}
+.refresh-btn:hover { color: #cfd0d4; border-color: #3a3b41; }
+.policy-rules { display: flex; flex-direction: column; gap: 6px; }
+.policy-rule {
+  display: flex; align-items: baseline; gap: 10px; background: #16171b; border: 1px solid #232429;
+  border-radius: 6px; padding: 7px 10px; font-size: 12px;
+}
+.policy-rule-scope { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
+.policy-rule-scope.built-in { background: #1e2434; color: #7c9eff; }
+.policy-rule-scope.project { background: #2a3a1e; color: #9fd47c; }
+.policy-rule-id { font-family: monospace; color: #cfd0d4; flex-shrink: 0; }
+.policy-rule-desc { color: #9a9ba1; }
+.audit-log { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; max-height: 360px; overflow: auto; }
+.audit-entry { background: #16171b; border: 1px solid #232429; border-left: 3px solid #3a3b41; border-radius: 6px; padding: 8px 10px; }
+.audit-entry.warning { border-left-color: #e0b96f; }
+.audit-entry-head { display: flex; gap: 10px; font-size: 10.5px; color: #6d6e75; }
+.audit-entry-source, .audit-entry-category { font-family: monospace; }
+.audit-entry-summary { margin-top: 4px; font-size: 12px; color: #cfd0d4; }

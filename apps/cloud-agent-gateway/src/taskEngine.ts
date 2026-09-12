@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { CreateTaskRequest, TaskEvent, TaskSummary } from "@mobiusx/protocol";
+import { appendAuditEntry } from "@mobiusx/audit-log";
+import type { CreateTaskRequest, ProjectContext, TaskEvent, TaskSummary } from "@mobiusx/protocol";
 import { applyEvent, createTask, getTask } from "./store.js";
 import { broadcast } from "./wsHub.js";
 import { selectRunner } from "./runners/runnerSelector.js";
+import { scanAndRedact } from "./policy/secretScan.js";
 
 /** In-flight tasks only — cleared as soon as a task reaches a terminal state, so cancelTask() naturally reports "not running" for anything already finished (or unknown). Not persisted: a cancel request only makes sense against a task this process is actively running. */
 const controllers = new Map<string, AbortController>();
@@ -11,6 +13,13 @@ export async function startTask(req: CreateTaskRequest): Promise<TaskSummary> {
   const id = randomUUID();
   const now = new Date().toISOString();
   const runner = selectRunner();
+
+  // Phase 5: scan+redact any code context before it ever reaches a runner
+  // (and, for the anthropic runner, before it leaves the machine at all).
+  // This happens synchronously here, before task creation, so a redaction
+  // notice is always the task's very first recorded step — never a race
+  // against the runner's own first event.
+  const { projectContext, redactedCount, redactedRules } = redactProjectContext(req.projectContext);
 
   const summary: TaskSummary = {
     id,
@@ -23,12 +32,36 @@ export async function startTask(req: CreateTaskRequest): Promise<TaskSummary> {
   };
   await createTask(id, summary);
 
+  const emit = (event: TaskEvent) => {
+    void applyEvent(id, event).then(() => broadcast(id, event));
+  };
+
+  if (redactedCount > 0) {
+    emit({
+      type: "step",
+      step: {
+        id: randomUUID(),
+        label: `Redacted ${redactedCount} potential secret(s) from context before use (${redactedRules.join(", ")})`,
+        status: "completed",
+        startedAt: now,
+        completedAt: now,
+      },
+    });
+    void appendAuditEntry({
+      source: "cloud-agent-gateway",
+      category: "secret-redaction",
+      severity: "warning",
+      summary: `Redacted ${redactedCount} potential secret(s) from task ${id}'s context before it was used`,
+      detail: { taskId: id, rules: redactedRules },
+    });
+  }
+
   const controller = new AbortController();
   controllers.set(id, controller);
 
   // Fire-and-forget: the caller gets the TaskSummary immediately and follows
   // progress via GET /tasks/:id (polling) or the /tasks/:id/stream WebSocket.
-  void runRunnerAndPersist(id, req, runner, controller);
+  void runRunnerAndPersist(id, { mode: req.mode, prompt: req.prompt, projectContext }, runner, controller);
 
   return summary;
 }
@@ -47,6 +80,27 @@ export function cancelTask(id: string): boolean {
   if (!controller) return false;
   controller.abort();
   return true;
+}
+
+/** Redacts every relevantFiles[].snippet in place (returning a new object — the input isn't mutated) and reports how much was redacted, so the runner this feeds never sees the original secret text. */
+function redactProjectContext(ctx?: ProjectContext): {
+  projectContext?: ProjectContext;
+  redactedCount: number;
+  redactedRules: string[];
+} {
+  if (!ctx?.relevantFiles?.length) return { projectContext: ctx, redactedCount: 0, redactedRules: [] };
+
+  let redactedCount = 0;
+  const ruleIds = new Set<string>();
+  const relevantFiles = ctx.relevantFiles.map((file) => {
+    const { text, matches } = scanAndRedact(file.snippet);
+    if (matches.length === 0) return file;
+    redactedCount += matches.length;
+    for (const m of matches) ruleIds.add(m.ruleId);
+    return { ...file, snippet: text };
+  });
+
+  return { projectContext: { ...ctx, relevantFiles }, redactedCount, redactedRules: [...ruleIds] };
 }
 
 async function runRunnerAndPersist(

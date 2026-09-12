@@ -183,9 +183,29 @@
           <h2>Artifacts</h2>
           <p>Generated artifacts (specs, diagrams, docs) from agent tasks — depends on Phase 3 Cloud Agents.</p>
         </section>
-        <section class="view placeholder-view" id="view-settings" hidden>
+        <section class="view" id="view-settings" hidden>
           <h2>Settings</h2>
-          <p>Workspace/application settings, authentication, and local agent permissions — not yet built for Phase 1.</p>
+          <p class="scope-note">
+            Phase 5 local-reference slice: a terminal command guard and a secret scan on outbound task
+            context, both with a shared audit trail. This is <strong>advisory</strong>, single-user
+            governance — not enterprise policy management (no multi-tenant auth, no centrally-pushed org
+            policy) and, for the terminal specifically, not a security sandbox: anyone with terminal access
+            to this machine can bypass it. See docs/ARCHITECTURE.md §12 and the root README.
+          </p>
+
+          <div class="settings-section">
+            <h3>Command Guard <span class="status-text">(terminal — best-effort, reactive)</span></h3>
+            <p id="policy-project-note" class="scope-note-small"></p>
+            <div id="policy-rules" class="policy-rules"></div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3>Audit Log</h3>
+              <button id="audit-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+            </div>
+            <div id="audit-log" class="audit-log"></div>
+          </div>
         </section>
       </main>
     </div>

@@ -15,9 +15,10 @@ Working, tested vertical slice:
 - `apps/desktop-agent` — Local Agent Service (Express + ws, loopback-only, bearer-token auth): project open (via context-engine), file tree, file read, git status/log/diff, and a **real interactive terminal** — `node-pty` on the agent side, one PTY process per WebSocket connection, raw keystrokes/ANSI both ways. Smoke-tested end to end against this repo itself.
 - `apps/desktop` — Electron shell v0 (no bundler): spawns the agent, workspace nav, file tree, git panel, an `xterm.js`-rendered terminal panel wired to that real PTY, and a UI restyled to match the MobiusX Desktop prototype (sidebar IA, top bar, tabbed editor, AI Assistant panel).
 - `Debug` view — Phase 2 static slice: local semantic-ish code search (`@mobiusx/semantic-index`) correlated with per-file git history. Explicitly not live cross-system trace/log analysis (see docs/ARCHITECTURE.md §5.3/§12) — that needs real observability data and MobiusX Cloud (Phase 3).
-- `apps/cloud-agent-gateway` — Phase 3 local reference implementation of the desktop↔cloud task contract: real task creation, WebSocket streaming, persistence, and resumability, with a demo runner by default and an optional real Anthropic runner if you supply `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`. **Not MobiusX's real production Cloud** — see its own README. The AI Assistant panel and Tasks view are wired to it for real, and ground tasks using Phase 2's semantic search when a project is open.
+- `apps/cloud-agent-gateway` — Phase 3 local reference implementation of the desktop↔cloud task contract: real task creation, WebSocket streaming, persistence, cancellation, and resumability, with a demo runner by default and an optional real Anthropic runner (token-streamed) if you supply `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL`. **Not MobiusX's real production Cloud** — see its own README. The AI Assistant panel and Tasks view are wired to it for real, and ground tasks using Phase 2's semantic search when a project is open.
+- Phase 5 governance — local-reference slice: a **terminal command guard** (`apps/desktop-agent/src/policy.ts`) that flags known-destructive command shapes (`rm -rf /`, force-pushing to main, piping a curl download into a shell, etc.), logs them, and sends a best-effort interrupt — advisory and reactive, not a sandbox (see its doc comment for exactly why, given a real interactive PTY). A **secret scanner** (`apps/cloud-agent-gateway/src/policy/secretScan.ts`) redacts anything secret-shaped out of a task's code context before it ever reaches a model. Both write to a shared append-only audit log (`@mobiusx/audit-log`, `~/.mobiusx/audit.jsonl`), visible in the desktop shell's Settings view.
 
-**Not yet done:** live cross-system tracing for the debugger; integration with MobiusX's actual production Cloud backend (RAG/Enterprise Knowledge/Global Intelligence); Phase 5 governance/policy enforcement; packaging/code signing.
+**Not yet done:** live cross-system tracing for the debugger; integration with MobiusX's actual production Cloud backend (RAG/Enterprise Knowledge/Global Intelligence); enterprise-grade governance (multi-tenant auth, centrally-managed org policy, real sandboxing) — Phase 5 here is intentionally a single-user advisory layer, not that; packaging/code signing.
 
 ## Running it locally
 
@@ -40,8 +41,10 @@ npm run start -w apps/desktop
 ## Structure
 
 - `apps/desktop` — Electron shell (workspace UI, AI Workspace pane, embeds the MobiusX IDE editor surface)
-- `apps/desktop-agent` — Local Agent Service (filesystem, git, terminal, containers, MCP)
+- `apps/desktop-agent` — Local Agent Service (filesystem, git, terminal + command guard, containers, MCP)
+- `apps/cloud-agent-gateway` — local reference implementation of the desktop↔cloud task contract, with secret-scan/redaction on outbound context
 - `packages/context-engine`, `packages/semantic-index` — vendored from the MobiusX IDE project (Merkle indexer, Tree-sitter semantic chunking)
 - `packages/protocol` — shared desktop↔cloud message contracts (WebSocket/SSE)
+- `packages/audit-log` — shared append-only local audit log for Phase 5 governance events
 - `packages/ui-kit` — shared design system components (web + desktop) — not started
 - `docs/` — architecture and phase writeups
