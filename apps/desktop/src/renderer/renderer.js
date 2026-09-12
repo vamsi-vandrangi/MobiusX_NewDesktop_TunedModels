@@ -250,53 +250,90 @@ async function openFile(path) {
 }
 
 // ============================================================
-// Terminal
+// Terminal — real interactive PTY (node-pty on the agent side, xterm.js
+// here). Raw bytes both ways: what you type goes straight to the shell's
+// stdin (including Ctrl+C, arrow-key history, tab completion), and
+// whatever the shell writes — its own prompt, ANSI colors, full-screen
+// programs like vim — is rendered by xterm.js exactly as a native
+// terminal would. This replaced Phase 1's line-at-a-time command-exec
+// terminal; see apps/desktop-agent/src/terminalWs.ts.
 // ============================================================
-const terminalOutput = document.getElementById("terminal-output");
-const terminalInput = document.getElementById("terminal-input");
 const terminalPanel = document.getElementById("terminal-panel");
+const terminalContainer = document.getElementById("terminal-xterm");
 let terminalSocket = null;
-let cmdCounter = 0;
+let terminalReconnectTimer = null;
 
-document.getElementById("terminal-toggle").addEventListener("click", () => {
-  const collapsed = terminalPanel.classList.toggle("collapsed");
-  document.getElementById("terminal-toggle").textContent = (collapsed ? "▸ " : "▾ ") + "Terminal";
+const term = new Terminal({
+  fontFamily: '"SF Mono", Menlo, monospace',
+  fontSize: 12,
+  cursorBlink: true,
+  scrollback: 5000,
+  theme: {
+    background: "#101113",
+    foreground: "#e6e6e6",
+    cursor: "#7c9eff",
+    selectionBackground: "#2a3a63",
+  },
 });
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(terminalContainer);
 
-function appendTerminalLine(text, cls) {
-  const div = document.createElement("div");
-  if (cls) div.className = cls;
-  div.textContent = text;
-  terminalOutput.appendChild(div);
-  terminalOutput.scrollTop = terminalOutput.scrollHeight;
+function sendTerminalMessage(msg) {
+  if (terminalSocket && terminalSocket.readyState === WebSocket.OPEN) {
+    terminalSocket.send(JSON.stringify(msg));
+  }
+}
+
+function fitAndSendSize() {
+  if (terminalPanel.classList.contains("collapsed")) return; // 0-size container — fit() would report garbage
+  try {
+    fitAddon.fit();
+  } catch {
+    return; // container not yet laid out (e.g. view hidden) — next resize/toggle will retry
+  }
+  sendTerminalMessage({ type: "resize", cols: term.cols, rows: term.rows });
 }
 
 function connectTerminal() {
+  clearTimeout(terminalReconnectTimer);
   terminalSocket = new WebSocket(`${agentWsUrl}/terminal?token=${encodeURIComponent(agentToken)}`);
-  terminalSocket.addEventListener("open", () => appendTerminalLine("[connected]", "exit"));
-  terminalSocket.addEventListener("close", () => appendTerminalLine("[disconnected]", "exit"));
-  terminalSocket.addEventListener("error", () => appendTerminalLine("[terminal socket error]", "stderr"));
+  terminalSocket.addEventListener("open", () => {
+    term.reset();
+    fitAndSendSize();
+  });
+  terminalSocket.addEventListener("close", () => {
+    term.write("\r\n\x1b[90m[disconnected — retrying in 2s]\x1b[0m\r\n");
+    terminalReconnectTimer = setTimeout(connectTerminal, 2000);
+  });
+  terminalSocket.addEventListener("error", () => {
+    term.write("\r\n\x1b[31m[terminal socket error]\x1b[0m\r\n");
+  });
   terminalSocket.addEventListener("message", (event) => {
     const msg = JSON.parse(event.data);
-    if (msg.type === "stdout") appendTerminalLine(msg.chunk.replace(/\n$/, ""));
-    else if (msg.type === "stderr") appendTerminalLine(msg.chunk.replace(/\n$/, ""), "stderr");
-    else if (msg.type === "exit") appendTerminalLine(`[exit ${msg.code}]`, "exit");
-    else if (msg.type === "error") appendTerminalLine(`[error] ${msg.message}`, "stderr");
+    if (msg.type === "output") term.write(msg.data);
+    else if (msg.type === "exit") term.write(`\r\n\x1b[90m[process exited${msg.code !== null ? ` (code ${msg.code})` : ""}]\x1b[0m\r\n`);
+    else if (msg.type === "error") term.write(`\r\n\x1b[31m[error] ${msg.message}\x1b[0m\r\n`);
   });
 }
 connectTerminal();
 
-terminalInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter" || !terminalInput.value.trim()) return;
-  const command = terminalInput.value;
-  terminalInput.value = "";
-  appendTerminalLine(`$ ${command}`, "cmd");
-  if (terminalSocket && terminalSocket.readyState === WebSocket.OPEN) {
-    terminalSocket.send(JSON.stringify({ type: "exec", id: String(++cmdCounter), command }));
-  } else {
-    appendTerminalLine("[not connected]", "stderr");
+term.onData((data) => sendTerminalMessage({ type: "input", data }));
+
+document.getElementById("terminal-toggle").addEventListener("click", () => {
+  const collapsed = terminalPanel.classList.toggle("collapsed");
+  document.getElementById("terminal-toggle").textContent = (collapsed ? "▸ " : "▾ ") + "Terminal";
+  if (!collapsed) {
+    // Panel was just un-collapsed — xterm needs a beat for layout to settle before measuring.
+    requestAnimationFrame(() => {
+      fitAndSendSize();
+      term.focus();
+    });
   }
 });
+
+window.addEventListener("resize", () => fitAndSendSize());
+new ResizeObserver(() => fitAndSendSize()).observe(terminalContainer);
 
 // ============================================================
 // Changes (git) view

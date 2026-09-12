@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>MobiusX Desktop</title>
+  <link rel="stylesheet" href="../../../../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -112,8 +113,7 @@
                 <button id="terminal-toggle">▾ Terminal</button>
               </div>
               <div id="terminal-panel" class="panel">
-                <div id="terminal-output"></div>
-                <input id="terminal-input" placeholder="Type a command and press Enter…" />
+                <div id="terminal-xterm"></div>
               </div>
             </div>
 
@@ -190,6 +190,8 @@
       </main>
     </div>
   </div>
+  <script src="../../../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

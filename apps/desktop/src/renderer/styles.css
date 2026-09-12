@@ -161,16 +161,11 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 
 #terminal-bar { border-top: 1px solid #232429; border-bottom: 1px solid #232429; padding: 4px 10px; flex-shrink: 0; }
 #terminal-toggle { background: transparent; border: none; color: #9a9ba1; padding: 2px 4px; }
-#terminal-panel { flex-shrink: 0; height: 180px; border-right: none; background: #101113; display: flex; flex-direction: column; }
+#terminal-panel { flex-shrink: 0; height: 220px; border-right: none; background: #101113; display: flex; flex-direction: column; }
 #terminal-panel.collapsed { display: none; }
-#terminal-output { flex: 1; overflow: auto; font-family: "SF Mono", Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
-#terminal-output .stderr { color: #e0685f; }
-#terminal-output .cmd { color: #7c9eff; }
-#terminal-output .exit { color: #6d6e75; }
-#terminal-input {
-  background: #17181a; border: 1px solid #232429; color: #e6e6e6;
-  font-family: "SF Mono", Menlo, monospace; font-size: 12px; padding: 6px 8px; outline: none;
-}
+/* xterm.js manages its own internal canvas/rows — this just gives it a sized, padded box to fill. */
+#terminal-xterm { flex: 1; padding: 4px 6px; overflow: hidden; }
+#terminal-xterm .xterm { height: 100%; }
 
 .tree-node { padding: 2px 0; cursor: pointer; white-space: nowrap; }
 .tree-node:hover { color: #7c9eff; }

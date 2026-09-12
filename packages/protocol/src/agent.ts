@@ -86,14 +86,21 @@ export interface ApiError {
   detail?: string;
 }
 
-/** Messages sent from the renderer, over the /terminal WebSocket, to the agent. */
+/**
+ * Messages sent from the renderer, over the /terminal WebSocket, to the
+ * agent. A real PTY session (see apps/desktop-agent/src/terminalWs.ts) is
+ * raw byte pass-through, not request/response commands: "input" carries
+ * exactly what the user typed (including control characters — Ctrl+C,
+ * arrow keys, etc. arrive as their usual escape sequences), and "resize"
+ * keeps the PTY's own notion of terminal size in sync with the panel so
+ * full-screen programs (vim, htop, a REPL) render correctly.
+ */
 export type TerminalClientMessage =
-  | { type: "exec"; id: string; command: string; cwd?: string }
-  | { type: "cancel"; id: string };
+  | { type: "input"; data: string }
+  | { type: "resize"; cols: number; rows: number };
 
 /** Messages sent from the agent back to the renderer over /terminal. */
 export type TerminalServerMessage =
-  | { type: "stdout"; id: string; chunk: string }
-  | { type: "stderr"; id: string; chunk: string }
-  | { type: "exit"; id: string; code: number | null }
-  | { type: "error"; id: string; message: string };
+  | { type: "output"; data: string }
+  | { type: "exit"; code: number | null; signal?: number }
+  | { type: "error"; message: string };

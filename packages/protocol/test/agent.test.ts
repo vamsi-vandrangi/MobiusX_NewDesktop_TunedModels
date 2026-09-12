@@ -8,9 +8,16 @@ test("HealthResponse shape is usable as a plain object literal", () => {
 });
 
 test("TerminalClientMessage discriminates on type", () => {
-  const msg: TerminalClientMessage = { type: "exec", id: "1", command: "echo hi" };
-  assert.equal(msg.type, "exec");
-  if (msg.type === "exec") {
-    assert.equal(msg.command, "echo hi");
+  const msg: TerminalClientMessage = { type: "input", data: "echo hi\n" };
+  assert.equal(msg.type, "input");
+  if (msg.type === "input") {
+    assert.equal(msg.data, "echo hi\n");
+  }
+
+  const resize: TerminalClientMessage = { type: "resize", cols: 80, rows: 24 };
+  assert.equal(resize.type, "resize");
+  if (resize.type === "resize") {
+    assert.equal(resize.cols, 80);
+    assert.equal(resize.rows, 24);
   }
 });
