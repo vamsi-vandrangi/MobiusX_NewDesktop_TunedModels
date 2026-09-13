@@ -7,7 +7,7 @@
  */
 
 import type { PolicyMatch } from "./governance.js";
-import type { ProposedEdit } from "./cloud.js";
+import type { ModelSelection, ProposedEdit } from "./cloud.js";
 
 export interface AgentHandshake {
   /** Port the agent is listening on (loopback only). */
@@ -115,9 +115,13 @@ export interface ApplyEditsResponse {
 
 /**
  * GET/PUT /settings — desktop-agent-wide, single-user configuration (PRD
- * §34-35, "Approval Engine" / configurable autonomy levels). Kept
- * deliberately small: one real, working control rather than a menu of
- * settings that don't do anything yet.
+ * §34-35, "Approval Engine" / configurable autonomy levels), also shared
+ * (read-only) with apps/cloud-agent-gateway for `defaultModel` — see
+ * packages/agent-settings, the small shared package both apps use to read
+ * and write the same `~/.mobiusx/settings.json` file so a single Settings
+ * screen change is visible to both processes without needing IPC between
+ * them. Kept deliberately small: a handful of real, working controls
+ * rather than a menu of settings that don't do anything yet.
  */
 export interface AgentSettings {
   /**
@@ -132,6 +136,17 @@ export interface AgentSettings {
    * connection, not retroactively on one already open.
    */
   terminalApprovalMode: "off" | "guarded";
+  /**
+   * Standing default model for AI Assistant tasks (multi-model support —
+   * Llama/Qwen2.5-Coder/DeepSeek via OpenRouter or Groq, or a local Ollama
+   * install, alongside Anthropic). Absent means "let the gateway choose
+   * automatically" (see apps/cloud-agent-gateway/src/runners/registry.ts).
+   * A per-task selection in the AI Assistant panel overrides this for that
+   * one task without changing the standing default. Set via PUT /settings
+   * on the desktop agent — the cloud gateway only ever reads this file, it
+   * never writes to it.
+   */
+  defaultModel?: ModelSelection;
 }
 
 /**

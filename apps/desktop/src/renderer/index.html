@@ -158,8 +158,10 @@
           <h2>Tasks</h2>
           <p class="scope-note">
             Tasks run on the local reference Cloud Agent Gateway (see docs/ARCHITECTURE.md §12) — real task lifecycle
-            and persistence, but the reasoning is the demo runner unless you've configured a real model
-            (<code>ANTHROPIC_API_KEY</code> + <code>ANTHROPIC_MODEL</code>). Each task shows which runner served it.
+            and persistence, but the reasoning is the demo runner unless you've configured a real model:
+            Anthropic, or a free provider (OpenRouter, Groq, a local Ollama install) — pick a default in
+            Settings or override per task in the AI Assistant panel. Each task shows which runner and model
+            actually served it.
           </p>
           <div id="tasks-layout">
             <div id="tasks-list" class="panel"></div>
@@ -194,13 +196,33 @@
         <section class="view" id="view-settings" hidden>
           <h2>Settings</h2>
           <p class="scope-note">
-            A terminal command guard (with an optional guarded hold-for-approval mode) and a secret
-            scan on outbound task context, both with a shared audit trail. This is
-            <strong>advisory</strong>, single-user governance — not enterprise policy management (no
-            multi-tenant auth, no centrally-pushed org policy) and, for the terminal specifically, not
-            a security sandbox: anyone with terminal access to this machine can bypass it. See
-            docs/ARCHITECTURE.md §12 and the root README.
+            A terminal command guard (with an optional guarded hold-for-approval mode), a default AI
+            model for the Assistant, and a secret scan on outbound task context, all with a shared
+            audit trail. This is <strong>advisory</strong>, single-user governance — not enterprise
+            policy management (no multi-tenant auth, no centrally-pushed org policy) and, for the
+            terminal specifically, not a security sandbox: anyone with terminal access to this
+            machine can bypass it. See docs/ARCHITECTURE.md §12 and the root README.
           </p>
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3>Default AI Model</h3>
+              <button id="model-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+            </div>
+            <p class="scope-note-small">
+              Which model the AI Assistant uses when you don't pick one for a specific task (the
+              per-task dropdown in Ask/Plan/Build/Spec always overrides this). "Auto" lets the gateway
+              choose — a configured Anthropic key first, then a configured free provider, else the
+              demo runner. Models greyed out below aren't usable yet — the reason (a missing API key,
+              or Ollama not reachable) is shown next to each. See
+              <code>apps/cloud-agent-gateway/README.md</code> for how to set up OpenRouter, Groq, or a
+              local Ollama install.
+            </p>
+            <div class="default-model-row">
+              <select id="default-model-select"></select>
+              <span id="default-model-status" class="terminal-approval-mode-status"></span>
+            </div>
+          </div>
 
           <div class="settings-section">
             <h3>Command Guard <span class="status-text">(terminal — best-effort, reactive)</span></h3>

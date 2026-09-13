@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { appendAuditEntry } from "@mobiusx/audit-log";
+import { getSettings } from "@mobiusx/agent-settings";
 import type { CreateTaskRequest, ProjectContext, TaskEvent, TaskSummary } from "@mobiusx/protocol";
 import { applyEvent, createTask, getTask } from "./store.js";
 import { broadcast } from "./wsHub.js";
-import { selectRunner } from "./runners/runnerSelector.js";
+import { resolveRunner, type ResolvedRunner } from "./runners/registry.js";
 import { scanAndRedact } from "@mobiusx/secret-scan";
 
 /** In-flight tasks only — cleared as soon as a task reaches a terminal state, so cancelTask() naturally reports "not running" for anything already finished (or unknown). Not persisted: a cancel request only makes sense against a task this process is actively running. */
@@ -12,10 +13,15 @@ const controllers = new Map<string, AbortController>();
 export async function startTask(req: CreateTaskRequest): Promise<TaskSummary> {
   const id = randomUUID();
   const now = new Date().toISOString();
-  const runner = selectRunner();
+
+  // Multi-model support: pick which runner (and which specific model)
+  // actually serves this task — a per-task override, the user's Settings
+  // default, or an automatic choice, in that order. See registry.ts.
+  const settings = await getSettings();
+  const { runner, modelId, fallbackNote } = await resolveRunner(req.model, settings);
 
   // Phase 5: scan+redact any code context before it ever reaches a runner
-  // (and, for the anthropic runner, before it leaves the machine at all).
+  // (and, for real-model runners, before it leaves the machine at all).
   // This happens synchronously here, before task creation, so a redaction
   // notice is always the task's very first recorded step — never a race
   // against the runner's own first event.
@@ -29,6 +35,8 @@ export async function startTask(req: CreateTaskRequest): Promise<TaskSummary> {
     createdAt: now,
     updatedAt: now,
     runner: runner.name,
+    model: modelId,
+    modelNote: fallbackNote,
     projectPath: req.projectContext?.projectPath,
   };
   await createTask(id, summary);
@@ -57,12 +65,25 @@ export async function startTask(req: CreateTaskRequest): Promise<TaskSummary> {
     });
   }
 
+  if (fallbackNote) {
+    emit({
+      type: "step",
+      step: {
+        id: randomUUID(),
+        label: `Model note: ${fallbackNote}`,
+        status: "completed",
+        startedAt: now,
+        completedAt: now,
+      },
+    });
+  }
+
   const controller = new AbortController();
   controllers.set(id, controller);
 
   // Fire-and-forget: the caller gets the TaskSummary immediately and follows
   // progress via GET /tasks/:id (polling) or the /tasks/:id/stream WebSocket.
-  void runRunnerAndPersist(id, { mode: req.mode, prompt: req.prompt, projectContext }, runner, controller);
+  void runRunnerAndPersist(id, { mode: req.mode, prompt: req.prompt, projectContext }, { runner, modelId }, controller);
 
   return summary;
 }
@@ -112,15 +133,22 @@ function redactProjectContext(ctx?: ProjectContext): {
 async function runRunnerAndPersist(
   id: string,
   req: CreateTaskRequest,
-  runner: ReturnType<typeof selectRunner>,
+  resolved: Pick<ResolvedRunner, "runner" | "modelId">,
   controller: AbortController,
 ): Promise<void> {
   const emit = (event: TaskEvent) => {
     void applyEvent(id, event).then(() => broadcast(id, event));
   };
   try {
-    await runner.run(
-      { taskId: id, mode: req.mode, prompt: req.prompt, projectContext: req.projectContext, signal: controller.signal },
+    await resolved.runner.run(
+      {
+        taskId: id,
+        mode: req.mode,
+        prompt: req.prompt,
+        projectContext: req.projectContext,
+        modelId: resolved.modelId,
+        signal: controller.signal,
+      },
       emit,
     );
   } catch (err) {

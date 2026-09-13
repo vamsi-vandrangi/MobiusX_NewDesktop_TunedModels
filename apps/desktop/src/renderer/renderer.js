@@ -735,6 +735,85 @@ function buildEditsCard(edits, taskProjectPath, review) {
 }
 
 // ============================================================
+// Multi-model support (PRD's model-selection requirement): GET /models on
+// the Cloud Agent Gateway returns every provider this gateway knows about
+// (demo, anthropic, openrouter, groq, ollama), INCLUDING ones that aren't
+// currently usable — see ModelOption's doc comment in @mobiusx/protocol.
+// This one function builds a <select>'s options from that response and is
+// shared by the per-task pickers in the AI Assistant panel and the
+// Settings "Default AI Model" section below, so the two never drift.
+// ============================================================
+async function fetchModelOptions() {
+  if (!cloudBaseUrl) return [];
+  try {
+    const { models } = await cloudApi("/models");
+    return models;
+  } catch {
+    return [];
+  }
+}
+
+function modelOptionLabel(m) {
+  return m.available ? m.label : `${m.label} — ${m.unavailableReason}`;
+}
+
+/**
+ * Populates `selectEl` with one <option> per model, grouped by provider,
+ * value-encoded as JSON ({provider, model}) so callers can round-trip it
+ * straight into a ModelSelection without inventing their own encoding.
+ * `includeAuto` adds a leading, selected-by-default "Auto" option whose
+ * value is "" — submitting a task with no model means exactly this: let
+ * the gateway's own resolveRunner() choose (Settings default, else the
+ * best configured provider, else demo). Unavailable models are shown, not
+ * hidden, but disabled — same "never hidden" principle as everywhere else
+ * in this app's governance UI.
+ */
+async function populateModelSelect(selectEl, { includeAuto, selectedValue } = {}) {
+  const models = await fetchModelOptions();
+  selectEl.innerHTML = "";
+
+  if (!cloudBaseUrl) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Cloud Agent Gateway unavailable this session";
+    opt.disabled = true;
+    selectEl.appendChild(opt);
+    return;
+  }
+
+  if (includeAuto) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Auto (recommended)";
+    selectEl.appendChild(opt);
+  }
+
+  const byProvider = new Map();
+  for (const m of models) {
+    if (!byProvider.has(m.provider)) byProvider.set(m.provider, []);
+    byProvider.get(m.provider).push(m);
+  }
+
+  for (const [provider, providerModels] of byProvider) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+    for (const m of providerModels) {
+      const opt = document.createElement("option");
+      opt.value = JSON.stringify({ provider: m.provider, model: m.model });
+      opt.textContent = modelOptionLabel(m);
+      opt.disabled = !m.available;
+      group.appendChild(opt);
+    }
+    selectEl.appendChild(group);
+  }
+
+  if (selectedValue !== undefined) {
+    const match = [...selectEl.options].find((o) => o.value === selectedValue);
+    if (match && !match.disabled) selectEl.value = selectedValue;
+  }
+}
+
+// ============================================================
 // AI Assistant panel (Ask/Plan/Build) — wired to the Cloud Agent Gateway.
 // ============================================================
 function createAssistantPanel(container) {
@@ -744,6 +823,7 @@ function createAssistantPanel(container) {
       <button class="mode-btn" data-mode="plan">Plan</button>
       <button class="mode-btn" data-mode="build">Build</button>
       <button class="mode-btn" data-mode="spec" title="Requirements Engineering — generates a structured spec file for review, doesn't write code">Spec</button>
+      <select class="model-select" title="Which AI model handles this task — overrides the Settings default for this task only"></select>
     </div>
     <div class="assistant-feed"></div>
     <div class="assistant-input-row">
@@ -755,7 +835,10 @@ function createAssistantPanel(container) {
   const input = container.querySelector(".assistant-input-row input");
   const sendBtn = container.querySelector(".send-btn");
   const modeBtns = container.querySelectorAll(".mode-btn");
+  const modelSelect = container.querySelector(".model-select");
   let mode = "ask";
+
+  populateModelSelect(modelSelect, { includeAuto: true });
 
   modeBtns.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -834,7 +917,7 @@ function createAssistantPanel(container) {
 
   addMsg(
     cloudBaseUrl
-      ? "Connected to the local Cloud Agent Gateway (reference implementation — see docs/ARCHITECTURE.md §12). Ask / Plan / Build below is real, but reasoning quality depends on whether a real model is configured; each response says which runner served it."
+      ? "Connected to the local Cloud Agent Gateway (reference implementation — see docs/ARCHITECTURE.md §12). Ask / Plan / Build below is real, but reasoning quality depends on whether a real model is configured; pick one above (or set a default in Settings) — each response says which runner and model actually served it."
       : "Cloud Agent Gateway did not start — Ask/Plan/Build is unavailable this session.",
     "system",
   );
@@ -849,15 +932,21 @@ function createAssistantPanel(container) {
     const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
     try {
       const relevantFiles = await findRelevantFiles(text, mode);
+      // "" (Auto) means: omit `model` entirely and let the gateway's
+      // resolveRunner() choose (Settings default, else best configured
+      // provider, else demo) — see populateModelSelect above.
+      const model = modelSelect.value ? JSON.parse(modelSelect.value) : undefined;
       const { task } = await cloudApi("/tasks", {
         method: "POST",
         body: JSON.stringify({
           mode,
           prompt: text,
           projectContext: taskProjectPath ? { projectPath: taskProjectPath, relevantFiles } : undefined,
+          model,
         }),
       });
-      stream.appendOutput(`[runner: ${task.runner}]\n`);
+      stream.appendOutput(`[runner: ${task.runner}${task.model ? " / " + task.model : ""}]\n`);
+      if (task.modelNote) stream.appendOutput(`[model note] ${task.modelNote}\n`);
       stream.stopBtn.disabled = false;
       stream.stopBtn.addEventListener("click", async () => {
         stream.stopBtn.disabled = true;
@@ -1074,9 +1163,10 @@ function renderTaskDetail(task) {
       <div class="task-row-meta">
         <span class="task-mode-badge">${task.mode}</span>
         <span class="task-status ${task.status}">${task.status}</span>
-        <span>runner: ${task.runner}</span>
+        <span>runner: ${task.runner}${task.model ? " / " + escapeHtml(task.model) : ""}</span>
         ${cancellable ? `<button class="task-cancel-btn">■ Cancel</button>` : ""}
       </div>
+      ${task.modelNote ? `<div class="task-model-note">${escapeHtml(task.modelNote)}</div>` : ""}
     </div>
     <div class="task-detail-steps">
       ${task.steps
@@ -1178,6 +1268,38 @@ async function loadAuditLog() {
   }
 }
 
+// ---- Default AI Model (multi-model support) ----
+const defaultModelSelectEl = document.getElementById("default-model-select");
+const defaultModelStatusEl = document.getElementById("default-model-status");
+
+async function loadDefaultModelSettings() {
+  try {
+    const settings = await api("/settings");
+    const selectedValue = settings.defaultModel ? JSON.stringify(settings.defaultModel) : "";
+    await populateModelSelect(defaultModelSelectEl, { includeAuto: true, selectedValue });
+    defaultModelStatusEl.textContent = "";
+  } catch (err) {
+    defaultModelStatusEl.textContent = `Failed to load: ${err.message}`;
+  }
+}
+
+defaultModelSelectEl.addEventListener("change", async () => {
+  // "" (Auto) means: clear the standing default -- PUT { defaultModel: null }
+  // explicitly, distinct from omitting the field (see @mobiusx/agent-settings's
+  // SettingsPatch doc comment for why that distinction exists).
+  const defaultModel = defaultModelSelectEl.value ? JSON.parse(defaultModelSelectEl.value) : null;
+  defaultModelStatusEl.textContent = "Saving…";
+  try {
+    await api("/settings", { method: "PUT", body: JSON.stringify({ defaultModel }) });
+    defaultModelStatusEl.textContent = "Saved.";
+  } catch (err) {
+    defaultModelStatusEl.textContent = `Failed to save: ${err.message}`;
+    await loadDefaultModelSettings(); // revert the select to whatever's actually persisted
+  }
+});
+
+document.getElementById("model-refresh-btn").addEventListener("click", loadDefaultModelSettings);
+
 // ---- Terminal Approval (Approval Engine: guarded autonomy level) ----
 const terminalApprovalModeStatusEl = document.getElementById("terminal-approval-mode-status");
 const terminalApprovalModeInputs = document.querySelectorAll('input[name="terminal-approval-mode"]');
@@ -1218,6 +1340,7 @@ function loadSettings() {
   loadPolicy();
   loadAuditLog();
   loadTerminalApprovalSettings();
+  loadDefaultModelSettings();
 }
 
 document.getElementById("audit-refresh-btn").addEventListener("click", loadAuditLog);

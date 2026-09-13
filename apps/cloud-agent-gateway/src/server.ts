@@ -4,7 +4,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import type { HealthResponse } from "@mobiusx/protocol";
-import { isAnthropicConfigured } from "./runners/anthropicRunner.js";
+import { previewAutoRunnerName } from "./runners/registry.js";
 import { makeAuthMiddleware, isTokenValid } from "./auth.js";
 import { buildRouter } from "./routes.js";
 import { getTask } from "./store.js";
@@ -27,12 +27,16 @@ export function createGatewayServer(token: string): { app: Express; server: Serv
     next();
   });
 
-  app.get("/health", (_req, res) => {
+  app.get("/health", async (_req, res) => {
     const body: HealthResponse & { runner: string } = {
       status: "ok",
       version: VERSION,
       activeProject: null,
-      runner: isAnthropicConfigured() ? "anthropic" : "demo",
+      // What would serve a task right now with no explicit selection —
+      // see runners/registry.ts#previewAutoRunnerName. Doesn't reflect a
+      // per-task or Settings-default override; GET /models is the full
+      // picture for that.
+      runner: await previewAutoRunnerName(),
     };
     res.json(body);
   });

@@ -1,7 +1,8 @@
 import { Router } from "express";
-import type { CreateTaskRequest, CreateTaskResponse, ListTasksResponse } from "@mobiusx/protocol";
+import type { CreateTaskRequest, CreateTaskResponse, ListModelsResponse, ListTasksResponse, ModelSelection } from "@mobiusx/protocol";
 import { getTask, listTasks } from "./store.js";
 import { cancelTask, startTask } from "./taskEngine.js";
+import { listAllModels } from "./runners/registry.js";
 
 export function buildRouter(): Router {
   const router = Router();
@@ -16,7 +17,21 @@ export function buildRouter(): Router {
       res.status(400).json({ error: "prompt is required" });
       return;
     }
-    const task = await startTask({ mode: body.mode, prompt: body.prompt, projectContext: body.projectContext });
+    // Multi-model support: an optional per-task model override. Loosely
+    // validated here (well-formed shape only) — whether it's actually
+    // usable right now is resolveRunner's job, and an unusable choice
+    // degrades to an honest fallback rather than a request-time error, so
+    // a stale/unavailable selection doesn't just break task creation.
+    let model: ModelSelection | undefined;
+    if (body.model !== undefined) {
+      const m = body.model as { provider?: unknown; model?: unknown };
+      if (typeof m.provider !== "string" || typeof m.model !== "string" || !m.model) {
+        res.status(400).json({ error: "model, if provided, must be {provider: string, model: string}" });
+        return;
+      }
+      model = { provider: m.provider as ModelSelection["provider"], model: m.model };
+    }
+    const task = await startTask({ mode: body.mode, prompt: body.prompt, projectContext: body.projectContext, model });
     const response: CreateTaskResponse = { task };
     res.status(201).json(response);
   });
@@ -52,6 +67,15 @@ export function buildRouter(): Router {
       return;
     }
     res.status(202).json({ ok: true });
+  });
+
+  // Multi-model support: the full model catalog (every provider this
+  // gateway knows about, including ones not currently usable — see
+  // ModelOption's doc comment) for the desktop shell's Settings default and
+  // per-task pickers.
+  router.get("/models", async (_req, res) => {
+    const response: ListModelsResponse = { models: await listAllModels() };
+    res.json(response);
   });
 
   return router;

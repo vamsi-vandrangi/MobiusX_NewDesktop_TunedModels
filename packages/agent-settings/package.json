@@ -1,0 +1,21 @@
+{
+  "name": "@mobiusx/agent-settings",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "description": "Shared ~/.mobiusx/settings.json read/write (Approval Engine autonomy level, default AI model) — desktop-agent is the only writer, cloud-agent-gateway reads the same file so a single Settings screen change is visible to both processes without IPC",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@mobiusx/protocol": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.1",
+    "@types/node": "^22.7.5"
+  }
+}

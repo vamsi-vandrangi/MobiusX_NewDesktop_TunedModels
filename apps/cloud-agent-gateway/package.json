@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@mobiusx/audit-log": "*",
+    "@mobiusx/agent-settings": "*",
     "@mobiusx/protocol": "*",
     "@mobiusx/secret-scan": "*",
     "express": "^4.21.2",

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@mobiusx/audit-log": "*",
+    "@mobiusx/agent-settings": "*",
     "@mobiusx/context-engine": "*",
     "@mobiusx/protocol": "*",
     "@mobiusx/secret-scan": "*",

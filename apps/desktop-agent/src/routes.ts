@@ -17,7 +17,7 @@ import type {
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { verifyProject } from "./verify.js";
-import { getSettings, updateSettings } from "./settings.js";
+import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
 import { buildSemanticIndex, searchSemanticIndex } from "./semanticOps.js";
@@ -278,10 +278,21 @@ export function buildRouter(): Router {
   });
 
   router.put("/settings", async (req, res) => {
-    const patch = req.body as Partial<AgentSettings>;
+    const patch = req.body as SettingsPatch;
     if (patch.terminalApprovalMode !== undefined && patch.terminalApprovalMode !== "off" && patch.terminalApprovalMode !== "guarded") {
       res.status(400).json({ error: "terminalApprovalMode must be 'off' or 'guarded'" });
       return;
+    }
+    // defaultModel (multi-model support): null explicitly clears the standing
+    // default (see @mobiusx/agent-settings's SettingsPatch doc comment) --
+    // anything else must be a well-formed {provider, model} pair.
+    if (patch.defaultModel !== undefined && patch.defaultModel !== null) {
+      const KNOWN_PROVIDERS = ["demo", "anthropic", "openrouter", "groq", "ollama"];
+      const dm = patch.defaultModel as { provider?: unknown; model?: unknown };
+      if (typeof dm.provider !== "string" || !KNOWN_PROVIDERS.includes(dm.provider) || typeof dm.model !== "string" || !dm.model) {
+        res.status(400).json({ error: "defaultModel must be null or {provider, model} with a known provider and non-empty model id" });
+        return;
+      }
     }
     const body: AgentSettings = await updateSettings(patch);
     res.json(body);

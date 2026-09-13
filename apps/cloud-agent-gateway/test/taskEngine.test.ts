@@ -4,9 +4,19 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Point the store at an isolated temp dir before importing anything that reads it.
+// Point the store — and, now that startTask() consults it for multi-model
+// default-model resolution, settings — at isolated temp dirs before
+// importing anything that reads them, and clear every model-provider env
+// var so these tests exercise the "nothing configured -> demo runner"
+// path deterministically regardless of what's set in the host shell.
 const dataDir = await mkdtemp(join(tmpdir(), "mobiusx-cloud-test-"));
 process.env.MOBIUSX_CLOUD_DATA_DIR = dataDir;
+const settingsDir = await mkdtemp(join(tmpdir(), "mobiusx-cloud-settings-test-"));
+process.env.MOBIUSX_SETTINGS_DIR = settingsDir;
+delete process.env.ANTHROPIC_API_KEY;
+delete process.env.ANTHROPIC_MODEL;
+delete process.env.OPENROUTER_API_KEY;
+delete process.env.GROQ_API_KEY;
 
 const { startTask, getTask, cancelTask } = await import("../src/taskEngine.js");
 const { listTasks } = await import("../src/store.js");

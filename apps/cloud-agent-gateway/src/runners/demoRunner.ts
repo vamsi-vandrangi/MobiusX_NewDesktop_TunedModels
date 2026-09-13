@@ -1,4 +1,4 @@
-import type { TaskEvent } from "@mobiusx/protocol";
+import type { ModelOption, TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
 
 /**
@@ -6,9 +6,9 @@ import type { AgentRunner, RunnerInput } from "./types.js";
  * lifecycle (steps, streamed output, status transitions, persistence,
  * resumability, cancellation) end-to-end — but the "reasoning" is scripted,
  * not a model call. Every output this runner produces says so explicitly;
- * it never pretends to be a real answer. See runnerSelector.ts for how a
- * real model runner (e.g. AnthropicRunner) takes over when the user
- * configures one.
+ * it never pretends to be a real answer. See registry.ts for how a real
+ * model runner (anthropic, openrouter, groq, ollama) takes over when the
+ * user configures one.
  */
 export const demoRunner: AgentRunner = {
   name: "demo",
@@ -49,6 +49,18 @@ export const demoRunner: AgentRunner = {
       throw err;
     }
   },
+
+  async listModels(): Promise<ModelOption[]> {
+    return [
+      {
+        provider: "demo",
+        model: "demo",
+        label: "Demo (no model — deterministic, always available)",
+        free: true,
+        available: true,
+      },
+    ];
+  },
 };
 
 function stepsFor(mode: RunnerInput["mode"]): string[] {
@@ -64,7 +76,7 @@ function renderOutput(input: RunnerInput): string {
     : "";
 
   const banner =
-    "[demo runner — no model configured. Set ANTHROPIC_API_KEY + ANTHROPIC_MODEL for MobiusX Cloud Gateway to use a real model. See apps/cloud-agent-gateway/README.md]\n\n";
+    "[demo runner — no model configured. Pick a model in Settings, or set ANTHROPIC_API_KEY+ANTHROPIC_MODEL / OPENROUTER_API_KEY / GROQ_API_KEY / a running Ollama for MobiusX Cloud Gateway to use a real model. See apps/cloud-agent-gateway/README.md]\n\n";
 
   if (input.mode === "ask") {
     return `${banner}You asked: "${input.prompt}"\n\nThis is where a real model's answer would appear.${context}`;
@@ -100,7 +112,7 @@ function demoEdit(input: RunnerInput): { path: string; action: "create"; content
  * Same idea as demoEdit above, but for "spec" mode (PRD §8, Requirements
  * Engineering): a clearly-labeled placeholder spec, following the exact
  * section structure a real model is instructed to produce (see
- * anthropicRunner.ts's systemPromptFor "spec" branch), so the whole
+ * promptShared.ts's systemPromptFor "spec" branch), so the whole
  * ask -> spec -> review -> apply flow is exercisable without a model.
  */
 function demoSpecEdit(input: RunnerInput): { path: string; action: "create"; content: string } {

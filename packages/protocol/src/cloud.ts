@@ -26,6 +26,57 @@ export type AgentMode = "ask" | "plan" | "build" | "spec";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
+/**
+ * Multi-model support: this gateway can route a task to more than one
+ * model provider, not just Anthropic — including free-tier open-weight
+ * models (Llama, Qwen2.5-Coder, DeepSeek), so the user can pick a model
+ * the way Claude/Cursor's own UIs let you, either as a standing default
+ * (AgentSettings.defaultModel in agent.ts) or per task (CreateTaskRequest.model
+ * below). See apps/cloud-agent-gateway/src/runners/registry.ts#resolveRunner
+ * for exactly how a requested selection is honored or — visibly, never
+ * silently — substituted.
+ *
+ * "ollama" is local-only (no API key, talks to a local Ollama install) and
+ * is deliberately never auto-selected — see registry.ts's AUTO_PRIORITY
+ * comment for why. It only ever runs when explicitly chosen.
+ */
+export type ModelProvider = "demo" | "anthropic" | "openrouter" | "groq" | "ollama";
+
+export interface ModelSelection {
+  provider: ModelProvider;
+  /**
+   * Provider-specific model identifier — e.g.
+   * "qwen/qwen-2.5-coder-32b-instruct:free" for openrouter, "llama-3.3-70b-versatile"
+   * for groq, "qwen2.5-coder" for ollama, or whatever ANTHROPIC_MODEL is set
+   * to for anthropic. Always one of the ids GET /models reports for that
+   * provider — the UI never invents its own.
+   */
+  model: string;
+}
+
+/**
+ * One entry in GET /models — always the FULL catalog this gateway knows
+ * about, INCLUDING providers/models that aren't currently usable (no key
+ * set, Ollama not running, a model not yet pulled). `available` and
+ * `unavailableReason` tell the truth about why, rather than hiding options
+ * the user hasn't configured yet — the same "never hidden" principle
+ * TaskSummary.runner already follows.
+ */
+export interface ModelOption extends ModelSelection {
+  /** Human-readable label for a picker UI, e.g. "Llama 3.3 70B (free via OpenRouter)". */
+  label: string;
+  /** Whether this specific model is free to call on its provider's free tier. Never a guarantee about rate limits — free tiers throttle hard. */
+  free: boolean;
+  /** Whether this option can actually be used right now, given current env vars / reachability. */
+  available: boolean;
+  /** Present when `available` is false — e.g. "requires OPENROUTER_API_KEY" or "Ollama not reachable at http://127.0.0.1:11434". Always a concrete, actionable reason, never a generic "unavailable". */
+  unavailableReason?: string;
+}
+
+export interface ListModelsResponse {
+  models: ModelOption[];
+}
+
 export interface ProjectContext {
   projectPath?: string;
   /**
@@ -46,6 +97,13 @@ export interface CreateTaskRequest {
   mode: AgentMode;
   prompt: string;
   projectContext?: ProjectContext;
+  /**
+   * Optional per-task model override — takes precedence over
+   * AgentSettings.defaultModel, which in turn takes precedence over the
+   * gateway's own automatic choice. Omit entirely to use whatever the user
+   * has set as their default (or the automatic choice, if they haven't).
+   */
+  model?: ModelSelection;
 }
 
 export interface CreateTaskResponse {
@@ -59,8 +117,19 @@ export interface TaskSummary {
   status: TaskStatus;
   createdAt: string;
   updatedAt: string;
-  /** Which runner actually served this task — "demo" (always available) or a real model runner name. Never hidden from the caller. */
+  /** Which runner actually served this task — "demo" (always available) or a real model provider's runner name. Never hidden from the caller. */
   runner: string;
+  /** The specific model id actually used, when `runner` isn't "demo" — e.g. "qwen/qwen-2.5-coder-32b-instruct:free". Absent for the demo runner, which has no real model behind it. */
+  model?: string;
+  /**
+   * Set only when the requested model (per-task, or the user's default)
+   * could not actually be honored — e.g. no API key configured for the
+   * requested provider, or Ollama unreachable — explaining exactly what
+   * was requested, why it fell back, and what actually ran instead. Absent
+   * when the requested (or default, or no-preference-at-all) selection was
+   * used as-is. See registry.ts#resolveRunner.
+   */
+  modelNote?: string;
   /**
    * The project this task's context (if any) was grounded in — copied from
    * CreateTaskRequest.projectContext.projectPath at creation, so the Tasks
@@ -111,6 +180,12 @@ export interface ProposedEdit {
  * the same way a human reviewer would look at a diff before it merges.
  * The demo runner's version is a clearly-labeled scripted stand-in, same
  * as its demo edits.
+ *
+ * Currently only the anthropic runner performs this second pass — the
+ * newer free-model runners (openrouter/groq/ollama) propose edits without
+ * one. This is a real, known scope cut, not a silent omission — see each
+ * runner's module doc comment and apps/cloud-agent-gateway/README.md's
+ * "Known gaps".
  */
 export type ReviewVerdict = "approve" | "concerns";
 

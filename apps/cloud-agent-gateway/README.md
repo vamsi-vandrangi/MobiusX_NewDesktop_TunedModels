@@ -2,7 +2,9 @@
 
 **This is a local reference implementation of the desktop↔cloud task contract (Phase 3) — it is not MobiusX's real production Cloud backend.** It exists so the desktop shell's AI Assistant panel and Tasks view have something real to call, and so the task lifecycle (create → stream progress → persist → resume) is proven out end-to-end rather than mocked in the UI.
 
-It ships with **no credentials and no assumed model**. Out of the box it runs the `demo` runner — deterministic, scripted steps that clearly label every output as non-model-generated. If you set both `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` in its environment, it switches to the `anthropic` runner and streams a real answer token-by-token from Anthropic's Messages API instead (`stream: true`, forwarded to the client over the `/tasks/:id/stream` WebSocket as it arrives — not buffered until the model finishes). Which runner served a task is always reported back as `TaskSummary.runner` — never hidden.
+It ships with **no credentials and no assumed model**. Out of the box it runs the `demo` runner — deterministic, scripted steps that clearly label every output as non-model-generated. Four real providers are supported, each opt-in via its own env var(s): `anthropic` (`ANTHROPIC_API_KEY` + `ANTHROPIC_MODEL`), `openrouter` (`OPENROUTER_API_KEY`, three verified free-tier models — Llama 3.3 70B, Qwen2.5-Coder 32B, DeepSeek V3.1), `groq` (`GROQ_API_KEY`, same three model families on Groq's free tier), and `ollama` (no key — a local install, availability checked live against its `/api/tags`). All four stream token-by-token over the same `/tasks/:id/stream` WebSocket — not buffered until the model finishes.
+
+**Model selection** works like Claude/Cursor: `GET /models` lists every model from every provider, each tagged `available`/`unavailableReason` (a missing API key, or "Ollama not reachable") so an unusable model is shown and disabled, never hidden. The desktop shell lets you pick a standing default in Settings and override it per task in the AI Assistant panel; `POST /tasks` accepts an optional `model: {provider, model}`. Priority is per-task request > Settings default > automatic (Anthropic, then OpenRouter, then Groq, in that order — Ollama is deliberately never auto-picked, since using local compute should be an explicit choice, not a side effect of a background process happening to be running). If a requested/default model turns out to be unavailable when a task actually starts, `resolveRunner()` (`src/runners/registry.ts`) falls back to the best available option and says so plainly in `TaskSummary.modelNote` (e.g. "Requested openrouter/qwen/qwen-2.5-coder-32b-instruct:free, but requires OPENROUTER_API_KEY — used demo instead.") — never a silent substitution. Which runner and model actually served a task is always reported back as `TaskSummary.runner`/`TaskSummary.model` — never hidden.
 
 Any task — either runner — can be cancelled mid-flight via `POST /tasks/:id/cancel`. This aborts the runner's actual in-flight work (the Anthropic HTTP request itself for `anthropic`, the scripted timer for `demo`) via a shared `AbortSignal`, not just a UI-side "stop showing this." A cancelled task settles into `status: "cancelled"` — a distinct terminal state from `"failed"`, so the UI and any caller can tell "the user stopped this" apart from "this broke."
 
@@ -27,14 +29,21 @@ Prints `MOBIUSX_CLOUD_READY {"port":...,"token":...}` on stdout once listening �
 
 ### Configuring a real model for the desktop app
 
-Exporting `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` in your shell only reaches the gateway when you launch it (or `apps/desktop`) from that same shell — running the Electron app from Finder/Spotlight instead of a terminal doesn't inherit those exports at all. For that case, copy `.env.example` to `.env` in this directory and fill in your own key and model:
+Exporting provider env vars in your shell only reaches the gateway when you launch it (or `apps/desktop`) from that same shell — running the Electron app from Finder/Spotlight instead of a terminal doesn't inherit those exports at all. For that case, copy `.env.example` to `.env` in this directory and fill in whichever provider(s) you want:
 
 ```
 cp apps/cloud-agent-gateway/.env.example apps/cloud-agent-gateway/.env
-# then edit apps/cloud-agent-gateway/.env yourself and fill in the two values
+# then edit apps/cloud-agent-gateway/.env yourself
 ```
 
-`src/index.ts` loads it via Node's built-in `process.loadEnvFile()` on startup — a missing `.env` is silently a no-op (still the demo runner, still "no credentials, no assumed model" by default), and a real shell export always takes precedence over the file if both are present. `.env` is already gitignored so your key never gets committed; `.env.example` itself carries no real values.
+- **Anthropic** — `ANTHROPIC_API_KEY` + `ANTHROPIC_MODEL` (not free).
+- **OpenRouter** — `OPENROUTER_API_KEY` (get one at openrouter.ai). Unlocks three free `:free`-suffixed models: `meta-llama/llama-3.3-70b-instruct:free`, `qwen/qwen-2.5-coder-32b-instruct:free`, `deepseek/deepseek-chat-v3.1:free`.
+- **Groq** — `GROQ_API_KEY` (get one at console.groq.com). Free tier: `llama-3.3-70b-versatile`, `qwen-2.5-coder-32b`, `deepseek-r1-distill-llama-70b`.
+- **Ollama** — no key. Install from ollama.com, run it, and `ollama pull` whichever of `llama3.1`, `qwen2.5-coder`, or `deepseek-coder-v2` you want; the gateway checks `/api/tags` live so it only shows what's actually pulled. Only set `OLLAMA_BASE_URL` if it's not on the default `http://127.0.0.1:11434`.
+
+You only need to fill in the provider(s) you actually want — the rest just show up as unavailable (with an honest reason) in the model picker.
+
+`src/index.ts` loads `.env` via Node's built-in `process.loadEnvFile()` on startup — a missing `.env` is silently a no-op (still the demo runner, still "no credentials, no assumed model" by default), and a real shell export always takes precedence over the file if both are present. `.env` is already gitignored so your keys never get committed; `.env.example` itself carries no real values.
 
 ## Data
 
@@ -51,3 +60,6 @@ Point the desktop shell at a different base URL that implements this same contra
 - The secret scanner is regex-only (see above) — no entropy scoring, no provider-specific validation, and it only covers `relevantFiles` snippets/content, not the prompt text itself or (for the anthropic runner) the model's own output before it's split into prose/edits.
 - Build-mode and spec-mode edit parsing (`parseBuildResponse`) is a simple marker + fenced-JSON convention this gateway instructs the model to follow — it's not a guaranteed structured-output mode of the underlying API, so a model that ignores the instruction just yields prose with no edits (graceful, not a crash) rather than a parse failure.
 - The reviewer agent is one extra model call with a distinct prompt, not an orchestrated multi-agent workflow — it has no tools, no ability to request changes and re-check them, and no state beyond that single call.
+- **The second-pass Reviewer is Anthropic-only.** Build-mode edits produced by `openrouter`/`groq`/`ollama` skip it entirely (a note to that effect is appended to the task's output) — review those edits yourself before applying.
+- **Groq's "DeepSeek" free-tier model is `deepseek-r1-distill-llama-70b`, a reasoning model — not literally "DeepSeek-Coder."** Groq doesn't host that exact model on its free tier; this gateway labels it honestly rather than calling it something it isn't. OpenRouter's `deepseek/deepseek-chat-v3.1:free` and Ollama's `deepseek-coder-v2` are the two options that are actually DeepSeek-family coding models.
+- **A stale Ollama selection can go stale.** `ollamaRunner.listModels()` reports the exact locally-installed tag (e.g. `qwen2.5-coder:latest`), and `resolveRunner()` matches a Settings default/per-task request against that exact string. If you re-pull a model under a different tag suffix, a previously-saved selection no longer matches and falls back to `demo` with a generic "not available right now" note rather than fuzzy-matching to the new tag — deliberate, to keep the "always tell the truth about availability" contract simple; re-pick the model in Settings/the picker if this happens (see `src/runners/ollamaRunner.ts` and `test/registry.test.ts`).
