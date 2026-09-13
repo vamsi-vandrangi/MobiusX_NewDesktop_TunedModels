@@ -1,6 +1,6 @@
 import type { ModelOption, ModelProvider, TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
-import { MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
+import { historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
 
 /**
  * Factory for any provider that speaks the OpenAI chat-completions wire
@@ -97,6 +97,7 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
             max_tokens: 4096,
             messages: [
               { role: "system", content: systemPrompt },
+              ...historyMessages(input),
               { role: "user", content: input.prompt },
             ],
             stream: true,

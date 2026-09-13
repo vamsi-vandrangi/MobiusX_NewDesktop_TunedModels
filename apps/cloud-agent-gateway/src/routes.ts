@@ -1,5 +1,12 @@
 import { Router } from "express";
-import type { CreateTaskRequest, CreateTaskResponse, ListModelsResponse, ListTasksResponse, ModelSelection } from "@mobiusx/protocol";
+import type {
+  CreateTaskRequest,
+  CreateTaskResponse,
+  HistoryTurn,
+  ListModelsResponse,
+  ListTasksResponse,
+  ModelSelection,
+} from "@mobiusx/protocol";
 import { getTask, listTasks } from "./store.js";
 import { cancelTask, startTask } from "./taskEngine.js";
 import { listAllModels } from "./runners/registry.js";
@@ -31,7 +38,31 @@ export function buildRouter(): Router {
       }
       model = { provider: m.provider as ModelSelection["provider"], model: m.model };
     }
-    const task = await startTask({ mode: body.mode, prompt: body.prompt, projectContext: body.projectContext, model });
+    // History-carrying follow-ups (PRD gap: "history isn't maintained" — a
+    // task is otherwise a fresh, contextless request every time). Loosely
+    // validated shape-wise, same spirit as `model` above; capped here too,
+    // defensively, even though the client (renderer.js) already caps what
+    // it sends — see promptShared.ts#historyMessages for the second,
+    // per-runner cap that actually bounds what reaches a model.
+    let history: HistoryTurn[] | undefined;
+    if (body.history !== undefined) {
+      if (!Array.isArray(body.history)) {
+        res.status(400).json({ error: "history, if provided, must be an array" });
+        return;
+      }
+      const cleaned: HistoryTurn[] = [];
+      for (const raw of body.history as unknown[]) {
+        const h = raw as { role?: unknown; content?: unknown };
+        if ((h.role !== "user" && h.role !== "assistant") || typeof h.content !== "string") {
+          res.status(400).json({ error: 'each history entry must be {role: "user"|"assistant", content: string}' });
+          return;
+        }
+        cleaned.push({ role: h.role, content: h.content });
+      }
+      const MAX_HISTORY_TURNS = 20;
+      history = cleaned.slice(-MAX_HISTORY_TURNS);
+    }
+    const task = await startTask({ mode: body.mode, prompt: body.prompt, projectContext: body.projectContext, model, history });
     const response: CreateTaskResponse = { task };
     res.status(201).json(response);
   });

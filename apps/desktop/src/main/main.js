@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -137,6 +137,34 @@ ipcMain.handle("dialog:openFolder", async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
+});
+
+/**
+ * Opens a project-relative file (e.g. an applied Build-mode edit's .html
+ * output) in the user's default OS browser/app — the gap behind "generated
+ * a frontend app but MobiusX desktop was unable to open it in the browser":
+ * until this handler existed, nothing in this app ever called
+ * shell.openPath/openExternal, so there was genuinely no way to launch a
+ * written file outside the app itself. Mirrors the same project-root
+ * containment check apps/desktop-agent/src/fsOps.ts#resolveWithinProject
+ * uses server-side, since this is the same "don't let a path argument
+ * escape the open project" boundary, just enforced here for a renderer-
+ * supplied relative path instead.
+ */
+ipcMain.handle("shell:openInBrowser", async (_event, projectPath, relativePath) => {
+  if (typeof projectPath !== "string" || typeof relativePath !== "string" || !projectPath || !relativePath) {
+    return { ok: false, error: "missing project path or file path" };
+  }
+  if (path.isAbsolute(relativePath)) {
+    return { ok: false, error: "path must be relative to the open project" };
+  }
+  const abs = path.resolve(path.join(projectPath, relativePath));
+  const rel = path.relative(projectPath, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return { ok: false, error: "path escapes the open project root" };
+  }
+  const error = await shell.openPath(abs);
+  return error ? { ok: false, error } : { ok: true };
 });
 
 app.whenReady().then(createWindow);

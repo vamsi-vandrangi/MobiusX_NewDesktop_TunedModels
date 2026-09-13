@@ -1,10 +1,12 @@
-import type { AgentMode, ModelOption, ProjectContext, TaskEvent } from "@mobiusx/protocol";
+import type { AgentMode, HistoryTurn, ModelOption, ProjectContext, TaskEvent } from "@mobiusx/protocol";
 
 export interface RunnerInput {
   taskId: string;
   mode: AgentMode;
   prompt: string;
   projectContext?: ProjectContext;
+  /** Prior turns from the same AI Assistant panel session — see HistoryTurn's doc comment in @mobiusx/protocol. A chat-style runner should prepend these as real messages (see promptShared.ts#historyMessages) so a follow-up like "show me the output" isn't answered as if it were a fresh, contextless request. Absent or empty for a task with no prior turns (or from a runner/caller that doesn't support it). */
+  history?: HistoryTurn[];
   /**
    * The specific model id this run should use, resolved by
    * registry.ts#resolveRunner BEFORE the runner is invoked — always set for

@@ -83,7 +83,12 @@ export async function startTask(req: CreateTaskRequest): Promise<TaskSummary> {
 
   // Fire-and-forget: the caller gets the TaskSummary immediately and follows
   // progress via GET /tasks/:id (polling) or the /tasks/:id/stream WebSocket.
-  void runRunnerAndPersist(id, { mode: req.mode, prompt: req.prompt, projectContext }, { runner, modelId }, controller);
+  void runRunnerAndPersist(
+    id,
+    { mode: req.mode, prompt: req.prompt, projectContext, history: req.history },
+    { runner, modelId },
+    controller,
+  );
 
   return summary;
 }
@@ -146,6 +151,7 @@ async function runRunnerAndPersist(
         mode: req.mode,
         prompt: req.prompt,
         projectContext: req.projectContext,
+        history: req.history,
         modelId: resolved.modelId,
         signal: controller.signal,
       },

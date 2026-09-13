@@ -1,4 +1,4 @@
-const { agentBaseUrl, agentWsUrl, agentToken, cloudBaseUrl, cloudWsUrl, cloudToken, openFolderDialog } = window.mobiusx;
+const { agentBaseUrl, agentWsUrl, agentToken, cloudBaseUrl, cloudWsUrl, cloudToken, openFolderDialog, openInBrowser } = window.mobiusx;
 
 // ============================================================
 // Nav / view switching
@@ -674,6 +674,40 @@ function buildEditsCard(edits, taskProjectPath, review) {
         status.className = `edits-file-status ${r.status}`;
         status.textContent = r.status === "applied" ? "✓ applied" : `skipped — ${r.reason ?? "unknown reason"}`;
         fileEl.querySelector(".edits-file-head").appendChild(status);
+        // Real fix for "generated a frontend app but couldn't open it in a
+        // browser": until now this app had NO way to launch a written file
+        // outside itself (no shell.openPath/openExternal wired up anywhere —
+        // openFile() above only opens files in-app, in the editor pane). For
+        // an applied .html file, offer a button that asks the Electron main
+        // process to hand it to the OS's default browser. Only offered when
+        // openInBrowser exists (preload.js) and the project is genuinely open
+        // on disk (currentProjectPath) — nothing to open otherwise.
+        if (r.status === "applied" && /\.html?$/i.test(r.path) && openInBrowser && currentProjectPath) {
+          const openBtn = document.createElement("button");
+          openBtn.className = "edits-file-open-btn";
+          openBtn.textContent = "Open in Browser";
+          openBtn.addEventListener("click", async () => {
+            openBtn.disabled = true;
+            const prevLabel = openBtn.textContent;
+            try {
+              const result = await openInBrowser(currentProjectPath, r.path);
+              if (!result.ok) {
+                openBtn.textContent = `Failed: ${result.error}`;
+              } else {
+                openBtn.textContent = "Opened ✓";
+                setTimeout(() => {
+                  openBtn.textContent = prevLabel;
+                  openBtn.disabled = false;
+                }, 2000);
+                return;
+              }
+            } catch (err) {
+              openBtn.textContent = `Failed: ${err.message}`;
+            }
+            openBtn.disabled = false;
+          });
+          fileEl.querySelector(".edits-file-head").appendChild(openBtn);
+        }
       });
       await refreshAfterApply(results.filter((r) => r.status === "applied").map((r) => r.path));
       if (appliedCount > 0) verifyBtn.hidden = false;
@@ -819,9 +853,9 @@ async function populateModelSelect(selectEl, { includeAuto, selectedValue } = {}
 function createAssistantPanel(container) {
   container.innerHTML = `
     <div class="assistant-header">
-      <button class="mode-btn active" data-mode="ask">Ask</button>
-      <button class="mode-btn" data-mode="plan">Plan</button>
-      <button class="mode-btn" data-mode="build">Build</button>
+      <button class="mode-btn active" data-mode="ask" title="Chat only — answers questions and can show code in its reply, but never writes a file to disk">Ask</button>
+      <button class="mode-btn" data-mode="plan" title="Drafts a numbered implementation plan in prose — describes what to build, never writes a file to disk">Plan</button>
+      <button class="mode-btn" data-mode="build" title="The only mode that writes real files — proposes edits you review and click Apply before anything touches disk">Build</button>
       <button class="mode-btn" data-mode="spec" title="Requirements Engineering — generates a structured spec file for review, doesn't write code">Spec</button>
       <select class="model-select" title="Which AI model handles this task — overrides the Settings default for this task only"></select>
     </div>
@@ -837,6 +871,17 @@ function createAssistantPanel(container) {
   const modeBtns = container.querySelectorAll(".mode-btn");
   const modelSelect = container.querySelector(".model-select");
   let mode = "ask";
+  // Prior turns from THIS panel instance, sent back on every follow-up so a
+  // request like "show me the output" can be understood without repeating
+  // what "it" refers to — the gateway is otherwise fully stateless between
+  // tasks (see promptShared.ts#historyMessages on the gateway side, which
+  // is what actually feeds these to the model). Kept mode-agnostic on
+  // purpose: a user asking about something in Ask mode and then wanting it
+  // Built is one continuous conversation, not per-mode threads. Capped to
+  // bound how much context grows; not persisted across a page reload or a
+  // different project — a fresh session starts a fresh conversation.
+  let historyTurns = [];
+  const MAX_HISTORY_TURNS = 12; // keep in sync with promptShared.ts's MAX_HISTORY_TURNS
 
   populateModelSelect(modelSelect, { includeAuto: true });
 
@@ -917,7 +962,7 @@ function createAssistantPanel(container) {
 
   addMsg(
     cloudBaseUrl
-      ? "Connected to the local Cloud Agent Gateway (reference implementation — see docs/ARCHITECTURE.md §12). Ask / Plan / Build below is real, but reasoning quality depends on whether a real model is configured; pick one above (or set a default in Settings) — each response says which runner and model actually served it."
+      ? "Connected to the local Cloud Agent Gateway (reference implementation — see docs/ARCHITECTURE.md §12). Ask / Plan / Build / Spec below is real, but reasoning quality depends on whether a real model is configured; pick one above (or set a default in Settings) — each response says which runner and model actually served it. Only Build (and Spec, for a requirements doc) ever writes a real file — Ask and Plan just reply in chat, even if the reply shows code, so there's nothing to run or open from those two."
       : "Cloud Agent Gateway did not start — Ask/Plan/Build is unavailable this session.",
     "system",
   );
@@ -930,6 +975,7 @@ function createAssistantPanel(container) {
 
     const stream = addStreamingMsg();
     const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
+    let fullOutputText = ""; // accumulated from onOutput only (never the "[runner: ...]"/"[model note] ..." lines below, which are display-only and shouldn't be fed back to the model as if it said them) — this is what becomes this turn's history entry once the task finishes
     try {
       const relevantFiles = await findRelevantFiles(text, mode);
       // "" (Auto) means: omit `model` entirely and let the gateway's
@@ -943,6 +989,7 @@ function createAssistantPanel(container) {
           prompt: text,
           projectContext: taskProjectPath ? { projectPath: taskProjectPath, relevantFiles } : undefined,
           model,
+          history: historyTurns.slice(-MAX_HISTORY_TURNS),
         }),
       });
       stream.appendOutput(`[runner: ${task.runner}${task.model ? " / " + task.model : ""}]\n`);
@@ -960,13 +1007,26 @@ function createAssistantPanel(container) {
       });
       await streamTask(task.id, {
         onStep: (step) => stream.setStep(step),
-        onOutput: (delta) => stream.appendOutput(delta),
+        onOutput: (delta) => {
+          fullOutputText += delta;
+          stream.appendOutput(delta);
+        },
         onEdits: (edits) => stream.setEdits(edits, taskProjectPath),
         onReview: (review) => stream.setReview(review),
         onStatus: (status) => stream.setStatus(status),
         onError: (message) => stream.setError(message),
       });
       stream.stopBtn.remove();
+      // Remember this exchange for the NEXT follow-up in this panel — see
+      // the historyTurns comment above. Skipped for an empty response (e.g.
+      // the task was cancelled before producing anything) since there's
+      // nothing worth reminding the model of.
+      if (fullOutputText.trim()) {
+        historyTurns.push({ role: "user", content: text }, { role: "assistant", content: fullOutputText });
+        if (historyTurns.length > MAX_HISTORY_TURNS * 2) {
+          historyTurns = historyTurns.slice(-MAX_HISTORY_TURNS * 2);
+        }
+      }
     } catch (err) {
       stream.setError(err.message);
     }

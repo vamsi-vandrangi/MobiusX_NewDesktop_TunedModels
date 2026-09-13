@@ -1,6 +1,6 @@
 import type { ModelOption, TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
-import { MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
+import { historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
 
 /**
  * Local Ollama (https://ollama.com) — no API key, runs entirely on the
@@ -130,6 +130,7 @@ export const ollamaRunner: AgentRunner = {
           model,
           messages: [
             { role: "system", content: systemPrompt },
+            ...historyMessages(input),
             { role: "user", content: input.prompt },
           ],
           stream: true,

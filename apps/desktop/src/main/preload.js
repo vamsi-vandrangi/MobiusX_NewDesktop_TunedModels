@@ -24,4 +24,6 @@ contextBridge.exposeInMainWorld("mobiusx", {
   cloudToken: cloud.token,
 
   openFolderDialog: () => ipcRenderer.invoke("dialog:openFolder"),
+  // See main.js's "shell:openInBrowser" handler's doc comment.
+  openInBrowser: (projectPath, relativePath) => ipcRenderer.invoke("shell:openInBrowser", projectPath, relativePath),
 });

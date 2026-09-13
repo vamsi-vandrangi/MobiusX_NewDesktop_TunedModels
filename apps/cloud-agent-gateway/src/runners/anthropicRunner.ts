@@ -1,6 +1,6 @@
 import type { EditReview, ModelOption, ProposedEdit, TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
-import { EDITS_MARKER, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
+import { EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
 
 // Re-exported so existing imports (test/anthropicRunner.test.ts) keep working
 // unchanged now that the underlying implementation lives in promptShared.ts,
@@ -77,7 +77,7 @@ export const anthropicRunner: AgentRunner = {
           model,
           max_tokens: 4096,
           system: systemPrompt,
-          messages: [{ role: "user", content: input.prompt }],
+          messages: [...historyMessages(input), { role: "user", content: input.prompt }],
           stream: true,
         }),
       });

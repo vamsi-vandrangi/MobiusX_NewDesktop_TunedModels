@@ -355,6 +355,12 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .edits-file-status { font-size: 10px; flex-shrink: 0; }
 .edits-file-status.applied { color: #6fcf73; }
 .edits-file-status.skipped { color: #e0928f; }
+.edits-file-open-btn {
+  background: transparent; border: 1px solid #2f5c7c; color: #7cb8e0; border-radius: 4px;
+  padding: 2px 7px; font-size: 10px; cursor: pointer; flex-shrink: 0;
+}
+.edits-file-open-btn:hover:not(:disabled) { background: #142631; }
+.edits-file-open-btn:disabled { opacity: 0.6; cursor: default; }
 .edits-file-diff {
   margin: 6px 0 0; padding: 6px 0; max-height: 320px; overflow: auto; font-family: "SF Mono", Menlo, monospace;
   font-size: 11px; line-height: 1.5; border-top: 1px solid #232429;

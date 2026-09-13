@@ -162,6 +162,30 @@ export function relevantFilesContext(input: RunnerInput, distinguishFullContent:
   return out;
 }
 
+/** Defensive server-side caps on top of the client's own (see renderer.js) — a runner should never choke on / balloon a prompt from an unexpectedly long or wordy history array, whatever sent it. */
+const MAX_HISTORY_TURNS = 12;
+const MAX_HISTORY_CHARS_PER_TURN = 4000;
+
+/**
+ * Converts RunnerInput.history (see HistoryTurn in @mobiusx/protocol) into
+ * chat messages to prepend before the current prompt, for every chat-style
+ * runner (anthropic/openrouter/groq/ollama). Without this, each task is a
+ * fresh one-shot request with no memory of anything said earlier in the
+ * same AI Assistant panel session — the exact "history isn't maintained"
+ * gap this closes. Returns [] when there's no history to add, so callers
+ * can always spread the result into a messages array unconditionally.
+ */
+export function historyMessages(input: RunnerInput): { role: "user" | "assistant"; content: string }[] {
+  const history = input.history ?? [];
+  return history.slice(-MAX_HISTORY_TURNS).map((turn) => ({
+    role: turn.role,
+    content:
+      turn.content.length > MAX_HISTORY_CHARS_PER_TURN
+        ? turn.content.slice(0, MAX_HISTORY_CHARS_PER_TURN) + "…"
+        : turn.content,
+  }));
+}
+
 export function stepId(): string {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }

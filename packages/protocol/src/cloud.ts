@@ -93,6 +93,24 @@ export interface ProjectContext {
   relevantFiles?: { relPath: string; snippet: string; content?: string }[];
 }
 
+/**
+ * One prior turn from the same AI Assistant panel session, carried along on
+ * a follow-up request so it can be understood without the user repeating
+ * themselves — e.g. "show me the output" after "generate code for X" only
+ * means anything if the model is re-shown what "X" was. This gateway is
+ * otherwise fully stateless between tasks (each is an independent HTTP
+ * POST with its own fresh runner call), so without this field a runner has
+ * no way to know what was said earlier in the same panel — the exact gap
+ * behind "history isn't maintained." Populated client-side
+ * (apps/desktop/src/renderer.js, from what that panel already rendered) and
+ * capped both there and in routes.ts — a bounded recent-context window, not
+ * a full transcript archive or server-side session store.
+ */
+export interface HistoryTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface CreateTaskRequest {
   mode: AgentMode;
   prompt: string;
@@ -104,6 +122,8 @@ export interface CreateTaskRequest {
    * has set as their default (or the automatic choice, if they haven't).
    */
   model?: ModelSelection;
+  /** See HistoryTurn's doc comment. Omit (or send []) for a fresh, contextless request. */
+  history?: HistoryTurn[];
 }
 
 export interface CreateTaskResponse {
