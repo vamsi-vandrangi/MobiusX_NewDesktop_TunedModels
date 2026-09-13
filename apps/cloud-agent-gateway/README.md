@@ -25,6 +25,17 @@ ANTHROPIC_API_KEY=sk-... ANTHROPIC_MODEL=claude-... npm run start -w apps/cloud-
 
 Prints `MOBIUSX_CLOUD_READY {"port":...,"token":...}` on stdout once listening — this is how the Electron main process (which spawns it automatically) discovers it, the same pattern `apps/desktop-agent` uses.
 
+### Configuring a real model for the desktop app
+
+Exporting `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` in your shell only reaches the gateway when you launch it (or `apps/desktop`) from that same shell — running the Electron app from Finder/Spotlight instead of a terminal doesn't inherit those exports at all. For that case, copy `.env.example` to `.env` in this directory and fill in your own key and model:
+
+```
+cp apps/cloud-agent-gateway/.env.example apps/cloud-agent-gateway/.env
+# then edit apps/cloud-agent-gateway/.env yourself and fill in the two values
+```
+
+`src/index.ts` loads it via Node's built-in `process.loadEnvFile()` on startup — a missing `.env` is silently a no-op (still the demo runner, still "no credentials, no assumed model" by default), and a real shell export always takes precedence over the file if both are present. `.env` is already gitignored so your key never gets committed; `.env.example` itself carries no real values.
+
 ## Data
 
 Tasks persist to `~/.mobiusx/cloud-agent-gateway/tasks.json` (override with `MOBIUSX_CLOUD_DATA_DIR`) — deliberately outside any project repo, since tasks aren't scoped to one project.

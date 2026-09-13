@@ -40,6 +40,8 @@ The Electron shell needs to be installed and launched from a real terminal on yo
 npm run start -w apps/desktop
 ```
 
+By default this runs entirely on the `demo` runner (no model, deterministic, clearly labeled) — see the Status section above. To use a real Anthropic model, either export `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` before running the command above, or (needed if you ever launch the app outside a terminal) put them in `apps/cloud-agent-gateway/.env` — see "Configuring a real model for the desktop app" in `apps/cloud-agent-gateway/README.md`.
+
 **Known gotcha:** if `node_modules` was ever installed from a bridged/sandboxed shell (a Linux VM, CI, etc.) rather than natively on your Mac, `node_modules/electron` will hold a Linux binary and `npm run start` fails with `spawn ... errno -8` (ENOEXEC) — Electron's postinstall only fetches the binary matching whatever machine ran `npm install`. The same applies to `node_modules/node-pty` (Phase 1's real terminal): it's a native module built from source for whatever machine runs `npm install`, so a Linux-bridge install leaves a binary that can't load on macOS (`Terminal did not connect` / a require error naming `pty.node` in the agent's logs). Fix for both: `rm -rf node_modules && npm install` from a real terminal on the machine you intend to run it on.
 
 ## Structure
