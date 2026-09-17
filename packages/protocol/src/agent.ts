@@ -316,6 +316,58 @@ export interface ProjectCompletionReport {
 export type ProjectCompletionResponse = ProjectCompletionReport;
 
 /**
+ * Project Understanding Engine (roadmap Phase 7, source requirement §5): a
+ * category of the project's tech stack this codebase knows how to look
+ * for. Kept as a closed union (not a free-form string) so a category with
+ * zero detected components can still be reported honestly as "looked at,
+ * found nothing" via ProjectContextReport.unknownCategories, the same
+ * not_configured-not-omitted discipline ProjectCompletionReport uses.
+ */
+export type ProjectContextCategory = "frontend" | "backend" | "database" | "orm" | "auth" | "testFramework" | "infra";
+
+/** One real, evidence-backed tech-stack detection — see ProjectContextReport below. */
+export interface DetectedComponent {
+  category: ProjectContextCategory;
+  /** Human-readable name, e.g. "Next.js", "FastAPI", "SQLite". */
+  name: string;
+  /** Project-relative directory this was detected in ("." for the project root). */
+  location: string;
+  /** What on disk actually triggered this — a dependency name + version, a file path, or a matched connection-string pattern. Never a guess without a cited source. */
+  evidence: string;
+}
+
+/**
+ * Project Understanding Engine (roadmap Phase 7, source requirement §5): a
+ * real, computed snapshot of what this project's tech stack actually is —
+ * detected from on-disk evidence (package.json dependencies,
+ * requirements.txt/pyproject.toml, Dockerfiles, connection strings), never
+ * inferred from a project's name or the user's original prompt. Scans the
+ * project root plus the same short list of common monorepo subdirectories
+ * previewOps.ts already uses (frontend/backend/client/server/etc.), since
+ * many generated projects (see GreenThumbGarden) have no root
+ * package.json at all.
+ *
+ * unknownCategories lists every category this run genuinely found no
+ * evidence for — kept distinct from "category absent from `components`"
+ * so the UI/caller can tell "checked, found nothing" apart from "this
+ * report predates that category existing" (the same honesty discipline as
+ * ProjectCompletionCriterion's not_configured status).
+ *
+ * Also written to `<project>/.mobiusx/PROJECT_CONTEXT.md` (human-readable)
+ * and `<project>/.mobiusx/project-context.json` (this exact shape) on
+ * every call, best-effort — see projectContext.ts.
+ */
+export interface ProjectContextReport {
+  projectPath: string;
+  generatedAt: string;
+  components: DetectedComponent[];
+  unknownCategories: ProjectContextCategory[];
+}
+
+/** Body of GET /project-context. */
+export type ProjectContextResponse = ProjectContextReport;
+
+/**
  * Messages sent from the renderer, over the /terminal WebSocket, to the
  * agent. A real PTY session (see apps/desktop-agent/src/terminalWs.ts) is
  * raw byte pass-through, not request/response commands: "input" carries

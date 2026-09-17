@@ -152,14 +152,28 @@ export function systemPromptFor(input: RunnerInput): string {
     );
   }
   if (input.mode === "spec") {
+    // Project Understanding + Specification Engine (roadmap Phase 7,
+    // source requirement §6): acceptance criteria are no longer just
+    // Given/When/Then prose -- each one gets a stable REQ-NNN id (numbered
+    // continuously across BOTH functional and non-functional requirements,
+    // in the order they appear in the markdown doc) and a second,
+    // machine-readable JSON twin is emitted alongside the markdown, so the
+    // UI can render a real checklist instead of parsing prose. The
+    // markdown doc remains the human-facing artifact; the JSON is never
+    // meant to be read standalone.
     return [
       "You are the MobiusX Desktop AI Assistant in SPEC mode — a Requirements Engineering assistant (not a coder in this mode).",
-      "Given the user's natural-language request, write a structured requirements specification as a single markdown document with EXACTLY these sections, in this order: '## Overview', '## Functional Requirements' (numbered), '## Non-Functional Requirements' (numbered), '## Constraints & Assumptions', '## Risks', '## Acceptance Criteria' (as Given/When/Then scenarios).",
+      "Given the user's natural-language request, write a structured requirements specification as a single markdown document with EXACTLY these sections, in this order: '## Overview', '## Functional Requirements' (numbered), '## Non-Functional Requirements' (numbered), '## Constraints & Assumptions', '## Risks', '## Acceptance Criteria'.",
+      "EVERY requirement in '## Functional Requirements' and '## Non-Functional Requirements' must be prefixed with a stable id in the form 'REQ-001', 'REQ-002', ... — numbered continuously across both sections in the order they appear (do not restart numbering for non-functional requirements). Example line: '1. **REQ-001** — The system shall let a user reset their password via emailed link.'",
+      "In '## Acceptance Criteria', write one Given/When/Then scenario per requirement, each labeled with the SAME REQ-NNN id it tests, e.g. '**REQ-001** — Given a registered user on the login page, When they click \"Forgot password\" and submit their email, Then a reset link is emailed within 60 seconds.' Every REQ-NNN from the requirements sections must have at least one acceptance criterion; never introduce a REQ-NNN id in this section that wasn't defined above.",
       "If the request is ambiguous or missing information a real spec would need, do not guess silently — add those as explicit open questions under a '## Open Questions' section instead of inventing requirements the user never stated.",
       "First, write a one-to-two-sentence prose summary of what you're specifying.",
-      `Then, on its own line, output exactly ${EDITS_MARKER} followed by a single fenced json code block with this exact shape:`,
-      '{"edits": [{"path": ".mobiusx/specs/<kebab-case-slug>.md", "action": "create", "content": "the complete markdown spec document"}]}',
-      "Choose a short, descriptive kebab-case slug for the filename based on the feature being specified (e.g. \".mobiusx/specs/subscription-management.md\"). Always use action \"create\" — never \"modify\" in this mode.",
+      `Then, on its own line, output exactly ${EDITS_MARKER} followed by a single fenced json code block with this exact shape (TWO edits — the markdown doc AND its structured JSON twin, both required):`,
+      '{"edits": [' +
+        '{"path": ".mobiusx/specs/<kebab-case-slug>.md", "action": "create", "content": "the complete markdown spec document"}, ' +
+        '{"path": ".mobiusx/specs/<kebab-case-slug>.json", "action": "create", "content": "{\\"feature\\": \\"short title\\", \\"slug\\": \\"<kebab-case-slug>\\", \\"requirements\\": [{\\"id\\": \\"REQ-001\\", \\"category\\": \\"functional\\", \\"statement\\": \\"the requirement text, no id prefix\\", \\"acceptanceCriteria\\": [{\\"given\\": \\"...\\", \\"when\\": \\"...\\", \\"then\\": \\"...\\"}]}], \\"openQuestions\\": []}"}' +
+      ']}',
+      "Each requirement's \"category\" must be exactly the string \"functional\" or \"non-functional\" (never both, and never any other value). Use the exact same <kebab-case-slug> for both files' paths. The .json file's \"content\" is itself a JSON string (escaped exactly as shown) containing every REQ-NNN from the markdown doc with its category, statement, and acceptance criteria — this must stay in exact sync with the markdown; never list a REQ-NNN in one file but not the other. Choose a short, descriptive kebab-case slug for the filename based on the feature being specified (e.g. \"subscription-management\"). Always use action \"create\" for both files — never \"modify\" in this mode.",
       relevantFilesContext(input, false),
     ].join("\n");
   }

@@ -114,6 +114,18 @@
         <section class="view" id="view-workspace" hidden>
           <div id="workspace">
             <div id="tree-panel" class="panel">
+              <!-- Project Understanding Engine (roadmap Phase 7, source requirement
+                   §5): real, evidence-based tech-stack detection (see
+                   apps/desktop-agent/src/projectContext.ts) -- never guessed from
+                   the project's name. Collapsed by default so it doesn't push the
+                   file tree down for people who don't care; click to detect. -->
+              <div id="project-context-panel">
+                <div id="project-context-header">
+                  <button id="project-context-toggle">▸ Project Context</button>
+                  <button id="project-context-detect-btn" hidden>Detect</button>
+                </div>
+                <div id="project-context-results" hidden></div>
+              </div>
               <h3>Explorer</h3>
               <div id="file-tree"><div class="debug-empty">Open a project to see its files.</div></div>
             </div>

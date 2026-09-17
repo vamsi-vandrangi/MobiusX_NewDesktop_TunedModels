@@ -17,6 +17,7 @@ import type {
   PreviewStartResponse,
   PreviewStatusResponse,
   ProjectCompletionResponse,
+  ProjectContextResponse,
   ProposedEdit,
   VerifyResponse,
 } from "@mobiusx/protocol";
@@ -24,6 +25,7 @@ import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./f
 import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
 import { verifyProject } from "./verify.js";
 import { computeCompletionReport } from "./completion.js";
+import { detectProjectContext } from "./projectContext.js";
 import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
@@ -259,6 +261,24 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "completion report failed", detail: (err as Error).message });
+    }
+  });
+
+  // Project Understanding Engine (roadmap Phase 7, source requirement §5):
+  // a real, evidence-based tech-stack detection pass -- see
+  // projectContext.ts's doc comment for exactly what's scanned and how a
+  // component gets reported. Also written to .mobiusx/PROJECT_CONTEXT.md +
+  // .mobiusx/project-context.json as real artifacts.
+  router.get("/project-context", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: ProjectContextResponse = await detectProjectContext(projectState.path);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "project context detection failed", detail: (err as Error).message });
     }
   });
 

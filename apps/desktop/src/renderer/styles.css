@@ -185,6 +185,28 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 .panel h3 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #9a9ba1; }
 
 #tree-panel { width: 230px; flex-shrink: 0; }
+
+/* ---- Project Understanding Engine (roadmap Phase 7, source §5) ---- */
+#project-context-panel { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid #232429; }
+#project-context-header { display: flex; align-items: center; justify-content: space-between; }
+#project-context-toggle {
+  background: none; border: none; color: #9a9ba1; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.05em; cursor: pointer; padding: 0;
+}
+#project-context-toggle:hover { color: #d7d8dc; }
+#project-context-detect-btn {
+  background: #1c2a38; border: 1px solid #2c3e50; color: #7fb2e0; border-radius: 5px;
+  padding: 2px 8px; font-size: 10.5px; cursor: pointer;
+}
+#project-context-detect-btn:hover:not(:disabled) { background: #24374a; }
+#project-context-detect-btn:disabled { opacity: 0.6; cursor: default; }
+#project-context-results { margin-top: 8px; }
+.context-rows { display: flex; flex-direction: column; gap: 5px; }
+.context-row { display: flex; flex-direction: column; gap: 1px; font-size: 11.5px; }
+.context-row-label { color: #8a8b90; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; }
+.context-row-value { color: #d7d8dc; }
+.context-row.not-detected .context-row-value { color: #5a5b60; font-style: italic; }
+.context-row-loc { color: #6a6b70; font-size: 10px; }
 #center-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
 #tabs-bar { display: flex; border-bottom: 1px solid #232429; overflow-x: auto; flex-shrink: 0; }
@@ -542,6 +564,23 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 }
 .task-detail-edits:empty { display: none; }
 .edits-card-head { font-size: 12px; color: #cfd0d4; font-weight: 600; margin-bottom: 6px; }
+
+/* ---- Specification Engine structured requirements checklist (roadmap Phase 7, source §6) ---- */
+.spec-checklist { margin-bottom: 12px; padding: 8px 10px; background: #17181c; border: 1px solid #232429; border-radius: 6px; }
+.spec-checklist-head { font-size: 11.5px; font-weight: 600; color: #cfd0d4; margin-bottom: 8px; }
+.spec-req-list { display: flex; flex-direction: column; gap: 10px; }
+.spec-req { border-top: 1px dashed #232429; padding-top: 8px; }
+.spec-req:first-child { border-top: none; padding-top: 0; }
+.spec-req-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 12px; }
+.spec-req-id { font-weight: 700; color: #7fb2e0; font-family: "SF Mono", Menlo, monospace; font-size: 11px; }
+.spec-req-category { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 4px; background: #232429; color: #9a9ba1; }
+.spec-req-category.functional { color: #6fd48a; }
+.spec-req-category.non-functional { color: #e0b37c; }
+.spec-req-statement { color: #d7d8dc; }
+.spec-req-acs { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+.spec-req-ac { font-size: 11px; color: #9a9ba1; padding-left: 4px; }
+.spec-req-ac-missing { font-style: italic; color: #e06c6c; }
+.spec-open-questions { margin-top: 10px; padding-top: 8px; border-top: 1px solid #232429; font-size: 11px; color: #e0b37c; }
 .edits-card-warning {
   font-size: 11.5px; color: #e0b96f; background: #241f16; border: 1px solid #4a3d24; border-radius: 6px;
   padding: 6px 8px; margin-bottom: 8px; line-height: 1.5;

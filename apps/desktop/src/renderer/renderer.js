@@ -131,6 +131,7 @@ async function openProject(path) {
     document.getElementById("debug-results").innerHTML = "";
     document.getElementById("debug-index-status").textContent = "No index built yet for this project";
     resetPreviewUI(); // switching projects — desktop-agent already stopped the previous project's dev server(s)
+    resetProjectContextUI();
     await loadTree();
     showView("workspace");
   } catch (err) {
@@ -206,6 +207,7 @@ async function createProject() {
         document.getElementById("debug-results").innerHTML = "";
         document.getElementById("debug-index-status").textContent = "No index built yet for this project";
         resetPreviewUI(); // switching projects — desktop-agent already stopped the previous project's dev server(s)
+        resetProjectContextUI();
         await loadTree();
         showView("workspace");
         // Hand off straight to Build mode — this is a brand-new empty
@@ -700,6 +702,85 @@ document.getElementById("preview-toggle").addEventListener("click", () => {
 });
 
 // ============================================================
+// Project Understanding Engine (roadmap Phase 7, source requirement §5):
+// GET /project-context runs real, evidence-based tech-stack detection (see
+// apps/desktop-agent/src/projectContext.ts) -- collapsed by default, the
+// user expands + clicks Detect (or re-clicks any time the stack changes;
+// nothing here auto-refreshes on file changes in this v1).
+// ============================================================
+const projectContextPanel = document.getElementById("project-context-panel");
+const projectContextToggle = document.getElementById("project-context-toggle");
+const projectContextDetectBtn = document.getElementById("project-context-detect-btn");
+const projectContextResultsEl = document.getElementById("project-context-results");
+let projectContextExpanded = false;
+
+function resetProjectContextUI() {
+  projectContextExpanded = false;
+  projectContextResultsEl.hidden = true;
+  projectContextResultsEl.innerHTML = "";
+  projectContextToggle.textContent = "▸ Project Context";
+  projectContextDetectBtn.hidden = !currentProjectPath;
+}
+
+projectContextToggle.addEventListener("click", () => {
+  projectContextExpanded = !projectContextExpanded;
+  projectContextResultsEl.hidden = !projectContextExpanded;
+  projectContextToggle.textContent = (projectContextExpanded ? "▾ " : "▸ ") + "Project Context";
+});
+
+const CONTEXT_CATEGORY_LABELS = {
+  frontend: "Frontend",
+  backend: "Backend",
+  database: "Database",
+  orm: "ORM",
+  auth: "Auth",
+  testFramework: "Test framework",
+  infra: "Infra",
+};
+
+function renderProjectContextReport(report) {
+  const byCategory = new Map();
+  for (const c of report.components) {
+    if (!byCategory.has(c.category)) byCategory.set(c.category, []);
+    byCategory.get(c.category).push(c);
+  }
+  const order = ["frontend", "backend", "database", "orm", "auth", "testFramework", "infra"];
+  const rows = order
+    .map((cat) => {
+      const items = byCategory.get(cat);
+      if (!items || items.length === 0) {
+        return `<div class="context-row not-detected"><span class="context-row-label">${CONTEXT_CATEGORY_LABELS[cat]}</span><span class="context-row-value">Not detected</span></div>`;
+      }
+      const value = items.map((c) => `${escapeHtml(c.name)} <span class="context-row-loc">(${escapeHtml(c.location)}/)</span>`).join(", ");
+      return `<div class="context-row"><span class="context-row-label">${CONTEXT_CATEGORY_LABELS[cat]}</span><span class="context-row-value">${value}</span></div>`;
+    })
+    .join("");
+  projectContextResultsEl.innerHTML = `
+    <div class="context-rows">${rows}</div>
+    <div class="completion-meta">Generated ${new Date(report.generatedAt).toLocaleString()} · written to .mobiusx/PROJECT_CONTEXT.md</div>
+  `;
+}
+
+projectContextDetectBtn.addEventListener("click", async () => {
+  projectContextDetectBtn.disabled = true;
+  projectContextDetectBtn.textContent = "Detecting…";
+  projectContextExpanded = true;
+  projectContextResultsEl.hidden = false;
+  projectContextToggle.textContent = "▾ Project Context";
+  projectContextResultsEl.innerHTML = `<div class="verify-pending">Scanning the project for real tech-stack evidence…</div>`;
+  try {
+    const report = await api("/project-context");
+    renderProjectContextReport(report);
+  } catch (err) {
+    projectContextResultsEl.innerHTML = `<div class="verify-none">Detection failed: ${escapeHtml(err.message)}</div>`;
+  }
+  projectContextDetectBtn.disabled = false;
+  projectContextDetectBtn.textContent = "Detect";
+});
+
+resetProjectContextUI();
+
+// ============================================================
 // Changes (git) view
 // ============================================================
 async function loadGit() {
@@ -961,6 +1042,56 @@ function buildEditsCard(edits, taskProjectPath, review) {
     <div class="verify-results" hidden></div>
   `;
   const list = card.querySelector(".edits-card-list");
+
+  // Project Understanding + Specification Engine (roadmap Phase 7, source
+  // requirement §6): Spec mode now emits a structured .mobiusx/specs/*.json
+  // twin alongside the markdown doc (see promptShared.ts's spec-mode
+  // prompt) -- when one is present among this card's edits, render a real
+  // REQ-NNN checklist instead of leaving the user to read raw JSON via
+  // "Show diff". The underlying edit still applies exactly like any other
+  // file; this is purely an additional, friendlier view of the same data.
+  const specJsonEdit = edits.find((e) => /^\.mobiusx\/specs\/[^/]+\.json$/.test(e.path));
+  if (specJsonEdit) {
+    let spec = null;
+    try {
+      spec = JSON.parse(specJsonEdit.content);
+    } catch {
+      // model didn't produce valid JSON this time -- fall through silently,
+      // the raw file is still shown in the normal file list below so
+      // nothing is hidden from the user, just not double-rendered as a
+      // checklist we can't trust.
+    }
+    if (spec && Array.isArray(spec.requirements)) {
+      const reqRows = spec.requirements
+        .map((r) => {
+          const acCount = Array.isArray(r.acceptanceCriteria) ? r.acceptanceCriteria.length : 0;
+          const acHtml = (r.acceptanceCriteria || [])
+            .map((ac) => `<div class="spec-req-ac">Given ${escapeHtml(ac.given || "")}, when ${escapeHtml(ac.when || "")}, then ${escapeHtml(ac.then || "")}.</div>`)
+            .join("");
+          return `
+            <div class="spec-req">
+              <div class="spec-req-head">
+                <span class="spec-req-id">${escapeHtml(r.id || "REQ-???")}</span>
+                <span class="spec-req-category ${escapeHtml(r.category || "")}">${escapeHtml(r.category || "")}</span>
+                <span class="spec-req-statement">${escapeHtml(r.statement || "")}</span>
+              </div>
+              ${acCount > 0 ? `<div class="spec-req-acs">${acHtml}</div>` : `<div class="spec-req-ac spec-req-ac-missing">No acceptance criteria proposed for this requirement.</div>`}
+            </div>`;
+        })
+        .join("");
+      const openQ = Array.isArray(spec.openQuestions) && spec.openQuestions.length > 0
+        ? `<div class="spec-open-questions"><strong>Open questions:</strong> ${spec.openQuestions.map((q) => escapeHtml(q)).join(" · ")}</div>`
+        : "";
+      const checklist = document.createElement("div");
+      checklist.className = "spec-checklist";
+      checklist.innerHTML = `
+        <div class="spec-checklist-head">${escapeHtml(spec.feature || "Requirements")} — ${spec.requirements.length} requirement${spec.requirements.length === 1 ? "" : "s"}</div>
+        <div class="spec-req-list">${reqRows}</div>
+        ${openQ}
+      `;
+      card.insertBefore(checklist, list);
+    }
+  }
 
   for (const edit of edits) {
     const item = document.createElement("div");
