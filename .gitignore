@@ -7,3 +7,7 @@ out/
 .env
 .env.local
 .mobiusx-index/
+
+# Demo/scratch projects created by using the app itself (Build/New Project),
+# not part of the platform's own source -- see docs/phase-notes.
+/Test Projects/
