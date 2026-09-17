@@ -105,13 +105,25 @@ test("build mode edits get a clearly-labeled demo second-pass review", async () 
   assert.match(task!.review!.summary, /demo reviewer/);
 });
 
-test("spec and plan modes never get a review (reviewer is scoped to real code edits)", async () => {
-  for (const mode of ["spec", "plan"] as const) {
-    const summary = await startTask({ mode, prompt: "something" });
-    await waitUntilDone(summary.id);
-    const task = await getTask(summary.id);
-    assert.equal(task!.review, undefined);
-  }
+test("plan mode never gets a review (it never proposes edits at all)", async () => {
+  const summary = await startTask({ mode: "plan", prompt: "something" });
+  await waitUntilDone(summary.id);
+  const task = await getTask(summary.id);
+  assert.equal(task!.review, undefined);
+});
+
+test("spec mode DOES get a review as of roadmap Phase 11 -- the Documentation persona", async () => {
+  // Previously spec mode was excluded from review entirely (a real,
+  // documented scope cut). Phase 11 (source §26) closed that gap so the
+  // new Documentation persona has a real, reachable mode to review -- see
+  // runners/personas.ts's module comment and anthropicRunner.ts's doc
+  // comment on the review-trigger condition for why this changed.
+  const summary = await startTask({ mode: "spec", prompt: "something" });
+  await waitUntilDone(summary.id);
+  const task = await getTask(summary.id);
+  assert.equal(task!.review?.verdict, "approve");
+  assert.equal(task!.review?.persona, "documentation");
+  assert.match(task!.review!.summary, /demo reviewer/);
 });
 
 test("spec mode proposes a clearly-labeled demo spec under .mobiusx/specs/", async () => {

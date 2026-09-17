@@ -331,6 +331,12 @@ select.model-select, #default-model-select {
 }
 select.model-select option:disabled, #default-model-select option:disabled { color: #6d6e75; }
 .default-model-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* Roadmap Phase 11 (source §27): per-task-type model routing rows -- one
+   label + select per AgentMode, reusing the same select styling above. */
+.model-routing-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.model-routing-row { display: flex; align-items: center; gap: 12px; }
+.model-routing-row-label { width: 92px; flex: none; font-size: 11.5px; color: #cfd0d4; }
+.model-routing-row select { flex: 1; max-width: 340px; }
 .task-model-note {
   margin-top: 6px; font-size: 11px; color: #e0b96f; background: #241f16; border: 1px solid #4a3d24;
   border-radius: 6px; padding: 5px 8px; line-height: 1.5;

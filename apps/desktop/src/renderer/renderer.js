@@ -1095,11 +1095,32 @@ function streamTask(taskId, { onStep, onOutput, onEdits, onReview, onStatus, onE
 // nothing here writes to disk itself.
 // ============================================================
 
-/** Renders a Reviewer-agent verdict banner's inner HTML (see EditReview in @mobiusx/protocol) — shared by buildEditsCard's initial render and a later post-hoc injection (the review event can arrive after the edits card already exists). */
+/**
+ * Mirrors the AgentPersona -> label mapping in
+ * apps/cloud-agent-gateway/src/runners/personas.ts's PERSONAS export
+ * (roadmap Phase 11, source §26) — duplicated here by hand rather than
+ * fetched at runtime, since renderer.js is a plain script (no bundler/
+ * import of gateway source) and this list is small and rarely changes. If
+ * a persona is ever added/renamed there, mirror it here too.
+ */
+const PERSONA_LABELS = {
+  architecture: "Architecture Agent",
+  database: "Database Agent",
+  backend: "Backend Agent",
+  frontend: "Frontend Agent",
+  api: "API Agent",
+  testing: "Testing Agent",
+  devops: "DevOps Agent",
+  documentation: "Documentation Agent",
+  debugger: "Debugger Agent",
+};
+
+/** Renders a Reviewer-agent verdict banner's inner HTML (see EditReview in @mobiusx/protocol) — shared by buildEditsCard's initial render and a later post-hoc injection (the review event can arrive after the edits card already exists). Roadmap Phase 11 (source §26) named the previously-generic "Reviewer" persona -- an older task (or a runner that somehow didn't attach one) falls back to the plain "Reviewer" label rather than showing "undefined". */
 function renderReviewBannerHtml(review) {
   const cls = review.verdict === "approve" ? "approve" : "concerns";
   const icon = review.verdict === "approve" ? "✓" : "⚠";
-  const label = review.verdict === "approve" ? "Reviewer: Approve" : "Reviewer: Concerns";
+  const reviewerName = (review.persona && PERSONA_LABELS[review.persona]) || "Reviewer";
+  const label = review.verdict === "approve" ? `${reviewerName}: Approve` : `${reviewerName}: Concerns`;
   return `<div class="review-banner ${cls}"><div class="review-banner-head"><span class="review-banner-icon">${icon}</span><span class="review-banner-label">${label}</span></div><div class="review-banner-summary">${escapeHtml(review.summary)}</div></div>`;
 }
 
@@ -1508,7 +1529,7 @@ function modelOptionLabel(m) {
  * groqRunner.ts's removal of qwen/qwen3.8-27b for a case this filter does
  * NOT catch on its own (a key was present; the model just didn't work).
  */
-async function populateModelSelect(selectEl, { includeAuto, selectedValue } = {}) {
+async function populateModelSelect(selectEl, { includeAuto, selectedValue, autoLabel } = {}) {
   const models = await fetchModelOptions();
   selectEl.innerHTML = "";
 
@@ -1524,7 +1545,14 @@ async function populateModelSelect(selectEl, { includeAuto, selectedValue } = {}
   if (includeAuto) {
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "Auto (recommended)";
+    // Roadmap Phase 11 (source §27): per-task-type model routing reuses this
+    // same populate function for each mode's row, but "" there means
+    // something different from the Default AI Model select's "" -- "no
+    // routing rule for this mode, fall through to Default AI Model /
+    // automatic" rather than "let the gateway choose automatically". Callers
+    // that care (see the modelRouting rows below) pass their own label;
+    // everyone else keeps the original "Auto (recommended)" text.
+    opt.textContent = autoLabel ?? "Auto (recommended)";
     selectEl.appendChild(opt);
   }
 
@@ -2345,7 +2373,7 @@ function buildTaskOverviewTab(task) {
         <div class="task-overview-stat"><span>Updated</span><span>${formatTaskTime(task.updatedAt)}</span></div>
         ${
           task.edits?.length
-            ? `<div class="task-overview-stat"><span>Changes</span><span>${task.edits.length} file${task.edits.length === 1 ? "" : "s"} proposed${task.review ? ` · review: ${escapeHtml(task.review.verdict)}` : ""}</span></div>`
+            ? `<div class="task-overview-stat"><span>Changes</span><span>${task.edits.length} file${task.edits.length === 1 ? "" : "s"} proposed${task.review ? ` · review: ${escapeHtml(task.review.verdict)}${task.review.persona && PERSONA_LABELS[task.review.persona] ? ` (${escapeHtml(PERSONA_LABELS[task.review.persona])})` : ""}` : ""}</span></div>`
             : ""
         }
       </div>
@@ -2570,6 +2598,77 @@ defaultModelSelectEl.addEventListener("change", async () => {
 
 document.getElementById("model-refresh-btn").addEventListener("click", loadDefaultModelSettings);
 
+// ---- Per-Task-Type Model Routing (roadmap Phase 11, source §27) ----
+// One row/select per real AgentMode this gateway accepts in a
+// CreateTaskRequest (see AgentMode in @mobiusx/protocol) -- "fix" has no
+// tab of its own in the AI Assistant panel (it's triggered by "Diagnose &
+// Fix" against a real verification failure, see buildEditsCard) but is
+// still a real, routable mode, so it's listed here too.
+const MODEL_ROUTING_MODES = [
+  { mode: "ask", label: "Ask" },
+  { mode: "plan", label: "Plan" },
+  { mode: "build", label: "Build" },
+  { mode: "spec", label: "Spec" },
+  { mode: "fix", label: "Fix" },
+  { mode: "database", label: "Database" },
+  { mode: "architecture", label: "Architecture" },
+  { mode: "testing", label: "Testing" },
+];
+const modelRoutingRowsEl = document.getElementById("model-routing-rows");
+const modelRoutingStatusEl = document.getElementById("model-routing-status");
+
+// Built once: one <select> per AgentMode, addressed by data-mode for the
+// single delegated change handler below rather than 8 separate listeners.
+modelRoutingRowsEl.innerHTML = MODEL_ROUTING_MODES.map(
+  ({ mode, label }) => `
+    <div class="model-routing-row">
+      <span class="model-routing-row-label">${label}</span>
+      <select class="model-select" data-mode="${mode}"></select>
+    </div>
+  `,
+).join("");
+
+async function loadModelRoutingSettings() {
+  try {
+    const settings = await api("/settings");
+    const routing = settings.modelRouting ?? {};
+    await Promise.all(
+      MODEL_ROUTING_MODES.map(({ mode }) => {
+        const selectEl = modelRoutingRowsEl.querySelector(`select[data-mode="${mode}"]`);
+        const selectedValue = routing[mode] ? JSON.stringify(routing[mode]) : "";
+        // "Use default" (not "Auto (recommended)") for these rows -- "" here
+        // means "no routing rule for this mode", which falls through to the
+        // Default AI Model select above, not straight to automatic choice.
+        return populateModelSelect(selectEl, { includeAuto: true, selectedValue, autoLabel: "Use default" });
+      }),
+    );
+    modelRoutingStatusEl.textContent = "";
+  } catch (err) {
+    modelRoutingStatusEl.textContent = `Failed to load: ${err.message}`;
+  }
+}
+
+modelRoutingRowsEl.addEventListener("change", async (e) => {
+  const selectEl = e.target.closest("select[data-mode]");
+  if (!selectEl) return;
+  const mode = selectEl.dataset.mode;
+  // "" (Use default) clears just THIS mode's rule -- sent as null, per
+  // @mobiusx/agent-settings's SettingsPatch.modelRouting doc comment: a
+  // per-mode MERGE, so setting one mode to null never touches any other
+  // mode's already-saved rule.
+  const selection = selectEl.value ? JSON.parse(selectEl.value) : null;
+  modelRoutingStatusEl.textContent = "Saving…";
+  try {
+    await api("/settings", { method: "PUT", body: JSON.stringify({ modelRouting: { [mode]: selection } }) });
+    modelRoutingStatusEl.textContent = "Saved.";
+  } catch (err) {
+    modelRoutingStatusEl.textContent = `Failed to save: ${err.message}`;
+    await loadModelRoutingSettings(); // revert this row (and re-sync the others) to whatever's actually persisted
+  }
+});
+
+document.getElementById("model-routing-refresh-btn").addEventListener("click", loadModelRoutingSettings);
+
 // ---- Terminal Approval (Approval Engine: guarded autonomy level) ----
 const terminalApprovalModeStatusEl = document.getElementById("terminal-approval-mode-status");
 const terminalApprovalModeInputs = document.querySelectorAll('input[name="terminal-approval-mode"]');
@@ -2644,6 +2743,7 @@ function loadSettings() {
   loadAuditLog();
   loadTerminalApprovalSettings();
   loadDefaultModelSettings();
+  loadModelRoutingSettings();
   renderSettingsRepositories();
 }
 

@@ -3,6 +3,7 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
 import { appendAuditEntry, readAuditLog } from "@mobiusx/audit-log";
 import type {
+  AgentMode,
   AgentSettings,
   ApplyEditsRequest,
   ApplyEditsResponse,
@@ -511,12 +512,32 @@ export function buildRouter(): Router {
     // defaultModel (multi-model support): null explicitly clears the standing
     // default (see @mobiusx/agent-settings's SettingsPatch doc comment) --
     // anything else must be a well-formed {provider, model} pair.
+    const KNOWN_PROVIDERS = ["demo", "anthropic", "openrouter", "groq", "ollama"];
     if (patch.defaultModel !== undefined && patch.defaultModel !== null) {
-      const KNOWN_PROVIDERS = ["demo", "anthropic", "openrouter", "groq", "ollama"];
       const dm = patch.defaultModel as { provider?: unknown; model?: unknown };
       if (typeof dm.provider !== "string" || !KNOWN_PROVIDERS.includes(dm.provider) || typeof dm.model !== "string" || !dm.model) {
         res.status(400).json({ error: "defaultModel must be null or {provider, model} with a known provider and non-empty model id" });
         return;
+      }
+    }
+    // modelRouting (roadmap Phase 11, source §27): per-mode merge -- see
+    // @mobiusx/agent-settings's SettingsPatch doc comment. Each key must be
+    // a real AgentMode; each value must be null (clear that mode's rule) or
+    // a well-formed {provider, model} pair, exactly like defaultModel above.
+    if (patch.modelRouting !== undefined) {
+      const KNOWN_MODES: AgentMode[] = ["ask", "plan", "build", "spec", "fix", "database", "architecture", "testing"];
+      const routing = patch.modelRouting as Record<string, unknown>;
+      for (const [mode, selection] of Object.entries(routing)) {
+        if (!KNOWN_MODES.includes(mode as AgentMode)) {
+          res.status(400).json({ error: `modelRouting has an unknown mode "${mode}"` });
+          return;
+        }
+        if (selection === null) continue;
+        const sel = selection as { provider?: unknown; model?: unknown };
+        if (typeof sel.provider !== "string" || !KNOWN_PROVIDERS.includes(sel.provider) || typeof sel.model !== "string" || !sel.model) {
+          res.status(400).json({ error: `modelRouting.${mode} must be null or {provider, model} with a known provider and non-empty model id` });
+          return;
+        }
       }
     }
     const body: AgentSettings = await updateSettings(patch);

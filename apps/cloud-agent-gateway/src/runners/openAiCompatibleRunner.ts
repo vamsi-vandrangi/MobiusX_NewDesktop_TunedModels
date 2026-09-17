@@ -1,6 +1,7 @@
 import type { ModelOption, ModelProvider, ProposedEdit, TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
 import { EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
+import { runPersonaReview } from "./personas.js";
 
 // How much of a model's "reasoning" trace to show as a fallback when it
 // never produces real `content` (see streamOpenAiSse's reasoning handling
@@ -24,10 +25,17 @@ const MAX_REASONING_FALLBACK_CHARS = 4000;
  * degrades to plain prose with no edits (parseBuildResponse's documented
  * graceful behavior), not a crash.
  *
- * Does NOT run the second-pass Reviewer agent anthropicRunner.ts has — a
- * real, deliberate scope cut for this first pass at multi-model support,
- * not a silent omission. See each concrete runner's module comment and
- * apps/cloud-agent-gateway/README.md's "Known gaps".
+ * Runs the same persona-based second-pass Reviewer agent anthropicRunner.ts
+ * does (roadmap Phase 11, source §26/§27 — see runners/personas.ts), via
+ * one extra non-streamed /chat/completions call after edits are parsed.
+ * Extending review here (not just formalizing it in the Anthropic runner)
+ * was a deliberate Phase 11 decision: this gateway ships with no assumed
+ * ANTHROPIC_API_KEY, so a persona review reachable only from the Anthropic
+ * runner would be unverifiable in any environment relying on the free
+ * OpenRouter/Groq tier — see docs/phase-notes/
+ * phase-11-multi-agent-orchestration.md for how this was actually
+ * exercised live. Previously a real, documented scope cut ("Known gaps");
+ * closed as of this phase.
  */
 export interface OpenAiCompatibleModelSpec {
   /** Provider-specific model id sent as the request's "model" field. */
@@ -199,11 +207,18 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
                 delta: `\n\n(${droppedCount} proposed edit(s) omitted: the model tried to "modify" a file it wasn't shown in full, or its edits JSON didn't parse — see apps/cloud-agent-gateway/src/runners/promptShared.ts#parseBuildResponse.)`,
               });
             }
-            if ((input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture" || input.mode === "testing") && edits.length > 0) {
-              emit({
-                type: "output",
-                delta: `\n\n(Note: ${config.provider} doesn't run the second-pass Reviewer agent yet — that's currently Anthropic-only. Review these edits carefully yourself before applying. See apps/cloud-agent-gateway/README.md's "Known gaps".)`,
-              });
+            if (
+              (input.mode === "build" ||
+                input.mode === "fix" ||
+                input.mode === "database" ||
+                input.mode === "architecture" ||
+                input.mode === "testing" ||
+                input.mode === "spec") &&
+              edits.length > 0
+            ) {
+              await runPersonaReview(input.mode, input, edits, emit, (systemPrompt, userContent) =>
+                callOpenAiCompatibleNonStreamed(config, key, model, systemPrompt, userContent, input.signal),
+              );
             }
           }
         } else {
@@ -334,6 +349,48 @@ async function retryForEdits(
     // original (unparsed) response rather than losing it to a retry error.
     return null;
   }
+}
+
+/**
+ * Thin non-streamed /chat/completions call, used only by the second-pass
+ * persona review (see personas.ts#runPersonaReview, which supplies the
+ * persona-specific system prompt and receives this as its `callModel`
+ * closure). `stream: false` here (unlike the main run() call above) since a
+ * review verdict is small and needed all at once, not token-by-token — no
+ * SSE parsing required, just the ordinary JSON response shape.
+ */
+async function callOpenAiCompatibleNonStreamed(
+  config: OpenAiCompatibleConfig,
+  key: string,
+  model: string,
+  systemPrompt: string,
+  userContent: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const res = await fetch(`${config.baseUrl}/chat/completions`, {
+    method: "POST",
+    signal,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${key}`,
+      ...(config.extraHeaders ?? {}),
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userContent },
+      ],
+      stream: false,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(describeProviderError(res.status, body, config.provider, model));
+  }
+  const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return body.choices?.[0]?.message?.content ?? "";
 }
 
 /**

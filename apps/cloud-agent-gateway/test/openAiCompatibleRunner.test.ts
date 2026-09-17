@@ -120,13 +120,30 @@ test("run() treats an aborted signal as cancelled, not failed", async (t) => {
   delete process.env.TEST_PROVIDER_API_KEY;
 });
 
-test("build mode with structured edits: parses edits from the streamed response and notes the missing second-pass review", async (t) => {
+test("build mode with structured edits: parses edits from the streamed response and runs a real persona second-pass review", async (t) => {
+  // Roadmap Phase 11 (source §26/§27): this runner now runs the same
+  // persona-based second-pass Reviewer agent anthropicRunner.ts does (see
+  // runners/personas.ts) -- previously a real, documented scope cut
+  // ("openrouter/groq runners don't emit a review event"), closed as of
+  // this phase. The mock below answers two DIFFERENT requests against the
+  // same /chat/completions endpoint: call #1 is the streaming build-mode
+  // response (edits), call #2 is the non-streamed review call:.
   process.env.TEST_PROVIDER_API_KEY = "test-key";
   const full = [
     "Adding a retry helper.\n\n===MOBIUSX_EDITS===\n",
     '```json\n{"edits":[{"path":"retry.ts","action":"create","content":"export const retry = () => {};"}]}\n```',
   ].join("");
-  t.mock.method(globalThis, "fetch", async () => {
+  let callCount = 0;
+  t.mock.method(globalThis, "fetch", async (_url: string, opts: { body?: string }) => {
+    callCount += 1;
+    const body = JSON.parse((opts?.body as string) ?? "{}") as { stream?: boolean };
+    if (body.stream === false) {
+      // The review call: respond with a real, well-formed verdict.
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"verdict":"approve","summary":"Looks safe."}' } }] }),
+        { status: 200 },
+      );
+    }
     return new Response(sseStream([sseDataLine({ choices: [{ delta: { content: full } }] }), "data: [DONE]\n\n"]), { status: 200 });
   });
   const events: TaskEvent[] = [];
@@ -135,7 +152,13 @@ test("build mode with structured edits: parses edits from the streamed response 
   assert.ok(editsEvent, "expected an edits event");
   assert.equal(editsEvent!.edits[0].path, "retry.ts");
   const output = events.filter((e): e is Extract<TaskEvent, { type: "output" }> => e.type === "output").map((e) => e.delta).join("");
-  assert.match(output, /doesn't run the second-pass Reviewer agent yet/);
-  assert.ok(!events.some((e) => e.type === "review"), "openrouter/groq runners don't emit a review event");
+  assert.ok(!output.includes("doesn't run the second-pass Reviewer agent yet"), "the old scope-cut note should be gone");
+  const reviewEvent = events.find((e): e is Extract<TaskEvent, { type: "review" }> => e.type === "review");
+  assert.ok(reviewEvent, "expected a review event now that this runner has a real persona reviewer");
+  assert.equal(reviewEvent!.review.verdict, "approve");
+  assert.equal(reviewEvent!.review.summary, "Looks safe.");
+  // "retry.ts" matches none of classifyPersona's api/frontend path patterns -- backend is the default.
+  assert.equal(reviewEvent!.review.persona, "backend");
+  assert.equal(callCount, 2, "expected exactly one streaming call and one non-streamed review call");
   delete process.env.TEST_PROVIDER_API_KEY;
 });

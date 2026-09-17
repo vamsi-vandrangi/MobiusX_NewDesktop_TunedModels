@@ -399,6 +399,23 @@
             </div>
 
             <div class="settings-section">
+              <div class="settings-section-head">
+                <h3>Per-Task-Type Model Routing <span class="status-text">(optional)</span></h3>
+                <button id="model-routing-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+              </div>
+              <p class="scope-note-small">
+                Roadmap Phase 11: route a specific task type to a specific model, overriding the Default
+                AI Model above for just that type (a per-task override in the AI Assistant panel's own
+                dropdown still wins over both). For example, always send Architecture Generation's larger
+                evidence-bundle prompts to a stronger model while leaving routine Ask queries on a
+                faster/cheaper one. "Use default" means no rule for that type — it falls through to the
+                Default AI Model above, then automatic selection, exactly as if this section didn't exist.
+              </p>
+              <div id="model-routing-rows" class="model-routing-rows"></div>
+              <span id="model-routing-status" class="terminal-approval-mode-status"></span>
+            </div>
+
+            <div class="settings-section">
               <h3>Local Agent Permissions <span class="status-text">(terminal command guard — best-effort, reactive)</span></h3>
               <p id="policy-project-note" class="scope-note-small"></p>
               <div id="policy-rules" class="policy-rules"></div>

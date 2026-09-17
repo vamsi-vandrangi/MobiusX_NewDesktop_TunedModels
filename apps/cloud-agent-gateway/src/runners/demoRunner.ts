@@ -1,5 +1,6 @@
-import type { ModelOption, TaskEvent } from "@mobiusx/protocol";
+import type { ModelOption, ProposedEdit, TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
+import { classifyPersona, PERSONAS } from "./personas.js";
 
 /**
  * Always available, no external dependency. Demonstrates the real task
@@ -25,29 +26,33 @@ export const demoRunner: AgentRunner = {
       }
 
       emit({ type: "output", delta: renderOutput(input) });
-      if (input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture" || input.mode === "testing") {
-        emit({
-          type: "edits",
-          edits:
-            input.mode === "database"
-              ? demoDatabaseEdits(input)
-              : input.mode === "architecture"
-                ? demoArchitectureEdits(input)
-                : input.mode === "testing"
-                  ? demoTestingEdits(input)
-                  : [demoEdit(input)],
-        });
+      // Roadmap Phase 11 (source §26): edits computed once per mode so the
+      // scripted review below can attach the SAME persona classifyPersona()
+      // would assign for a real run — a demo user gets an honest preview of
+      // which named persona (see runners/personas.ts) would review this
+      // kind of task, not just a generic "approve" every time. "spec" is
+      // now included here too (previously reviewed nowhere, real or demo —
+      // see anthropicRunner.ts's doc comment for why that changed).
+      let edits: ProposedEdit[] = [];
+      if (input.mode === "build" || input.mode === "fix") edits = [demoEdit(input)];
+      else if (input.mode === "database") edits = demoDatabaseEdits(input);
+      else if (input.mode === "architecture") edits = demoArchitectureEdits(input);
+      else if (input.mode === "testing") edits = demoTestingEdits(input);
+      else if (input.mode === "spec") edits = [demoSpecEdit(input)];
+
+      if (edits.length > 0) {
+        emit({ type: "edits", edits });
         // Second-pass Reviewer agent (PRD §11/§46) — scripted here, same as everything else in this runner.
+        const persona = classifyPersona(input.mode, edits);
         emit({
           type: "review",
           review: {
             verdict: "approve",
-            summary:
-              "[demo reviewer — no model configured] This is a scripted demo review that always approves the demo edit; configure a real model for an actual second-opinion code review.",
+            summary: `[demo reviewer — no model configured] This is a scripted demo review (as the ${PERSONAS[persona].label}) that always approves the demo edit; configure a real model for an actual second-opinion code review.`,
+            persona,
           },
         });
       }
-      if (input.mode === "spec") emit({ type: "edits", edits: [demoSpecEdit(input)] });
       emit({ type: "status", status: "completed" });
       emit({ type: "done" });
     } catch (err) {

@@ -1,6 +1,7 @@
 import type { ModelOption, TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
 import { historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
+import { runPersonaReview } from "./personas.js";
 
 /**
  * Local Ollama (https://ollama.com) — no API key, runs entirely on the
@@ -19,6 +20,14 @@ import { historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepI
  * JSON (one `{"message":{"content":"..."},"done":false}` object per line),
  * NOT Server-Sent Events — a different framing from the cloud providers,
  * handled by streamOllamaNdjson below rather than reusing streamOpenAiSse.
+ *
+ * Runs the same persona-based second-pass Reviewer agent the other runners
+ * do (roadmap Phase 11, source §26/§27 — see runners/personas.ts), via one
+ * extra non-streamed /api/chat call (`stream: false`) after edits are
+ * parsed. A small local model is more likely to miss the review's expected
+ * JSON verdict shape too — handled the same conservative way as any other
+ * unparseable review (personas.ts#parseReview: reported as "concerns", not
+ * silently dropped or upgraded to "approve").
  */
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 const TAGS_TIMEOUT_MS = 1000;
@@ -163,12 +172,18 @@ export const ollamaRunner: AgentRunner = {
               delta: `\n\n(${droppedCount} proposed edit(s) omitted: the model tried to "modify" a file it wasn't shown in full, or its edits JSON didn't parse — see apps/cloud-agent-gateway/src/runners/promptShared.ts#parseBuildResponse.)`,
             });
           }
-          if ((input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture" || input.mode === "testing") && edits.length > 0) {
-            emit({
-              type: "output",
-              delta:
-                '\n\n(Note: local Ollama models don\'t run the second-pass Reviewer agent yet -- that\'s currently Anthropic-only, and small local models are also more likely to miss the edits-JSON format entirely. Review these edits carefully yourself before applying.)',
-            });
+          if (
+            (input.mode === "build" ||
+              input.mode === "fix" ||
+              input.mode === "database" ||
+              input.mode === "architecture" ||
+              input.mode === "testing" ||
+              input.mode === "spec") &&
+            edits.length > 0
+          ) {
+            await runPersonaReview(input.mode, input, edits, emit, (systemPrompt, userContent) =>
+              callOllamaNonStreamed(model, systemPrompt, userContent, input.signal),
+            );
           }
         }
       } else {
@@ -190,6 +205,36 @@ export const ollamaRunner: AgentRunner = {
     }
   },
 };
+
+/**
+ * Thin non-streamed Ollama /api/chat call, used only by the second-pass
+ * persona review (see personas.ts#runPersonaReview, which supplies the
+ * persona-specific system prompt and receives this as its `callModel`
+ * closure). `stream: false` returns the whole response as one JSON object
+ * (`{message: {content: "..."}, ...}`), no NDJSON parsing required.
+ */
+async function callOllamaNonStreamed(model: string, systemPrompt: string, userContent: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch(`${baseUrl()}/api/chat`, {
+    method: "POST",
+    signal,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userContent },
+      ],
+      stream: false,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Ollama returned ${res.status} for the review call: ${body.slice(0, 500)}`);
+  }
+  const body = (await res.json()) as { message?: { content?: string }; error?: string };
+  if (body.error) throw new Error(body.error);
+  return body.message?.content ?? "";
+}
 
 /**
  * Reads Ollama's /api/chat streaming response: one JSON object per line

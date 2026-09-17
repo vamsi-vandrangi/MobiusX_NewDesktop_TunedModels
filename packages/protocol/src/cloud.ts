@@ -315,26 +315,50 @@ export interface ProposedEdit {
 
 
 /**
- * A minimal, real multi-agent primitive (PRD §11/§46): after build-mode
- * edits are proposed, a second model call (a distinct "Code Reviewer
- * Agent" persona — see anthropicRunner.ts's reviewEdits) assesses them
- * BEFORE the user decides whether to Apply. Not a second opinion the user
- * has to go request — it's produced automatically alongside the edits,
- * the same way a human reviewer would look at a diff before it merges.
- * The demo runner's version is a clearly-labeled scripted stand-in, same
- * as its demo edits.
+ * A minimal, real multi-agent primitive (PRD §11/§46): after edits are
+ * proposed, a second model call assesses them BEFORE the user decides
+ * whether to Apply. Not a second opinion the user has to go request — it's
+ * produced automatically alongside the edits, the same way a human
+ * reviewer would look at a diff before it merges. The demo runner's
+ * version is a clearly-labeled scripted stand-in, same as its demo edits.
  *
- * Currently only the anthropic runner performs this second pass — the
- * newer free-model runners (openrouter/groq/ollama) propose edits without
- * one. This is a real, known scope cut, not a silent omission — see each
- * runner's module doc comment and apps/cloud-agent-gateway/README.md's
- * "Known gaps".
+ * Roadmap Phase 11 (Multi-Agent Orchestration, source §26/§27) formalized
+ * what was originally a single generic "Code Reviewer Agent" persona into
+ * named personas with distinct review focus (see AgentPersona below and
+ * apps/cloud-agent-gateway/src/runners/personas.ts) — a Database edit is
+ * now reviewed by a persona that specifically looks for schema<->ORM
+ * drift and destructive-op risk, a Testing edit by one that checks for
+ * placeholder assertions and import-convention mismatches, and so on. Real
+ * role separation in WHAT gets checked and HOW the reviewer is framed, not
+ * (yet) separate concurrent agent processes — one review call per task,
+ * same as before this phase, just with a persona-appropriate prompt.
+ *
+ * Phase 11 also extended this second pass beyond Anthropic to the
+ * OpenAI-compatible (openrouter/groq) and Ollama runners (see each
+ * runner's own reviewEdits/runPersonaReview call site) — previously a
+ * real, documented scope cut ("Known gaps").
  */
 export type ReviewVerdict = "approve" | "concerns";
+
+/**
+ * Named agent personas (roadmap Phase 11, source §26): formalizes the
+ * second-pass Reviewer into distinct identities rather than one generic
+ * critic. See apps/cloud-agent-gateway/src/runners/personas.ts for each
+ * persona's review focus and PERSONA_MODE_MAP for how an AgentMode task
+ * (plus, for "build" mode, a lightweight path-based heuristic over the
+ * proposed edits) is classified into one of these. "devops" is defined
+ * here for completeness against the roadmap's named persona list but is
+ * not yet reachable by any shipped AgentMode — DevOps/Infrastructure
+ * Generation is roadmap Phase 14; wiring it in is that phase's job, not
+ * invented early against nothing real to review.
+ */
+export type AgentPersona = "architecture" | "database" | "backend" | "frontend" | "api" | "testing" | "devops" | "documentation" | "debugger";
 
 export interface EditReview {
   verdict: ReviewVerdict;
   summary: string;
+  /** Which named persona produced this review (see AgentPersona above). Optional so an older client/runner response without this field still parses — absence means "unknown persona", never assumed to be any particular one. */
+  persona?: AgentPersona;
 }
 
 export interface TaskDetail extends TaskSummary {

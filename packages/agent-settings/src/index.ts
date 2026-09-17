@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { AgentSettings, ModelSelection } from "@mobiusx/protocol";
+import type { AgentMode, AgentSettings, ModelSelection } from "@mobiusx/protocol";
 
 /**
  * Shared `~/.mobiusx/settings.json` read/write. Originally lived only in
@@ -25,10 +25,32 @@ const DEFAULT_SETTINGS: AgentSettings = { terminalApprovalMode: "off" };
 
 const KNOWN_MODEL_PROVIDERS = new Set(["demo", "anthropic", "openrouter", "groq", "ollama"]);
 
+// Every AgentMode this gateway actually accepts in a CreateTaskRequest (see
+// packages/protocol/src/cloud.ts's AgentMode type) — the only valid keys
+// for AgentSettings.modelRouting (roadmap Phase 11, source §27). Kept as an
+// explicit list, not derived from the type at runtime (TS types don't
+// exist at runtime), and deliberately checked against directly rather than
+// just accepting any string key, so a typo'd or stale mode name in a
+// hand-edited settings.json is dropped rather than silently carried
+// forward as a routing rule that can never match a real task.
+const KNOWN_AGENT_MODES = new Set<AgentMode>(["ask", "plan", "build", "spec", "fix", "database", "architecture", "testing"]);
+
 function isValidModelSelection(value: unknown): value is ModelSelection {
   if (!value || typeof value !== "object") return false;
   const v = value as { provider?: unknown; model?: unknown };
   return typeof v.provider === "string" && KNOWN_MODEL_PROVIDERS.has(v.provider) && typeof v.model === "string" && v.model.length > 0;
+}
+
+/** Validates a raw `modelRouting` value field-by-field, same philosophy as isValidModelSelection above: an unrecognized mode key or a malformed selection for one mode is dropped individually, never discarding the whole map over one bad entry. Returns undefined for an empty or entirely invalid input (so callers can treat "no valid entries" the same as "field absent"). */
+function sanitizeModelRouting(value: unknown): Partial<Record<AgentMode, ModelSelection>> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const result: Partial<Record<AgentMode, ModelSelection>> = {};
+  for (const [mode, selection] of Object.entries(value as Record<string, unknown>)) {
+    if (KNOWN_AGENT_MODES.has(mode as AgentMode) && isValidModelSelection(selection)) {
+      result[mode as AgentMode] = selection;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 /**
@@ -66,6 +88,10 @@ export async function getSettings(): Promise<AgentSettings> {
   if (parsed.fixLoopMode === "manual" || parsed.fixLoopMode === "auto") {
     result.fixLoopMode = parsed.fixLoopMode;
   }
+  const modelRouting = sanitizeModelRouting(parsed.modelRouting);
+  if (modelRouting) {
+    result.modelRouting = modelRouting;
+  }
   return result;
 }
 
@@ -76,8 +102,20 @@ export async function getSettings(): Promise<AgentSettings> {
  * untouched) — a plain `Partial<AgentSettings>` can't express "remove
  * this" since `undefined` there already means "don't touch it".
  */
-export type SettingsPatch = Partial<Omit<AgentSettings, "defaultModel">> & {
+export type SettingsPatch = Partial<Omit<AgentSettings, "defaultModel" | "modelRouting">> & {
   defaultModel?: ModelSelection | null;
+  /**
+   * Per-mode merge, not a wholesale replace (roadmap Phase 11, source §27):
+   * each key present here is applied to that ONE mode's routing entry —
+   * `null` clears that mode's rule (falls back to `defaultModel`/automatic,
+   * same as never having set one), a `ModelSelection` sets/replaces it, and
+   * a mode simply absent from this object is left exactly as it already
+   * was. This mirrors `defaultModel`'s null-clears convention above, at the
+   * per-mode granularity the Settings UI's per-mode dropdowns need — e.g.
+   * clearing just the "architecture" routing rule must never also clear
+   * "testing"'s.
+   */
+  modelRouting?: Partial<Record<AgentMode, ModelSelection | null>>;
 };
 
 export async function updateSettings(patch: SettingsPatch): Promise<AgentSettings> {
@@ -96,6 +134,21 @@ export async function updateSettings(patch: SettingsPatch): Promise<AgentSetting
   }
   if (patch.fixLoopMode !== undefined) {
     next.fixLoopMode = patch.fixLoopMode;
+  }
+  if (patch.modelRouting !== undefined) {
+    const merged: Partial<Record<AgentMode, ModelSelection>> = { ...current.modelRouting };
+    for (const [mode, selection] of Object.entries(patch.modelRouting) as [AgentMode, ModelSelection | null | undefined][]) {
+      if (selection === null) {
+        delete merged[mode];
+      } else if (selection !== undefined) {
+        merged[mode] = selection;
+      }
+    }
+    if (Object.keys(merged).length > 0) {
+      next.modelRouting = merged;
+    } else {
+      delete next.modelRouting;
+    }
   }
 
   await mkdir(SETTINGS_DIR, { recursive: true });

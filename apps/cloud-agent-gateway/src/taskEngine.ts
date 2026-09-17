@@ -18,7 +18,7 @@ export async function startTask(req: CreateTaskRequest): Promise<TaskSummary> {
   // actually serves this task — a per-task override, the user's Settings
   // default, or an automatic choice, in that order. See registry.ts.
   const settings = await getSettings();
-  const { runner, modelId, fallbackNote } = await resolveRunner(req.model, settings);
+  const { runner, modelId, fallbackNote } = await resolveRunner(req.model, settings, req.mode);
 
   // Phase 5: scan+redact any code context before it ever reaches a runner
   // (and, for real-model runners, before it leaves the machine at all).

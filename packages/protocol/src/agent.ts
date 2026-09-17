@@ -7,7 +7,7 @@
  */
 
 import type { PolicyMatch } from "./governance.js";
-import type { ModelSelection, ProposedEdit } from "./cloud.js";
+import type { AgentMode, ModelSelection, ProposedEdit } from "./cloud.js";
 
 export interface AgentHandshake {
   /** Port the agent is listening on (loopback only). */
@@ -238,6 +238,22 @@ export interface AgentSettings {
    * fully-manual flow without needing a migration.
    */
   fixLoopMode?: "manual" | "auto";
+  /**
+   * Per-task-type model routing (roadmap Phase 11, source §27): a standing
+   * choice of which model handles a given AgentMode, distinct from BOTH the
+   * single overall `defaultModel` above and a one-off per-task override in
+   * the AI Assistant panel. Resolution order (see
+   * apps/cloud-agent-gateway/src/runners/registry.ts#resolveRunner): a
+   * per-task override always wins first; then, for that task's specific
+   * mode, this map; then `defaultModel`; then automatic selection. Absent
+   * entirely, or missing a given mode's key, means "no routing rule for
+   * this mode" — falls through to `defaultModel`/automatic exactly as
+   * before this phase, so an older settings.json with no opinion on this
+   * needs no migration. Example use: always send "architecture" mode's
+   * larger evidence-bundle prompts to a stronger model while leaving
+   * routine "ask" queries on a faster/cheaper one.
+   */
+  modelRouting?: Partial<Record<AgentMode, ModelSelection>>;
 }
 
 /**

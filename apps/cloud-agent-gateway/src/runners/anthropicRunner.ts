@@ -1,11 +1,14 @@
-import type { EditReview, ModelOption, ProposedEdit, TaskEvent } from "@mobiusx/protocol";
+import type { ModelOption, ProposedEdit, TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
 import { EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
+import { parseReview, runPersonaReview } from "./personas.js";
 
 // Re-exported so existing imports (test/anthropicRunner.test.ts) keep working
-// unchanged now that the underlying implementation lives in promptShared.ts,
-// shared with the other chat-style runners (openrouter/groq/ollama).
-export { EDITS_MARKER, parseBuildResponse };
+// unchanged now that the underlying implementation lives in promptShared.ts
+// (shared with the other chat-style runners) and, for the review pass,
+// personas.ts (roadmap Phase 11 — shared across ALL runners now, not just
+// this one; see that module's doc comment).
+export { EDITS_MARKER, parseBuildResponse, parseReview };
 
 /**
  * Real model calls via Anthropic's Messages API — activated only if the
@@ -108,13 +111,23 @@ export const anthropicRunner: AgentRunner = {
               delta: `\n\n(${droppedCount} proposed edit(s) omitted: the model tried to "modify" a file it wasn't shown in full, or its edits JSON didn't parse — see apps/cloud-agent-gateway/src/runners/promptShared.ts#parseBuildResponse.)`,
             });
           }
-          // Second-pass Reviewer agent (PRD §11/§46) — only for real code
-          // edits (build mode), not spec mode's requirements documents.
-          // A distinct model call with a critic persona, run automatically
-          // so the user sees a review alongside the diff, not something
-          // they have to separately request.
-          if ((input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture" || input.mode === "testing") && edits.length > 0) {
-            await reviewEdits(apiKey, model, input, edits, emit);
+          // Second-pass Reviewer agent (PRD §11/§46). Roadmap Phase 11
+          // (source §26) extended this to "spec" mode too (previously
+          // excluded — see personas.ts's module doc comment for why: it
+          // gives the new Documentation persona a real, reachable mode to
+          // review) and formalized the single generic critic into named
+          // personas — see personas.ts#runPersonaReview, shared with every
+          // other runner now, not just this one.
+          if (
+            (input.mode === "build" ||
+              input.mode === "fix" ||
+              input.mode === "database" ||
+              input.mode === "architecture" ||
+              input.mode === "testing" ||
+              input.mode === "spec") &&
+            edits.length > 0
+          ) {
+            await runPersonaReview(input.mode, input, edits, emit, (systemPrompt, userContent) => callAnthropicNonStreamed(apiKey, model, systemPrompt, userContent, input.signal));
           }
         }
       } else {
@@ -153,109 +166,39 @@ export const anthropicRunner: AgentRunner = {
 };
 
 /**
- * The second-pass Reviewer agent (PRD §11/§46): a distinct, non-streamed
- * Anthropic call with a critic system prompt, given the original request
- * and the full proposed edits, expected to answer with a small JSON
- * verdict. This is a genuinely separate model call (not a re-labeling of
- * the first response) — it can disagree with the edits it's reviewing.
- *
- * Failure modes are handled conservatively, never by silently approving:
- * a review call that errors (network, non-2xx, cancellation aside) or
- * whose response doesn't parse as {verdict, summary} is reported as
- * verdict "concerns" with an honest explanation, rather than dropped or
- * defaulted to "approve". An AbortError is re-thrown so cancellation
- * during review is handled uniformly by run()'s own catch block (the
- * whole task ends up "cancelled", not "completed" with a missing review).
+ * Thin non-streamed Anthropic Messages API call, used only by the
+ * second-pass persona review (see personas.ts#runPersonaReview, which
+ * supplies the persona-specific system prompt and receives this as its
+ * `callModel` closure). Kept separate from the main streaming call above
+ * because a review verdict is small and needed all at once, not
+ * token-by-token.
  */
-async function reviewEdits(
-  apiKey: string,
-  model: string,
-  input: RunnerInput,
-  edits: ProposedEdit[],
-  emit: (event: TaskEvent) => void,
-): Promise<void> {
-  const step = {
-    id: stepId(),
-    label: "Running second-pass code review",
-    status: "in_progress" as const,
-    startedAt: new Date().toISOString(),
-  };
-  emit({ type: "step", step });
+async function callAnthropicNonStreamed(apiKey: string, model: string, systemPrompt: string, userContent: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    signal,
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userContent }],
+      stream: false,
+    }),
+  });
 
-  try {
-    const userContent = [
-      `Original request: "${input.prompt}"`,
-      "",
-      "Proposed edits:",
-      ...edits.map((e) => `--- ${e.path} (${e.action}) ---\n${e.content}`),
-    ].join("\n\n");
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: input.signal,
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 1024,
-        system: reviewSystemPrompt(),
-        messages: [{ role: "user", content: userContent }],
-        stream: false,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Anthropic API returned ${res.status} for the review call`);
-    }
-    const body = (await res.json()) as { content?: { type?: string; text?: string }[] };
-    const text = (body.content ?? [])
-      .filter((b) => b.type === "text" && typeof b.text === "string")
-      .map((b) => b.text as string)
-      .join("");
-
-    emit({ type: "review", review: parseReview(text) });
-    emit({ type: "step", step: { ...step, status: "completed", completedAt: new Date().toISOString() } });
-  } catch (err) {
-    if ((err as Error).name === "AbortError") throw err;
-    emit({
-      type: "review",
-      review: {
-        verdict: "concerns",
-        summary: `Second-pass review could not be completed: ${(err as Error).message}`,
-      },
-    });
-    emit({ type: "step", step: { ...step, status: "completed", completedAt: new Date().toISOString() } });
+  if (!res.ok) {
+    throw new Error(`Anthropic API returned ${res.status} for the review call`);
   }
-}
-
-function reviewSystemPrompt(): string {
-  return [
-    "You are a Code Reviewer Agent — a second, independent pass over another agent's proposed file edits, run automatically before a human decides whether to apply them.",
-    "Assess: correctness risk, security concerns (hardcoded secrets, injection, unsafe input handling), whether the change actually addresses the stated request, and obvious code-quality issues.",
-    'Respond with EXACTLY one JSON object and nothing else: {"verdict": "approve" | "concerns", "summary": "1-3 sentences explaining the verdict"}.',
-    'Use "concerns" whenever you are not confident the change is correct and safe — do not default to "approve" out of politeness or to avoid conflict.',
-  ].join("\n");
-}
-
-/** Lenient JSON extraction matching parseBuildResponse's style, but with a safe default: an unparseable review is reported as "concerns", never silently dropped or upgraded to "approve". */
-export function parseReview(text: string): EditReview {
-  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const jsonText = (fenceMatch ? fenceMatch[1] : text).trim();
-  try {
-    const parsed = JSON.parse(jsonText) as { verdict?: unknown; summary?: unknown };
-    if ((parsed.verdict === "approve" || parsed.verdict === "concerns") && typeof parsed.summary === "string") {
-      return { verdict: parsed.verdict, summary: parsed.summary };
-    }
-  } catch {
-    /* fall through to the safe default below */
-  }
-  return {
-    verdict: "concerns",
-    summary: "Reviewer response could not be parsed as a verdict — treating as unreviewed rather than silently approving.",
-  };
+  const body = (await res.json()) as { content?: { type?: string; text?: string }[] };
+  return (body.content ?? [])
+    .filter((b) => b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text as string)
+    .join("");
 }
 
 /**

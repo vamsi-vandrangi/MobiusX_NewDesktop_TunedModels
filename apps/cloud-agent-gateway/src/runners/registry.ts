@@ -1,4 +1,4 @@
-import type { AgentSettings, ModelOption, ModelProvider, ModelSelection } from "@mobiusx/protocol";
+import type { AgentMode, AgentSettings, ModelOption, ModelProvider, ModelSelection } from "@mobiusx/protocol";
 import type { AgentRunner } from "./types.js";
 import { demoRunner } from "./demoRunner.js";
 import { anthropicRunner } from "./anthropicRunner.js";
@@ -78,15 +78,21 @@ export interface ResolvedRunner {
 /**
  * Resolves which runner (and which specific model) should serve a task.
  * Priority: `requested` (a per-task override from CreateTaskRequest.model)
- * > `settings.defaultModel` (the user's standing Settings choice) >
- * automatic selection (see AUTO_PRIORITY). A requested/default selection
- * that names an unknown provider, or a model that provider currently
- * reports as unavailable, falls back to automatic selection rather than
- * erroring the whole task — but ALWAYS with a `fallbackNote` explaining
- * why, never silently.
+ * > `settings.modelRouting?.[mode]` (roadmap Phase 11, source §27 —
+ * per-task-type model routing: a standing choice of which model handles
+ * THIS task's specific mode) > `settings.defaultModel` (the user's overall
+ * standing Settings choice) > automatic selection (see AUTO_PRIORITY). A
+ * requested/routed/default selection that names an unknown provider, or a
+ * model that provider currently reports as unavailable, falls back to
+ * automatic selection rather than erroring the whole task — but ALWAYS
+ * with a `fallbackNote` explaining why, never silently.
+ *
+ * `mode` is required (not optional) precisely so a call site can't forget
+ * to pass it and silently skip modelRouting — see taskEngine.ts's call
+ * site, the only place `req.mode` is naturally in scope.
  */
-export async function resolveRunner(requested: ModelSelection | undefined, settings: AgentSettings): Promise<ResolvedRunner> {
-  const wanted = requested ?? settings.defaultModel;
+export async function resolveRunner(requested: ModelSelection | undefined, settings: AgentSettings, mode: AgentMode): Promise<ResolvedRunner> {
+  const wanted = requested ?? settings.modelRouting?.[mode] ?? settings.defaultModel;
   if (!wanted) return autoResolve();
 
   const runner = RUNNERS[wanted.provider];
