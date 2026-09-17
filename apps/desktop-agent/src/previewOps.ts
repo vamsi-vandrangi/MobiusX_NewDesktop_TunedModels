@@ -72,7 +72,7 @@ function findVenvUvicorn(dir: string): string | null {
 }
 
 /** Absolute path to the venv's own python interpreter -- used to run `-m venv`/`-m pip` steps against exactly the interpreter this runner will later launch uvicorn from, never whatever "python"/"pip" happens to resolve on PATH. Always the `.venv` convention (not `venv`) -- this is the one this app creates itself when auto-installing, matching findVenvUvicorn's own preferred candidate. */
-function venvPythonBin(dir: string): string {
+export function venvPythonBin(dir: string): string {
   return process.platform === "win32" ? join(dir, ".venv", "Scripts", "python.exe") : join(dir, ".venv", "bin", "python3");
 }
 

@@ -25,7 +25,7 @@ export const demoRunner: AgentRunner = {
       }
 
       emit({ type: "output", delta: renderOutput(input) });
-      if (input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture") {
+      if (input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture" || input.mode === "testing") {
         emit({
           type: "edits",
           edits:
@@ -33,7 +33,9 @@ export const demoRunner: AgentRunner = {
               ? demoDatabaseEdits(input)
               : input.mode === "architecture"
                 ? demoArchitectureEdits(input)
-                : [demoEdit(input)],
+                : input.mode === "testing"
+                  ? demoTestingEdits(input)
+                  : [demoEdit(input)],
         });
         // Second-pass Reviewer agent (PRD §11/§46) — scripted here, same as everything else in this runner.
         emit({
@@ -78,6 +80,7 @@ function stepsFor(mode: RunnerInput["mode"]): string[] {
   if (mode === "fix") return ["Reading verification failure", "Reviewing project context", "Drafting fix"];
   if (mode === "database") return ["Reading request", "Checking for an existing DB/ORM convention", "Drafting schema, migration, and model changes"];
   if (mode === "architecture") return ["Reading architecture evidence bundle", "Mapping real components, routes, and schema", "Drafting HLD.md and LLD.md with Mermaid diagrams"];
+  if (mode === "testing") return ["Reading testing evidence bundle", "Matching existing test style", "Drafting test file(s)"];
   return ["Reading request", "Reviewing project context", "Drafting proposed changes"];
 }
 
@@ -108,6 +111,9 @@ function renderOutput(input: RunnerInput): string {
   }
   if (input.mode === "architecture") {
     return `${banner}Architecture Generation for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "architecture" mode (roadmap Phase 9) proposes docs/architecture/HLD.md and docs/architecture/LLD.md as one coherent set, the same way "build" mode proposes code edits: only desktop-agent ever writes them, and only once you review and click Apply. A real model is handed a pre-computed, evidence-cited bundle (GET /architecture-evidence: real components, schema/ORM relationships, HTTP routes, external integrations) and instructed to render it faithfully rather than invent generic boxes. Below is a clearly-labeled DEMO HLD/LLD pair so you can exercise that flow without a real model configured.${context}`;
+  }
+  if (input.mode === "testing") {
+    return `${banner}Testing Engine for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "testing" mode (roadmap Phase 10) proposes real test file(s) for the code shown to you, the same way "build" mode proposes code edits: only desktop-agent ever writes them, and only once you review and click Apply. A real model is handed a pre-computed evidence bundle (GET /testing-evidence: this project's real detected test framework(s) and an existing test file sample when one exists) and instructed to write tests only against real, visible code -- never an imagined API. Below is a clearly-labeled DEMO test file so you can exercise that flow without a real model configured.${context}`;
   }
   return `${banner}Proposed-changes summary for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "build" mode proposes full-file-content edits (below) that only desktop-agent ever writes to disk, and only once you review and click Apply (see docs/ARCHITECTURE.md §8's approval step). Below is a clearly-labeled DEMO edit so you can exercise that full propose → review → apply flow without a real model configured. A real model (see README) would propose an edit addressing your actual prompt instead.${context}`;
 }
@@ -327,6 +333,45 @@ CREATE TABLE demo_items (
     name TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+`,
+    },
+  ];
+}
+
+/**
+ * Same idea as demoEdit/demoDatabaseEdits/demoArchitectureEdits above, but
+ * for "testing" mode (roadmap Phase 10, Testing Engine): a single,
+ * clearly-labeled placeholder test file, so the propose -> review -> apply
+ * flow is exercisable without a model configured. This reference runner has
+ * no live testing-evidence bundle to react to (that only exists once a real
+ * desktop-agent project is open with a real model attached), so it always
+ * proposes a plain pytest-flavored placeholder -- explicitly labeled either
+ * way, same as every other demo edit in this file.
+ */
+function demoTestingEdits(input: RunnerInput): { path: string; action: "create"; content: string }[] {
+  return [
+    {
+      path: "tests/test_demo_placeholder.py",
+      action: "create",
+      content: `# Demo test file (not a real AI-generated test)
+#
+# Created by the cloud-agent-gateway's DEMO runner, not a real model. No
+# ANTHROPIC_API_KEY is configured, so there is no real analysis of your
+# project's code behind this -- it exists only to exercise MobiusX.ai WDC's
+# Testing Engine flow (roadmap Phase 10) end-to-end:
+#
+# 1. The gateway proposed this file (a "testing" task).
+# 2. You reviewed it and clicked Apply.
+# 3. POST /verify can now run it (if this project has pytest available).
+#
+# Original prompt: "${input.prompt}"
+# Safe to delete. Configure a real model (see apps/cloud-agent-gateway/README.md)
+# to get actual tests grounded in this project's real detected framework and
+# real existing code instead of this placeholder.
+
+
+def test_demo_placeholder():
+    assert True, "This is a DEMO placeholder test -- configure a real model for actual generated tests."
 `,
     },
   ];

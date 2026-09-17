@@ -1011,7 +1011,7 @@ async function findRelevantFiles(query, mode) {
     // already exists -- refusing to overwrite a create". Not a model
     // quality problem -- the prompt's own instructions left no other
     // option once content was withheld.
-    if (mode !== "build" && mode !== "fix" && mode !== "database") return { hits, storeSize: result.storeSize };
+    if (mode !== "build" && mode !== "fix" && mode !== "database" && mode !== "testing") return { hits, storeSize: result.storeSize };
     const withContent = await Promise.all(
       hits.map(async (h) => {
         try {
@@ -1579,6 +1579,7 @@ function createAssistantPanel(container) {
         <button class="mode-btn" data-mode="spec" title="Requirements Engineering — generates a structured spec file for review, doesn't write code">Spec</button>
         <button class="mode-btn" data-mode="database" title="Database Engineering — proposes a schema, migration, and ORM model changes as one set; writes real files like Build">Database</button>
         <button class="mode-btn" data-mode="architecture" title="Architecture Generation — proposes docs/architecture/HLD.md and LLD.md with evidence-grounded Mermaid diagrams; writes real files like Build">Architecture</button>
+        <button class="mode-btn" data-mode="testing" title="Testing Engine — writes real test file(s) for the code shown, grounded in this project's real detected test framework; writes real files like Build">Testing</button>
       </div>
       <select class="model-select" title="Which AI model handles this task — overrides the Settings default for this task only"></select>
     </div>
@@ -1747,10 +1748,10 @@ function createAssistantPanel(container) {
     // real friction, not a hypothetical: a user submitted a Build request
     // with no project open, got a full proposed-edits response, and had no
     // way to tell anything was wrong until Apply silently did nothing.
-    if ((mode === "build" || mode === "spec" || mode === "database" || mode === "architecture") && !currentProjectPath) {
+    if ((mode === "build" || mode === "spec" || mode === "database" || mode === "architecture" || mode === "testing") && !currentProjectPath) {
       addMsg(text, "user");
       input.value = "";
-      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : mode === "database" ? "Database" : "Architecture";
+      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : mode === "database" ? "Database" : mode === "architecture" ? "Architecture" : "Testing";
       addMsg(
         `${modeLabel} mode writes real files, so it needs a project open first — click "New Project…" or "Open Project…" at the top, then send this again.`,
         "system",
@@ -1764,7 +1765,7 @@ function createAssistantPanel(container) {
     const stream = addStreamingMsg();
     const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
     try {
-      let relevantFiles, indexedChunkCount, architectureEvidence;
+      let relevantFiles, indexedChunkCount, architectureEvidence, testingEvidence;
       if (mode === "architecture") {
         relevantFiles = await fetchArchitectureRelevantFiles();
         indexedChunkCount = undefined;
@@ -1779,6 +1780,19 @@ function createAssistantPanel(container) {
       } else {
         ({ hits: relevantFiles, storeSize: indexedChunkCount } = await findRelevantFiles(text, mode));
       }
+      // Testing mode's prompt is grounded in this bundle (real detected test
+      // framework(s) + an existing test file sample, see testingContext.ts),
+      // and Build mode uses it too for its conditional companion-test
+      // instruction (buildModeTestingBlock in promptShared.ts) -- so both
+      // modes fetch it here, honestly falling back to undefined (never a
+      // guessed shape) if the desktop agent has no project open or errors.
+      if (mode === "build" || mode === "testing") {
+        try {
+          testingEvidence = await api("/testing-evidence");
+        } catch {
+          testingEvidence = undefined;
+        }
+      }
       // "" (Auto) means: omit `model` entirely and let the gateway's
       // resolveRunner() choose (Settings default, else best configured
       // provider, else demo) — see populateModelSelect above.
@@ -1789,7 +1803,7 @@ function createAssistantPanel(container) {
           mode,
           prompt: text,
           projectContext: taskProjectPath
-            ? { projectPath: taskProjectPath, relevantFiles, indexedChunkCount, ...(architectureEvidence ? { architectureEvidence } : {}) }
+            ? { projectPath: taskProjectPath, relevantFiles, indexedChunkCount, ...(architectureEvidence ? { architectureEvidence } : {}), ...(testingEvidence ? { testingEvidence } : {}) }
             : undefined,
           model,
           history: historyTurns.slice(-MAX_HISTORY_TURNS),
@@ -2166,6 +2180,49 @@ dbConsistencyCheckBtn?.addEventListener("click", async () => {
   }
   dbConsistencyCheckBtn.disabled = false;
   dbConsistencyCheckBtn.textContent = "Check consistency";
+});
+
+// ============================================================
+// Testing Engine (roadmap Phase 10, source requirement §15): GET
+// /testing-evidence surfaces the exact evidence bundle Testing mode's
+// prompt is grounded in (apps/desktop-agent/src/testingContext.ts) -- this
+// project's real detected test framework(s) (reusing Phase 7's own
+// detection) and up to a couple of real existing test files found by
+// filename convention. Shown here so it's inspectable before asking for
+// generated tests, same as Database Consistency and Completion above.
+// ============================================================
+const testingEvidenceCheckBtn = document.getElementById("testing-evidence-check-btn");
+const testingEvidenceResultsEl = document.getElementById("testing-evidence-results");
+
+function renderTestingEvidenceReport(evidence) {
+  const frameworkRows = evidence.testFrameworks.length
+    ? evidence.testFrameworks.map((f) => `${escapeHtml(f.name)} <span class="context-row-loc">(${escapeHtml(f.location)}/ — ${escapeHtml(f.evidence)})</span>`).join(", ")
+    : "None detected";
+  const testFileList = evidence.existingTestFiles.length
+    ? evidence.existingTestFiles.map((t) => escapeHtml(t.relPath)).join(", ")
+    : "None found";
+  testingEvidenceResultsEl.innerHTML = `
+    <div class="completion-summary ${evidence.testFrameworks.length ? "consistent" : "unknown"}">${evidence.testFrameworks.length ? `${evidence.testFrameworks.length} test framework${evidence.testFrameworks.length === 1 ? "" : "s"} detected` : "No test framework detected"}</div>
+    <div class="context-rows" style="margin-top:8px;">
+      <div class="context-row"><span class="context-row-label">Test framework(s)</span><span class="context-row-value">${frameworkRows}</span></div>
+      <div class="context-row"><span class="context-row-label">Existing test file(s) found</span><span class="context-row-value">${testFileList}</span></div>
+    </div>
+    <div class="completion-meta">Generated ${new Date(evidence.generatedAt).toLocaleString()}</div>
+  `;
+}
+
+testingEvidenceCheckBtn?.addEventListener("click", async () => {
+  testingEvidenceCheckBtn.disabled = true;
+  testingEvidenceCheckBtn.textContent = "Checking…";
+  testingEvidenceResultsEl.innerHTML = `<div class="verify-pending">Scanning for test frameworks and existing test files…</div>`;
+  try {
+    const evidence = await api("/testing-evidence");
+    renderTestingEvidenceReport(evidence);
+  } catch (err) {
+    testingEvidenceResultsEl.innerHTML = `<div class="verify-none">Testing evidence check failed: ${escapeHtml(err.message)}</div>`;
+  }
+  testingEvidenceCheckBtn.disabled = false;
+  testingEvidenceCheckBtn.textContent = "Check testing evidence";
 });
 
 // ============================================================

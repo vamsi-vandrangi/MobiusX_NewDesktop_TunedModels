@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { VerificationStep, VerifyResponse } from "@mobiusx/protocol";
+import { venvPythonBin } from "./previewOps.js";
 
 const MAX_OUTPUT_CHARS = 8000; // bounded so a noisy test run can't blow up the response/DB
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -18,7 +20,13 @@ const KNOWN_SCRIPT_NAMES: { name: string; label: string }[] = [
 interface PlannedStep {
   label: string;
   command: string;
-  scriptName: string;
+  /** Absolute directory this step's process runs in — the npm scripts always run at the project root; a Python test step runs inside its own backend subdirectory (see detectPythonTestSteps), the same per-directory scoping projectContext.ts and architectureContext.ts already use. */
+  cwd: string;
+  /** The literal binary spawned (never shell-interpreted — see runOne). */
+  spawnCmd: string;
+  spawnArgs: string[];
+  /** Set only for an npm-script step — kept for readability/tests; not used by runOne (spawnCmd/spawnArgs are). */
+  scriptName?: string;
 }
 
 /**
@@ -48,45 +56,112 @@ export async function detectVerificationSteps(projectRoot: string): Promise<Plan
   const steps: PlannedStep[] = [];
   for (const { name, label } of KNOWN_SCRIPT_NAMES) {
     if (typeof scripts[name] === "string") {
-      steps.push({ label: `${label} (npm run ${name})`, command: `npm run ${name}`, scriptName: name });
+      steps.push({
+        label: `${label} (npm run ${name})`,
+        command: `npm run ${name}`,
+        cwd: projectRoot,
+        spawnCmd: "npm",
+        spawnArgs: ["run", name],
+        scriptName: name,
+      });
     }
   }
   return steps;
 }
 
+// Same short candidate-directory list projectContext.ts/architectureContext.ts
+// already use for "where might this project's backend live" — many
+// generated projects (see Test Projects/GreenThumbGarden) have no root
+// package.json at all, so a Python backend's own test suite would
+// otherwise be invisible to verification entirely.
+const PYTHON_TEST_CANDIDATE_DIRS = [".", "backend", "server", "api"];
+
 /**
- * Runs each planned step via `npm run <script>` in the project root,
- * sequentially (later steps run regardless of earlier failures — each is
- * independent evidence, not a pipeline that stops on first red). Every
- * step gets a hard timeout (SIGTERM, then SIGKILL after a short grace
- * period if it doesn't exit) so a hung dev server or watch-mode test
- * runner can't hang verification forever.
+ * Testing Engine (roadmap Phase 10, source requirement §15): verify.ts
+ * previously only ever ran scripts from the project's ROOT package.json —
+ * meaning a Python backend's pytest suite (this app's own primary test
+ * fixture, GreenThumbGarden, included) was never actually executed by
+ * "Run verification" at all, npm script or not. A generated test that
+ * never gets run isn't "validated the same way a fix is" — it's just a
+ * file. This closes that gap: only ever runs pytest when this project's
+ * own requirements.txt/pyproject.toml actually declares it as a
+ * dependency (the same "real evidence, never invented" discipline as
+ * every other detector in this codebase) — never assumed just because a
+ * .py file exists. Prefers this project's own `.venv` interpreter (the
+ * exact convention previewOps.ts already establishes for launching
+ * uvicorn, reused here via venvPythonBin so the two never drift apart),
+ * falling back to a bare `python3`/`python` on PATH when no venv exists
+ * yet.
+ */
+export async function detectPythonTestSteps(projectRoot: string): Promise<PlannedStep[]> {
+  const steps: PlannedStep[] = [];
+  for (const rel of PYTHON_TEST_CANDIDATE_DIRS) {
+    const dir = join(projectRoot, rel);
+    let raw: string | null = null;
+    try {
+      raw = await readFile(join(dir, "requirements.txt"), "utf8");
+    } catch {
+      try {
+        raw = await readFile(join(dir, "pyproject.toml"), "utf8");
+      } catch {
+        continue;
+      }
+    }
+    // requirements.txt / poetry-style TOML tables declare pytest at the
+    // START of its own line ("pytest==8.0.0", or "pytest = "^8.0"" under
+    // [tool.poetry.dependencies]) -- but PEP 621's pyproject.toml format
+    // (the more common one today) lists it as a quoted entry inside a
+    // dependencies array instead: dependencies = ["fastapi", "pytest>=8.0"].
+    // Match both shapes rather than just the first -- a real fixture using
+    // the PEP 621 array form was silently missed before this.
+    if (!/^\s*pytest\b|["']pytest\b/im.test(raw)) continue; // only run a test framework this project actually declared, never invented
+    const venvPython = venvPythonBin(dir);
+    const pythonBin = existsSync(venvPython) ? venvPython : process.platform === "win32" ? "python" : "python3";
+    const displayBin = pythonBin === venvPython ? (process.platform === "win32" ? ".venv\\Scripts\\python" : ".venv/bin/python3") : pythonBin;
+    steps.push({
+      label: `Test (pytest, ${rel === "." ? "root" : rel}/)`,
+      command: `${displayBin} -m pytest -q`,
+      cwd: dir,
+      spawnCmd: pythonBin,
+      spawnArgs: ["-m", "pytest", "-q"],
+    });
+  }
+  return steps;
+}
+
+/**
+ * Runs each planned step in its own directory, sequentially (later steps
+ * run regardless of earlier failures — each is independent evidence, not
+ * a pipeline that stops on first red). Every step gets a hard timeout
+ * (SIGTERM, then SIGKILL after a short grace period if it doesn't exit)
+ * so a hung dev server or watch-mode test runner can't hang verification
+ * forever.
  */
 export async function runVerificationSteps(
-  projectRoot: string,
   planned: PlannedStep[],
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<VerificationStep[]> {
   const results: VerificationStep[] = [];
   for (const step of planned) {
-    results.push(await runOne(projectRoot, step, timeoutMs));
+    results.push(await runOne(step, timeoutMs));
   }
   return results;
 }
 
-function runOne(projectRoot: string, step: PlannedStep, timeoutMs: number): Promise<VerificationStep> {
+function runOne(step: PlannedStep, timeoutMs: number): Promise<VerificationStep> {
   return new Promise((resolve) => {
     const start = Date.now();
-    // detached:true puts npm (and everything it spawns) in its own process
-    // group, so a timeout can kill the WHOLE tree via process.kill(-pid, ...)
-    // — killing just the immediate npm process leaves its grandchildren (the
-    // actual build/test runner) holding stdout/stderr open, which means the
-    // "close" event below would otherwise never fire and this would hang
-    // forever despite the timeout. Windows doesn't have POSIX process
-    // groups the same way, so it falls back to killing just the direct
-    // child there (a known, narrower guarantee on that platform).
-    const child = spawn("npm", ["run", step.scriptName], {
-      cwd: projectRoot,
+    // detached:true puts the spawned process (and everything it spawns) in
+    // its own process group, so a timeout can kill the WHOLE tree via
+    // process.kill(-pid, ...) — killing just the immediate process leaves
+    // its grandchildren (the actual build/test runner) holding
+    // stdout/stderr open, which means the "close" event below would
+    // otherwise never fire and this would hang forever despite the
+    // timeout. Windows doesn't have POSIX process groups the same way, so
+    // it falls back to killing just the direct child there (a known,
+    // narrower guarantee on that platform).
+    const child = spawn(step.spawnCmd, step.spawnArgs, {
+      cwd: step.cwd,
       env: process.env,
       shell: false,
       detached: process.platform !== "win32",
@@ -164,11 +239,11 @@ function runOne(projectRoot: string, step: PlannedStep, timeoutMs: number): Prom
 
 /** Detects + runs verification for a project in one call, and computes the overall verdict. */
 export async function verifyProject(projectRoot: string, timeoutMs?: number): Promise<VerifyResponse> {
-  const planned = await detectVerificationSteps(projectRoot);
+  const planned = [...(await detectVerificationSteps(projectRoot)), ...(await detectPythonTestSteps(projectRoot))];
   if (planned.length === 0) {
     return { projectPath: projectRoot, overall: "no-verification-available", steps: [] };
   }
-  const steps = await runVerificationSteps(projectRoot, planned, timeoutMs);
+  const steps = await runVerificationSteps(planned, timeoutMs);
   const overall = steps.every((s) => s.status === "passed") ? "passed" : "failed";
   return { projectPath: projectRoot, overall, steps };
 }

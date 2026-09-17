@@ -503,6 +503,43 @@ export interface ArchitectureEvidence {
 export type ArchitectureEvidenceResponse = ArchitectureEvidence;
 
 /**
+ * Testing Engine (roadmap Phase 10, source requirement §15): a real
+ * existing test file this project already has -- gathered so Testing
+ * mode's prompt can show the model a REAL example of this project's own
+ * test framework idioms, import layout, and assertion style rather than
+ * inventing a generic one, the same "evidence over invention" discipline
+ * ArchitectureEvidence's routes/relationships fields already use. `[]` on
+ * TestingEvidence.existingTestFiles means honestly what it says -- this
+ * project has no test files yet -- not that none were looked for.
+ */
+export interface ExistingTestFileSample {
+  relPath: string;
+  content: string;
+}
+
+/**
+ * The evidence bundle Testing mode's prompt (and Build mode's optional
+ * companion-test instruction) is grounded in -- gathered by
+ * apps/desktop-agent/src/testingContext.ts. `testFrameworks` reuses Phase
+ * 7's own project-context detection (DetectedComponent entries with
+ * category "testFramework") rather than re-guessing a framework from
+ * scratch -- if this project has no test framework installed for the
+ * language being tested, `testFrameworks` is honestly empty and the
+ * prompt is instructed to say so and propose nothing, never invent one
+ * (e.g. assume Jest for a project with no JS test dependency at all).
+ */
+export interface TestingEvidence {
+  projectPath: string;
+  generatedAt: string;
+  testFrameworks: DetectedComponent[];
+  /** Up to a small handful of this project's own existing test files, full content -- see ExistingTestFileSample's doc comment. */
+  existingTestFiles: ExistingTestFileSample[];
+}
+
+/** Body of GET /testing-evidence. */
+export type TestingEvidenceResponse = TestingEvidence;
+
+/**
  * Messages sent from the renderer, over the /terminal WebSocket, to the
  * agent. A real PTY session (see apps/desktop-agent/src/terminalWs.ts) is
  * raw byte pass-through, not request/response commands: "input" carries

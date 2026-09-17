@@ -12,7 +12,7 @@
  * less churn once that integration is scoped) — see docs/ARCHITECTURE.md §12.
  */
 
-import type { ArchitectureEvidence } from "./agent.js";
+import type { ArchitectureEvidence, TestingEvidence } from "./agent.js";
 
 /**
  * "spec" (PRD §8, Requirements Engineering) reuses the exact same
@@ -64,7 +64,23 @@ import type { ArchitectureEvidence } from "./agent.js";
  * anything but a one-line request to draw from -- see
  * docs/phase-notes/phase-9-architecture-generation.md.
  */
-export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database" | "architecture";
+/**
+ * "testing" (roadmap Phase 10, source requirement §15 -- Testing Engine)
+ * also reuses the same propose-edits/review/apply pipeline as "build": it
+ * proposes one or more real, runnable test files for the code shown to it,
+ * grounded in a dedicated evidence bundle (GET /testing-evidence, see
+ * apps/desktop-agent/src/testingContext.ts) -- this project's REAL
+ * detected test framework(s) (reusing Phase 7's own detection, never
+ * re-guessed) and, when one exists, a real existing test file to match
+ * style against. verify.ts (see roadmap Phase 6) now also actually RUNS a
+ * detected Python test suite (previously root-package.json-only), so a
+ * generated test is validated the same way a fix is, not just written and
+ * forgotten. Build mode also gains a conditional instruction, gated on
+ * this same evidence bundle, to propose a companion test file alongside
+ * new backend/frontend source it creates -- never inventing a framework
+ * this project doesn't already have.
+ */
+export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database" | "architecture" | "testing";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -190,6 +206,14 @@ export interface ProjectContext {
    * Absent for every other mode.
    */
   architectureEvidence?: ArchitectureEvidence;
+  /**
+   * Present for a "testing"-mode task, and optionally attached to a
+   * "build"-mode task too (see AgentMode's doc comment above) -- the real,
+   * pre-computed evidence bundle (GET /testing-evidence) grounding what
+   * test framework(s) and existing test style either mode's prompt should
+   * follow. Absent for every other mode.
+   */
+  testingEvidence?: TestingEvidence;
 }
 
 /**

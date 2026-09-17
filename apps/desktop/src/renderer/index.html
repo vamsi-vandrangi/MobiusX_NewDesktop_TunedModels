@@ -261,6 +261,20 @@
             <div id="db-consistency-results"></div>
           </div>
 
+          <!-- Testing Engine (roadmap Phase 10, source requirement §15): the
+               same evidence bundle Testing mode's prompt is grounded in (see
+               apps/desktop-agent/src/testingContext.ts) -- this project's real
+               detected test framework(s) and any existing test file found, so
+               you can see exactly what the model would be shown before asking
+               it to generate tests. -->
+          <div id="testing-evidence-panel" class="panel">
+            <div id="testing-evidence-header">
+              <h3>Testing Evidence</h3>
+              <button id="testing-evidence-check-btn" class="edits-verify-btn">Check testing evidence</button>
+            </div>
+            <div id="testing-evidence-results"></div>
+          </div>
+
           <div id="tasks-layout">
             <div id="tasks-list" class="panel"></div>
             <div id="task-detail" class="panel">

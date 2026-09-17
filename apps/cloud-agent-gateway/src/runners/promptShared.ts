@@ -16,7 +16,7 @@ import type { RunnerInput } from "./types.js";
 export const EDITS_MARKER = "===MOBIUSX_EDITS===";
 
 /** Modes whose response is buffered and parsed for a structured ProposedEdit[] block, rather than streamed live token-by-token. */
-export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture"]);
+export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture", "testing"]);
 
 /**
  * Splits a build-mode response into its human-readable prose and its
@@ -316,6 +316,61 @@ export function systemPromptFor(input: RunnerInput): string {
     ].join("\n");
   }
 
+
+  if (input.mode === "testing") {
+    // Testing Engine (roadmap Phase 10, source requirement §15).
+    //
+    // verify.ts (Phase 6) only ever RAN a project's tests -- nothing in
+    // this codebase generated them. Same root-cause diagnosis as Database
+    // (Phase 8) and Architecture (Phase 9): a model asked to write tests
+    // with zero real facts about this project's test framework has
+    // nothing to go on but a guessed one, often the wrong ecosystem
+    // entirely (e.g. a Jest test for a Python backend). This mode is
+    // grounded in a dedicated evidence bundle (GET /testing-evidence, see
+    // apps/desktop-agent/src/testingContext.ts) -- this project's REAL
+    // detected test framework(s) (reusing Phase 7's own detection, never
+    // re-guessed) and, when one exists, a real existing test file to
+    // match style against -- PLUS the actual target file(s) to test,
+    // shown below via the normal relevantFiles mechanism (the same
+    // grounding build/fix already use), so tests are written against
+    // real, visible code, never an imagined API.
+    const testingEvidence = input.projectContext?.testingEvidence;
+    const testingFullContentPaths = (input.projectContext?.relevantFiles ?? [])
+      .filter((f) => f.content !== undefined)
+      .map((f) => f.relPath);
+    return [
+      "You are the MobiusX Desktop AI Assistant in TESTING mode (Testing Engine, roadmap Phase 10) -- writing real, runnable test file(s) for the code shown to you below.",
+      "",
+      "THE #1 RULE, non-negotiable: only write tests against functions, classes, routes, or exports that ACTUALLY APPEAR in the file content shown to you below -- never invent a function, parameter, or return shape you weren't shown. If you can't see what a piece of code does, test its actually-visible behavior, don't guess at intent beyond that.",
+      "",
+      testingEvidence
+        ? testingEvidenceContext(testingEvidence)
+        : "No pre-computed testing evidence bundle was available for this project (this should not normally happen) -- treat it as a signal to be extra conservative about which framework you assume, and say so plainly in your summary.",
+      "",
+      !testingEvidence || testingEvidence.testFrameworks.length === 0
+        ? 'No test framework was detected anywhere in this project (see the evidence above). Do NOT invent one -- do not assume Jest/Vitest/Mocha for JavaScript or pytest/unittest for Python just because that would be a normal default elsewhere. Say so plainly in your prose summary (e.g. which package/dependency would need to be added, if you can tell from the file(s) shown) and OMIT the EDITS_MARKER + JSON block entirely -- there is nothing correct to propose without a real framework to target.'
+        : "A test framework WAS detected above for at least part of this project. Only write tests in a framework/language pairing the evidence above actually supports (e.g. don't write a Jest test for Python code just because Jest was detected for this project's frontend) -- if the specific file(s) shown to you below are in a language/ecosystem with NO detected framework, say so plainly and omit the edits block for those files rather than guessing.",
+      "If a real existing test file sample was shown to you above, follow its exact style: the same framework idioms, import layout, fixture/setup pattern, and assertion style -- extend this project's own convention, don't introduce a competing one.",
+      "If NO existing test file sample was shown above (this project has no test files yet), use the detected framework's standard idiomatic convention instead: for pytest, a new file at <same-directory-as-the-module-under-test>/tests/test_<module>.py -- e.g. testing backend/main.py means creating backend/tests/test_main.py, NEVER a tests/ directory at the project root when the module under test lives in a subdirectory (a project-root tests/ directory is invisible to pytest when it is run from that subdirectory, which is where this project's pytest dependency and virtualenv actually live) -- or a sibling test_<name>.py directly next to the file under test if no tests/ directory exists yet either way. For a FastAPI app, use fastapi.testclient.TestClient against the real app instance shown to you, not a mocked one. For Jest/Vitest, a co-located <name>.test.ts(x) beside the file under test, or under __tests__/ if that directory already exists. For Mocha, a matching test/<name>.test.js file.",
+      "When your test imports the module under test, match that module's OWN import style EXACTLY as shown in the file content above -- never assume a package layout the project doesn't actually have. Concretely for Python: if the target file itself uses plain top-level sibling imports (e.g. main.py contains \"from database import ...\", not \"from backend.database import ...\"), your test must import it the same plain way too -- \"from main import app\", NEVER \"from backend.main import app\" -- a package-qualified import like that only resolves if the project is actually installed/run as a package, which a FastAPI backend launched as \"uvicorn main:app\" from inside its own directory (and pytest invoked the same way, from that same directory) never is. The same principle applies to JS/TS: match the target file's own relative-import depth and module resolution style -- don't invent a path alias or absolute import it doesn't already use itself.",
+      "If the ONLY test framework detected for this project's language is a browser/e2e tool (Playwright, Cypress) with no unit-test-capable framework alongside it, say so plainly and omit the edits block -- browser-driven test generation needs a running application to drive, which is roadmap Phase 12's job, not this mode's.",
+      "Cover the real, meaningful behavior of the code shown to you: at minimum one passing-case test and one edge-case/error-case test per exported function, route, or class method that has real logic. Skip trivial getters or pure re-exports. Do not write a test that only asserts a function exists or returns non-null with no real check of its actual behavior -- that kind of test is exactly the low-value placeholder this phase exists to avoid.",
+      "",
+      "CRITICAL OUTPUT FORMAT -- follow this exactly:",
+      "1. First write a brief prose summary (2-4 sentences) of what you're testing and which framework/convention you followed (or, per the rules above, why you're proposing nothing).",
+      `2. Then, on its own line by itself, output exactly ${EDITS_MARKER}`,
+      '3. Then exactly ONE fenced json code block containing every test file you\'re creating or changing, as entries in a single "edits" array, in this exact shape:',
+      '{"edits": [{"path": "relative/path/to/test_file", "action": "modify" | "create", "content": "COMPLETE new file content"}]}',
+      '"content" must be the entire new file content, never a diff or partial snippet.',
+      "When a file's content spans multiple lines, each line break must be encoded as exactly ONE JSON escape sequence: \\n (a single backslash followed by n). Do NOT double it to \\\\n (two backslashes) -- that writes literal backslash-n text into the file instead of a real line break.",
+      testingFullContentPaths.length > 0
+        ? `Only use action "modify" for one of these exact paths, which you were shown in full below: ${testingFullContentPaths.join(", ")} -- this includes an existing test file if one was shown to you, which you should EXTEND rather than replace with something narrower. Do not use "modify" for any other path.`
+        : 'You were not shown the full content of any existing test file for this code, so use action "create" for a new, sensibly-named test file path -- unless the evidence above already showed you an existing test file to extend.',
+      `Per the rules above, omit the ${EDITS_MARKER} marker and JSON block entirely if no real test framework covers the file(s) you were asked to test.`,
+      relevantFilesContext(input, true),
+    ].join("\n");
+  }
+
   const fullContentPaths = (input.projectContext?.relevantFiles ?? [])
     .filter((f) => f.content !== undefined)
     .map((f) => f.relPath);
@@ -361,6 +416,7 @@ export function systemPromptFor(input: RunnerInput): string {
     // trusted to Python general knowledge.
     "If you are writing a Python/FastAPI backend split across multiple files in the same directory (e.g. main.py, models.py, database.py all directly under backend/), import sibling modules with PLAIN top-level names -- \"from database import ...\", \"from models import ...\" -- never with a leading dot (\"from .database import ...\"). This app runs the backend as \"uvicorn main:app\" from inside that directory, not as a Python package, so a dotted relative import will crash on startup with an ImportError.",
     "If that FastAPI backend will be called from a separately-hosted frontend (e.g. a Next.js dev server on a different port, as in a typical frontend/ + backend/ project layout), add CORS support in main.py -- import and add fastapi.middleware.cors.CORSMiddleware with allow_origins including at least \"http://localhost:3000\" (and ideally \"*\" for local dev) -- otherwise the browser will block every request the frontend makes to it.",
+    buildModeTestingBlock(input.projectContext?.testingEvidence),
     fullContentPaths.length > 0
       ? `Only use action "modify" for one of these exact paths, which you were shown in full below: ${fullContentPaths.join(", ")}. Do not use "modify" for any other path.`
       : 'You were not shown the full content of any existing file, so do not use action "modify" at all — only "create" a genuinely new path.',
@@ -387,6 +443,41 @@ function architectureEvidenceContext(evidence: NonNullable<RunnerInput["projectC
     JSON.stringify(evidence, null, 2),
     "```",
   ].join("\n");
+}
+
+/**
+ * Testing Engine (roadmap Phase 10, source requirement §15). Same
+ * dump-the-real-bundle-as-JSON approach as architectureEvidenceContext
+ * above -- the model quotes real detected test frameworks / existing test
+ * file content directly rather than paraphrasing from prose.
+ */
+function testingEvidenceContext(evidence: NonNullable<RunnerInput["projectContext"]>["testingEvidence"]): string {
+  return [
+    "REAL TESTING EVIDENCE (testing-evidence bundle -- gathered directly from this project's own detected dependencies and existing test files, treat every field below as ground truth, not a suggestion):",
+    "```json",
+    JSON.stringify(evidence, null, 2),
+    "```",
+  ].join("\n");
+}
+
+/**
+ * BUILD mode's conditional companion-test instruction (roadmap Phase 10,
+ * source requirement §15's literal ask: test generation as "part of the
+ * standard Build-mode output for new backend/frontend code"). Gated on
+ * the SAME testingEvidence bundle Testing mode uses -- if this project has
+ * no detected test framework at all, this explicitly tells the model NOT
+ * to invent one rather than staying silent (silence would leave a model
+ * free to guess), matching this codebase's "never guess, say so" pattern.
+ */
+function buildModeTestingBlock(evidence: NonNullable<RunnerInput["projectContext"]>["testingEvidence"]): string {
+  if (!evidence || evidence.testFrameworks.length === 0) {
+    return "TEST GENERATION (roadmap Phase 10): no test framework was detected for this project, so do not invent one or add a companion test file for this request -- just build what was asked.";
+  }
+  const frameworks = evidence.testFrameworks.map((f) => `${f.name} (in ${f.location}/)`).join(", ");
+  return [
+    testingEvidenceContext(evidence),
+    `TEST GENERATION (roadmap Phase 10): this project has a detected test framework -- ${frameworks}. For every NEW backend or frontend source file you create in this request that contains real logic (not pure config, docs, or a migration), ALSO propose one companion test file in the SAME edits array, in that framework's convention (matching this project's existing test style shown just above, if any) -- covering at least the file's main real behavior, not just that it exists. Do not skip this just because the request didn't explicitly mention tests. Only ever use a framework already detected above for the matching language -- never a different one, and never for a language/ecosystem this project has no detected framework for.`,
+  ].join("\n\n");
 }
 
 export function relevantFilesContext(input: RunnerInput, distinguishFullContent: boolean): string {

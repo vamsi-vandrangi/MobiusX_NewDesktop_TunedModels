@@ -20,6 +20,7 @@ import type {
   ProjectContextResponse,
   DatabaseConsistencyResponse,
   ArchitectureEvidenceResponse,
+  TestingEvidenceResponse,
   ProposedEdit,
   VerifyResponse,
 } from "@mobiusx/protocol";
@@ -30,6 +31,7 @@ import { computeCompletionReport } from "./completion.js";
 import { detectProjectContext } from "./projectContext.js";
 import { checkDatabaseConsistency } from "./dbOps.js";
 import { gatherArchitectureEvidence } from "./architectureContext.js";
+import { gatherTestingEvidence } from "./testingContext.js";
 import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
@@ -319,6 +321,26 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "architecture evidence gathering failed", detail: (err as Error).message });
+    }
+  });
+
+  // Testing Engine (roadmap Phase 10, source requirement §15): the
+  // grounding evidence bundle Testing mode's prompt (and Build mode's
+  // optional companion-test instruction) are built from -- see
+  // testingContext.ts's doc comment for exactly what's gathered and what's
+  // honestly reported empty instead of guessed. Exposed as its own route,
+  // same transparency precedent as /project-context, /db/consistency, and
+  // /architecture-evidence.
+  router.get("/testing-evidence", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: TestingEvidenceResponse = await gatherTestingEvidence(projectState.path);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "testing evidence gathering failed", detail: (err as Error).message });
     }
   });
 
