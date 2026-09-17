@@ -16,7 +16,7 @@ import type { RunnerInput } from "./types.js";
 export const EDITS_MARKER = "===MOBIUSX_EDITS===";
 
 /** Modes whose response is buffered and parsed for a structured ProposedEdit[] block, rather than streamed live token-by-token. */
-export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture", "testing"]);
+export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture", "testing", "devops"]);
 
 /**
  * Splits a build-mode response into its human-readable prose and its
@@ -394,6 +394,87 @@ export function systemPromptFor(input: RunnerInput): string {
     ].join("\n");
   }
 
+  if (input.mode === "devops") {
+    // DevOps/Infrastructure Generation (roadmap Phase 14, source
+    // requirement §21 -- "Docker/Compose/K8s/Terraform + CI/CD pipeline
+    // files, through the same edits pipeline as everything else," builds
+    // on Phase 6).
+    //
+    // Same root-cause diagnosis every generation mode before it already
+    // made (Database/Phase 8, Architecture/Phase 9, Testing/Phase 10): a
+    // model asked to write infra files with zero real facts about this
+    // project's actual services, locations, and build/test commands has
+    // nothing to go on but generic, often-wrong boilerplate (a Dockerfile
+    // that COPYs the wrong directory, a CI workflow running "npm test" a
+    // project never defines). Grounded in a dedicated evidence bundle (GET
+    // /devops-evidence, see apps/desktop-agent/src/devopsContext.ts) --
+    // this project's real detected frontend/backend components and their
+    // real locations (Phase 7), any infra it ALREADY has (shown in full so
+    // the model proposes "modify" against something real, never a blind
+    // "create" over infra that already works), and this project's own real
+    // build/test/lint commands (reused verbatim from verify.ts, so the
+    // generated CI pipeline runs literally what "Run Verification" runs).
+    //
+    // Kubernetes/Terraform are deliberately OUT of this mode's v1 output --
+    // the evidence bundle gathers zero facts a K8s manifest or Terraform
+    // plan would need (a target cluster, a cloud provider, a registry to
+    // push images to), and inventing those specifics would be exactly the
+    // kind of ungrounded boilerplate this codebase's whole discipline
+    // exists to avoid (the same reasoning Architecture mode's Phase 9
+    // prompt already applies to skip a Deployment diagram when no
+    // deployment evidence exists). The instructions below make the model
+    // say this honestly in its prose rather than silently narrowing scope.
+    const devopsEvidence = input.projectContext?.devopsEvidence;
+    const devopsFullContentPaths = (input.projectContext?.relevantFiles ?? [])
+      .filter((f) => f.content !== undefined)
+      .map((f) => f.relPath);
+    const dbComponents = (devopsEvidence?.projectContext.components ?? []).filter((c) => c.category === "database");
+    return steering + [
+      "You are the MobiusX Desktop AI Assistant in DEVOPS mode (DevOps/Infrastructure Generation, roadmap Phase 14) -- proposing a Dockerfile per real detected service, a root docker-compose.yml wiring them together, and a CI pipeline file, all grounded strictly in the evidence bundle below.",
+      "",
+      "THE #1 RULE, non-negotiable: every Dockerfile, compose service, and CI step you propose MUST trace back to a real entry in the evidence bundle below (a detected component + its real location, an existing infra file, or a real verification command). Never invent a service, port, database, or build/test command the evidence doesn't actually show.",
+      "",
+      devopsEvidence
+        ? devopsEvidenceContext(devopsEvidence)
+        : "No pre-computed DevOps evidence bundle was available for this project (this should not normally happen) -- treat it as a signal to propose only the most minimal, honestly-labeled files, explicitly noting in prose that evidence gathering did not run.",
+      "",
+      "SECURITY AND OPERABILITY RULES (the DevOps Agent reviewer below will check these specifically):",
+      "1. NEVER bake a secret, API key, password, or credential into a Dockerfile, compose file, or CI config -- reference it only via an environment variable (documented with a `.env.example` entry, never a real `.env` committed) or, in CI, the platform's own secrets mechanism (e.g. GitHub Actions `${{ secrets.NAME }}`).",
+      "2. In docker-compose.yml, give every service a `deploy.resources.limits` (cpus and memory) with a sensible conservative starting value, and say in a comment that it's a starting point the user should tune.",
+      "3. Run each container as a non-root user where the base image reasonably supports it (e.g. a Node image's built-in `node` user, or a dedicated `USER appuser` created in a Python image) -- never leave a container running as root without a stated reason.",
+      "4. A CI workflow's token/permissions should be scoped to only what the job needs (e.g. an explicit `permissions: contents: read` block) rather than left at the repository's default.",
+      "",
+      "WHAT TO GENERATE:",
+      devopsEvidence && devopsEvidence.projectContext.components.some((c) => c.category === "frontend" || c.category === "backend")
+        ? "For EVERY detected frontend/backend component's location shown above: propose a Dockerfile at `<location>/Dockerfile` (or the project root's `Dockerfile` when location is \".\"). A component already listed under existingInfraFiles at that exact path means one already exists -- you were shown its full content below; propose \"modify\" only if it's genuinely missing something real (e.g. it doesn't match the component's actual detected framework), and say in prose you're leaving it as-is otherwise rather than needlessly rewriting a working file. For a Node-based component, use a multi-stage build (an install+build stage, then a lean runtime stage) and run its own detected package.json script (\"start\" if defined, else the same \"dev\" convention this app's own Preview feature uses -- see the evidence -- but note in a comment that a dev server is not a production-grade choice if no \"start\"/\"build\" script exists). For a Python/FastAPI component (evidenced by a `backend` category entry naming FastAPI, plus a requirements.txt/pyproject.toml at that location), use a `python:3.11-slim` base, `pip install --no-cache-dir -r requirements.txt`, and `CMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]` -- this app's own Preview feature runs a detected FastAPI backend exactly this way (uvicorn against main:app on port 8000), so this is a real, evidenced convention, not an invented one; say so explicitly if you're relying on this default rather than an explicit start command found in the evidence."
+        : "No frontend or backend component was detected in the evidence above. Do not invent one to containerize -- say so plainly in your prose summary and propose nothing (omit the edits block entirely).",
+      "Then propose a root `docker-compose.yml` with one service per Dockerfile you just proposed (each `build.context` pointing at that component's real location), wired together on a shared network.",
+      dbComponents.length > 0
+        ? dbComponents.some((c) => c.name === "SQLite")
+          ? `A database component WAS detected (${dbComponents.map((c) => c.name).join(", ")}), but SQLite is file-based, not a server process -- there is NO official "sqlite" Docker image to run as its own service (do not invent one). Instead, mount a named volume into the backend service's own container at the directory its SQLite file lives in, and pass that file's path via an environment variable (never hardcoded) -- no separate database service or \`depends_on\` entry for it.`
+          : `A database component WAS detected (${dbComponents.map((c) => c.name).join(", ")}) -- add a matching REAL official image service (e.g. \`postgres:16\` for PostgreSQL, \`mysql:8\` for MySQL, \`mongo:7\` for MongoDB -- never invent an image tag for an engine that has no official server image, like SQLite) with a named volume for its data directory and credentials supplied ONLY via environment variables (never hardcoded), and wire the app service(s) to depend on it via \`depends_on\`. If you use \`condition: service_healthy\` on a \`depends_on\` entry, you MUST also define a real \`healthcheck\` on that service (e.g. \`pg_isready\` for Postgres) -- otherwise use a plain \`depends_on\` list (which waits only for container start, not readiness) rather than an unsupported condition.`
+        : "No database component was detected in the evidence above -- do not add a database service to the compose file; if the app genuinely needs one, say so as an open question in your prose rather than inventing a specific engine.",
+      devopsEvidence && devopsEvidence.verificationSteps.length > 0
+        ? `Then propose \`.github/workflows/ci.yml\`: a GitHub Actions workflow, triggered on push and pull_request, that checks out the repo and runs EXACTLY these real, already-evidenced commands (one job step per command, each \`working-directory\` set to its real cwd shown above) -- never a different or additional build/test/lint command: ${devopsEvidence.verificationSteps.map((s) => `"${s.command}" (in ${s.cwd}/)`).join("; ")}. Add a Node/Python setup step (actions/setup-node or actions/setup-python, matching the detected stack) before these steps.`
+        : "No known build/test/lint command was found for this project (see verificationSteps above, empty) -- do not invent one (e.g. don't assume \`npm test\` just because that's a common default). Propose a minimal CI workflow that only checks out the repo and builds the Docker image(s) you just proposed, and say plainly in your prose summary that no real verification command was found to run in CI.",
+      "State explicitly in your prose summary that Kubernetes manifests and Terraform are NOT included in this proposal, because no evidence exists yet for a target cluster, cloud provider, or container registry -- generating those from nothing would be exactly the kind of invented, unevidenced infrastructure this tool exists to avoid.",
+      "",
+      "CRITICAL OUTPUT FORMAT -- follow this exactly:",
+      "1. First write a brief prose summary (3-6 sentences): which services you're containerizing, whether a database service was added, which real commands the CI pipeline runs (or why none could be), and the explicit Kubernetes/Terraform scope note above.",
+      `2. Then, on its own line by itself, output exactly ${EDITS_MARKER}`,
+      '3. Then exactly ONE fenced json code block containing every file being created or changed (Dockerfile(s) + docker-compose.yml + the CI workflow, as applicable), as entries in a single "edits" array, in this exact shape:',
+      '{"edits": [{"path": "relative/path", "action": "modify" | "create", "content": "COMPLETE new file content"}]}',
+      '"content" must be the entire new file content, never a diff or partial snippet.',
+      "When a file's content spans multiple lines, each line break must be encoded as exactly ONE JSON escape sequence: \\n. Do NOT double it to \\\\n.",
+      devopsFullContentPaths.length > 0
+        ? `Only use action "modify" for one of these exact paths, which you were shown in full below: ${devopsFullContentPaths.join(", ")}. Do not use "modify" for any other path.`
+        : 'You were not shown the full content of any existing infra file, so use action "create" for every file you propose -- this most likely means none of them exist yet in this project.',
+      'Only use action "create" for a path you are confident does not already exist in this project.',
+      `Omit the ${EDITS_MARKER} marker and JSON block entirely if no frontend/backend component was detected at all (per the rule above) -- there is nothing real to containerize.`,
+      relevantFilesContext(input, true),
+    ].join("\n");
+  }
+
   const fullContentPaths = (input.projectContext?.relevantFiles ?? [])
     .filter((f) => f.content !== undefined)
     .map((f) => f.relPath);
@@ -477,6 +558,22 @@ function architectureEvidenceContext(evidence: NonNullable<RunnerInput["projectC
 function testingEvidenceContext(evidence: NonNullable<RunnerInput["projectContext"]>["testingEvidence"]): string {
   return [
     "REAL TESTING EVIDENCE (testing-evidence bundle -- gathered directly from this project's own detected dependencies and existing test files, treat every field below as ground truth, not a suggestion):",
+    "```json",
+    JSON.stringify(evidence, null, 2),
+    "```",
+  ].join("\n");
+}
+
+/**
+ * DevOps/Infrastructure Generation (roadmap Phase 14). Same
+ * dump-the-real-bundle-as-JSON approach as architectureEvidenceContext/
+ * testingEvidenceContext above -- the model quotes real detected
+ * components, real existing infra file paths, and real verification
+ * commands directly rather than paraphrasing from prose.
+ */
+function devopsEvidenceContext(evidence: NonNullable<RunnerInput["projectContext"]>["devopsEvidence"]): string {
+  return [
+    "REAL DEVOPS EVIDENCE (devops-evidence bundle -- gathered directly from this project's own detected components, existing infra files, and real verification commands, treat every field below as ground truth, not a suggestion):",
     "```json",
     JSON.stringify(evidence, null, 2),
     "```",

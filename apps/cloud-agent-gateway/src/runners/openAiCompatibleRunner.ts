@@ -213,6 +213,7 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
                 input.mode === "database" ||
                 input.mode === "architecture" ||
                 input.mode === "testing" ||
+                input.mode === "devops" ||
                 input.mode === "spec") &&
               edits.length > 0
             ) {

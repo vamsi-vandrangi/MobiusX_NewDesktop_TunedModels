@@ -887,6 +887,71 @@ export interface TestingEvidence {
 export type TestingEvidenceResponse = TestingEvidence;
 
 /**
+ * DevOps/Infrastructure Generation (roadmap Phase 14, source requirement
+ * §21): one existing infra artifact this project already has on disk
+ * (a Dockerfile, docker-compose.yml/.yaml, or a GitHub Actions workflow
+ * file), full content -- gathered so DevOps mode's prompt can propose a
+ * "modify" against a real, already-reviewed file instead of blindly
+ * "create"-ing over it (the exact same "CREATE on an existing file gets
+ * silently skipped by Apply" failure mode Database mode hit in Phase 8,
+ * and the same evidence-over-invention discipline ExistingTestFileSample
+ * already established for Testing mode). `[]` on
+ * DevopsEvidence.existingInfraFiles means honestly what it says -- no
+ * infra files exist here yet -- not that none were looked for.
+ */
+export interface ExistingInfraFile {
+  relPath: string;
+  content: string;
+}
+
+/**
+ * DevOps/Infrastructure Generation (roadmap Phase 14): one of this
+ * project's OWN real build/test/lint commands, exactly as verify.ts's own
+ * detectors (detectVerificationSteps/detectPythonTestSteps) compute them
+ * for "Run Verification" -- reused here verbatim, never re-derived or
+ * re-guessed, so the CI pipeline this mode generates runs literally the
+ * same commands this app already runs and already trusts. `cwd` is
+ * project-relative ("." for the project root), matching the directory the
+ * real command actually runs in (a Python backend's pytest suite runs
+ * inside its own subdirectory, not the project root -- see
+ * detectPythonTestSteps).
+ */
+export interface DevopsVerificationStep {
+  label: string;
+  command: string;
+  cwd: string;
+}
+
+/**
+ * The evidence bundle DevOps mode's prompt (roadmap Phase 14, source
+ * requirement §21 -- "Docker/Compose/K8s/Terraform + CI/CD pipeline
+ * files, through the same edits pipeline as everything else," builds on
+ * Phase 6) is grounded in -- gathered by
+ * apps/desktop-agent/src/devopsContext.ts. Follows the exact same
+ * root-cause diagnosis every generation mode before it has already made
+ * (Database/Phase 8, Architecture/Phase 9, Testing/Phase 10): a model
+ * asked to write a Dockerfile/CI pipeline with zero real facts about this
+ * project's actual services, ports, and build/test commands has nothing
+ * to go on but generic, often-wrong boilerplate (a Dockerfile that COPYs
+ * the wrong directory, a CI workflow that runs "npm test" a project
+ * doesn't define). `projectContext` reuses Phase 7's own detection
+ * (frontend/backend components + locations, and any infra ALREADY
+ * detected there -- see ProjectContextCategory's "infra" case) rather
+ * than re-guessing the stack; `existingInfraFiles` and `verificationSteps`
+ * are this phase's own two additions, described above.
+ */
+export interface DevopsEvidence {
+  projectPath: string;
+  generatedAt: string;
+  projectContext: ProjectContextReport;
+  existingInfraFiles: ExistingInfraFile[];
+  verificationSteps: DevopsVerificationStep[];
+}
+
+/** Body of GET /devops-evidence. */
+export type DevopsEvidenceResponse = DevopsEvidence;
+
+/**
  * Messages sent from the renderer, over the /terminal WebSocket, to the
  * agent. A real PTY session (see apps/desktop-agent/src/terminalWs.ts) is
  * raw byte pass-through, not request/response commands: "input" carries

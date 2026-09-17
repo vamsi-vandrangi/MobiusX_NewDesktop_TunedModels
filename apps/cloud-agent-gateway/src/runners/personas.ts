@@ -117,14 +117,16 @@ export const PERSONAS: Record<AgentPersona, { label: string; focus: string[] }> 
  * separate concurrent processes" being this phase's stated bar, not a
  * promise of deep per-file understanding.
  *
- * "devops" is never returned here -- no shipped AgentMode produces
- * DevOps/infrastructure edits yet (that's roadmap Phase 14) -- see
- * PERSONAS.devops's doc comment above.
+ * "devops" is returned directly for "devops"-mode tasks (roadmap Phase 14,
+ * source requirement §21) -- the first AgentMode to actually reach the
+ * DevOps Agent persona defined above; every other mapping below predates
+ * that phase and is unchanged.
  */
 export function classifyPersona(mode: AgentMode, edits: ProposedEdit[]): AgentPersona {
   if (mode === "database") return "database";
   if (mode === "architecture") return "architecture";
   if (mode === "testing") return "testing";
+  if (mode === "devops") return "devops";
   if (mode === "fix") return "debugger";
   if (mode === "spec") return "documentation";
   // "build" (and any future structured-edits mode not listed above):

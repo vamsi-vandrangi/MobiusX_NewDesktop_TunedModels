@@ -1763,6 +1763,7 @@ function createAssistantPanel(container) {
         <button class="mode-btn" data-mode="database" title="Database Engineering — proposes a schema, migration, and ORM model changes as one set; writes real files like Build">Database</button>
         <button class="mode-btn" data-mode="architecture" title="Architecture Generation — proposes docs/architecture/HLD.md and LLD.md with evidence-grounded Mermaid diagrams; writes real files like Build">Architecture</button>
         <button class="mode-btn" data-mode="testing" title="Testing Engine — writes real test file(s) for the code shown, grounded in this project's real detected test framework; writes real files like Build">Testing</button>
+        <button class="mode-btn" data-mode="devops" title="DevOps/Infrastructure Generation — proposes Dockerfile(s), docker-compose.yml, and a CI pipeline grounded in this project's real detected services and build/test commands; writes real files like Build">DevOps</button>
       </div>
       <select class="model-select" title="Which AI model handles this task — overrides the Settings default for this task only"></select>
     </div>
@@ -1931,10 +1932,10 @@ function createAssistantPanel(container) {
     // real friction, not a hypothetical: a user submitted a Build request
     // with no project open, got a full proposed-edits response, and had no
     // way to tell anything was wrong until Apply silently did nothing.
-    if ((mode === "build" || mode === "spec" || mode === "database" || mode === "architecture" || mode === "testing") && !currentProjectPath) {
+    if ((mode === "build" || mode === "spec" || mode === "database" || mode === "architecture" || mode === "testing" || mode === "devops") && !currentProjectPath) {
       addMsg(text, "user");
       input.value = "";
-      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : mode === "database" ? "Database" : mode === "architecture" ? "Architecture" : "Testing";
+      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : mode === "database" ? "Database" : mode === "architecture" ? "Architecture" : mode === "testing" ? "Testing" : "DevOps";
       addMsg(
         `${modeLabel} mode writes real files, so it needs a project open first — click "New Project…" or "Open Project…" at the top, then send this again.`,
         "system",
@@ -1948,7 +1949,7 @@ function createAssistantPanel(container) {
     const stream = addStreamingMsg();
     const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
     try {
-      let relevantFiles, indexedChunkCount, architectureEvidence, testingEvidence;
+      let relevantFiles, indexedChunkCount, architectureEvidence, testingEvidence, devopsEvidence;
       // Project Memory/Steering (Phase 16) + Knowledge (Phase 17) --
       // fetched for every mode with a project open, in parallel with each
       // other (independent lookups, no reason to serialize them).
@@ -1965,6 +1966,23 @@ function createAssistantPanel(container) {
           // explicitly handles an absent bundle rather than assuming it's
           // always present.
           architectureEvidence = undefined;
+        }
+      } else if (mode === "devops") {
+        // DevOps mode (roadmap Phase 14) doesn't ground itself in semantic
+        // search either -- its real grounding is the pre-computed evidence
+        // bundle below, per promptShared.ts's "devops" branch. Its own
+        // existingInfraFiles ALREADY carries full content for any
+        // Dockerfile/compose/CI file this project already has (see
+        // devopsContext.ts), so relevantFiles is built directly from that
+        // bundle -- no separate /fs/read round trip needed, unlike
+        // Architecture mode's fixed-path fetch above.
+        indexedChunkCount = undefined;
+        try {
+          devopsEvidence = await api("/devops-evidence");
+          relevantFiles = (devopsEvidence.existingInfraFiles ?? []).map((f) => ({ relPath: f.relPath, snippet: f.content.slice(0, 200), content: f.content }));
+        } catch {
+          devopsEvidence = undefined;
+          relevantFiles = [];
         }
       } else {
         ({ hits: relevantFiles, storeSize: indexedChunkCount } = await findRelevantFiles(text, mode));
@@ -1998,6 +2016,7 @@ function createAssistantPanel(container) {
                 indexedChunkCount,
                 ...(architectureEvidence ? { architectureEvidence } : {}),
                 ...(testingEvidence ? { testingEvidence } : {}),
+                ...(devopsEvidence ? { devopsEvidence } : {}),
                 ...(steeringContext ? { steeringContext } : {}),
                 ...(knowledgeContext ? { knowledgeContext } : {}),
               }
@@ -2500,6 +2519,55 @@ testingEvidenceCheckBtn?.addEventListener("click", async () => {
   }
   testingEvidenceCheckBtn.disabled = false;
   testingEvidenceCheckBtn.textContent = "Check testing evidence";
+});
+
+// ============================================================
+// DevOps/Infrastructure Generation (roadmap Phase 14, source requirement
+// §21): GET /devops-evidence surfaces the exact evidence bundle DevOps
+// mode's prompt is grounded in (apps/desktop-agent/src/devopsContext.ts)
+// -- this project's real detected frontend/backend components, any infra
+// file it already has, and its own real build/test/lint commands. Shown
+// here so it's inspectable before asking for generated Dockerfiles/
+// compose/CI, same transparency precedent as Database Consistency,
+// Architecture Evidence, and Testing Evidence above.
+// ============================================================
+const devopsEvidenceCheckBtn = document.getElementById("devops-evidence-check-btn");
+const devopsEvidenceResultsEl = document.getElementById("devops-evidence-results");
+
+function renderDevopsEvidenceReport(evidence) {
+  const svcComponents = evidence.projectContext.components.filter((c) => c.category === "frontend" || c.category === "backend" || c.category === "database");
+  const svcRows = svcComponents.length
+    ? svcComponents.map((c) => `${escapeHtml(c.name)} <span class="context-row-loc">(${escapeHtml(c.category)}, ${escapeHtml(c.location)}/)</span>`).join(", ")
+    : "None detected";
+  const infraList = evidence.existingInfraFiles.length
+    ? evidence.existingInfraFiles.map((f) => escapeHtml(f.relPath)).join(", ")
+    : "None found";
+  const stepsList = evidence.verificationSteps.length
+    ? evidence.verificationSteps.map((s) => `${escapeHtml(s.label)} <span class="context-row-loc">(${escapeHtml(s.cwd)}/)</span>`).join(", ")
+    : "None detected";
+  devopsEvidenceResultsEl.innerHTML = `
+    <div class="completion-summary ${svcComponents.length ? "consistent" : "unknown"}">${svcComponents.length ? `${svcComponents.length} containerizable component${svcComponents.length === 1 ? "" : "s"} detected` : "No frontend/backend/database component detected"}</div>
+    <div class="context-rows" style="margin-top:8px;">
+      <div class="context-row"><span class="context-row-label">Detected components</span><span class="context-row-value">${svcRows}</span></div>
+      <div class="context-row"><span class="context-row-label">Existing infra file(s) found</span><span class="context-row-value">${infraList}</span></div>
+      <div class="context-row"><span class="context-row-label">Real verification command(s)</span><span class="context-row-value">${stepsList}</span></div>
+    </div>
+    <div class="completion-meta">Generated ${new Date(evidence.generatedAt).toLocaleString()}</div>
+  `;
+}
+
+devopsEvidenceCheckBtn?.addEventListener("click", async () => {
+  devopsEvidenceCheckBtn.disabled = true;
+  devopsEvidenceCheckBtn.textContent = "Checking…";
+  devopsEvidenceResultsEl.innerHTML = `<div class="verify-pending">Scanning for containerizable components, existing infra files, and verification commands…</div>`;
+  try {
+    const evidence = await api("/devops-evidence");
+    renderDevopsEvidenceReport(evidence);
+  } catch (err) {
+    devopsEvidenceResultsEl.innerHTML = `<div class="verify-none">DevOps evidence check failed: ${escapeHtml(err.message)}</div>`;
+  }
+  devopsEvidenceCheckBtn.disabled = false;
+  devopsEvidenceCheckBtn.textContent = "Check devops evidence";
 });
 
 // ============================================================
@@ -3023,6 +3091,7 @@ const MODEL_ROUTING_MODES = [
   { mode: "database", label: "Database" },
   { mode: "architecture", label: "Architecture" },
   { mode: "testing", label: "Testing" },
+  { mode: "devops", label: "DevOps" },
 ];
 const modelRoutingRowsEl = document.getElementById("model-routing-rows");
 const modelRoutingStatusEl = document.getElementById("model-routing-status");

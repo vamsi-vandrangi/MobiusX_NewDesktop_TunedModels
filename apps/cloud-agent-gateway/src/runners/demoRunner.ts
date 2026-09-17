@@ -382,6 +382,39 @@ def test_demo_placeholder():
   ];
 }
 
+function demoDevopsEdits(input: RunnerInput): { path: string; action: "create"; content: string }[] {
+  return [
+    {
+      path: "Dockerfile",
+      action: "create",
+      content: `# Demo Dockerfile (not a real AI-generated infra file)
+#
+# Created by the cloud-agent-gateway's DEMO runner, not a real model. No
+# ANTHROPIC_API_KEY is configured, so there is no real analysis of this
+# project's actual detected services behind this -- it exists only to
+# exercise MobiusX.ai WDC's DevOps/Infrastructure Generation flow (roadmap
+# Phase 14) end-to-end:
+#
+# 1. The gateway proposed this file (a "devops" task).
+# 2. You reviewed it and clicked Apply.
+# 3. A real model would instead be grounded in GET /devops-evidence --
+#    this project's real detected frontend/backend/database components,
+#    any infra file it already has, and its own real build/test/lint
+#    commands -- and would propose an actual Dockerfile, docker-compose.yml,
+#    and CI pipeline for THIS project's real services, never this
+#    placeholder.
+#
+# Original prompt: "${input.prompt}"
+# Safe to delete. Configure a real model (see apps/cloud-agent-gateway/README.md)
+# to get an actual, evidence-grounded infrastructure proposal instead.
+
+FROM alpine:3.19
+CMD ["echo", "DEMO placeholder image -- configure a real model for an actual generated Dockerfile"]
+`,
+    },
+  ];
+}
+
 /** Rejects with a named AbortError (matching the DOM/fetch convention) the moment `signal` aborts, so callers can `if (err.name === "AbortError")` regardless of whether the abort came from a timer or a fetch call. */
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {

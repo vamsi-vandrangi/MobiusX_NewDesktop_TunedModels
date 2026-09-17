@@ -22,6 +22,7 @@ import type {
   DatabaseConsistencyResponse,
   ArchitectureEvidenceResponse,
   TestingEvidenceResponse,
+  DevopsEvidenceResponse,
   ProposedEdit,
   VerifyResponse,
   BrowserValidationResponse,
@@ -45,6 +46,7 @@ import { detectProjectContext } from "./projectContext.js";
 import { checkDatabaseConsistency } from "./dbOps.js";
 import { gatherArchitectureEvidence } from "./architectureContext.js";
 import { gatherTestingEvidence } from "./testingContext.js";
+import { gatherDevopsEvidence } from "./devopsContext.js";
 import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
@@ -376,6 +378,24 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "testing evidence gathering failed", detail: (err as Error).message });
+    }
+  });
+
+  // DevOps/Infrastructure Generation (roadmap Phase 14, source requirement
+  // §21): the grounding evidence bundle DevOps mode's prompt is built from
+  // -- see devopsContext.ts's doc comment for exactly what's gathered.
+  // Exposed as its own route, same transparency precedent as
+  // /architecture-evidence and /testing-evidence.
+  router.get("/devops-evidence", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: DevopsEvidenceResponse = await gatherDevopsEvidence(projectState.path);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "devops evidence gathering failed", detail: (err as Error).message });
     }
   });
 

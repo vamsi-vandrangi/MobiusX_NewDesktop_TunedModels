@@ -308,6 +308,22 @@
             <div id="testing-evidence-results"></div>
           </div>
 
+          <!-- DevOps/Infrastructure Generation (roadmap Phase 14, source
+               requirement §21): the same evidence bundle DevOps mode's
+               prompt is grounded in (see
+               apps/desktop-agent/src/devopsContext.ts) -- this project's
+               real detected frontend/backend components, any infra files
+               it already has, and its own real build/test/lint commands,
+               so you can see exactly what the model would be shown before
+               asking it to generate Dockerfiles/compose/CI. -->
+          <div id="devops-evidence-panel" class="panel">
+            <div id="devops-evidence-header">
+              <h3>DevOps Evidence</h3>
+              <button id="devops-evidence-check-btn" class="edits-verify-btn">Check devops evidence</button>
+            </div>
+            <div id="devops-evidence-results"></div>
+          </div>
+
           <div id="tasks-layout">
             <div id="tasks-list" class="panel"></div>
             <div id="task-detail" class="panel">

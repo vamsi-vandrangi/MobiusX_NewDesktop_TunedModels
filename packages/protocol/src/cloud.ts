@@ -12,7 +12,7 @@
  * less churn once that integration is scoped) — see docs/ARCHITECTURE.md §12.
  */
 
-import type { ArchitectureEvidence, TestingEvidence } from "./agent.js";
+import type { ArchitectureEvidence, DevopsEvidence, TestingEvidence } from "./agent.js";
 
 /**
  * "spec" (PRD §8, Requirements Engineering) reuses the exact same
@@ -80,7 +80,26 @@ import type { ArchitectureEvidence, TestingEvidence } from "./agent.js";
  * new backend/frontend source it creates -- never inventing a framework
  * this project doesn't already have.
  */
-export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database" | "architecture" | "testing";
+/**
+ * "devops" (roadmap Phase 14, source requirement §21 -- DevOps/
+ * Infrastructure Generation, builds on Phase 6) also reuses the same
+ * propose-edits/review/apply pipeline as "build": it proposes a
+ * Dockerfile per detected frontend/backend component, a root
+ * docker-compose.yml wiring those (plus any detected database) together,
+ * and a CI pipeline file (.github/workflows/ci.yml) -- all grounded in a
+ * dedicated evidence bundle (GET /devops-evidence, see
+ * apps/desktop-agent/src/devopsContext.ts) rather than invented
+ * boilerplate: this project's real detected components/locations (Phase
+ * 7), any infra artifacts it ALREADY has (shown in full so the model
+ * proposes "modify", never a blind "create" over something reviewed and
+ * working), and this project's own real build/test/lint commands (reused
+ * verbatim from verify.ts's own detectors, so the generated CI pipeline
+ * runs literally the same commands "Run Verification" already runs).
+ * Second-pass-reviewed by the DevOps Agent persona (see
+ * apps/cloud-agent-gateway/src/runners/personas.ts#PERSONAS.devops),
+ * which this mode is the first to actually make reachable.
+ */
+export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database" | "architecture" | "testing" | "devops";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -214,6 +233,13 @@ export interface ProjectContext {
    * follow. Absent for every other mode.
    */
   testingEvidence?: TestingEvidence;
+  /**
+   * Present only for a "devops"-mode task (see AgentMode's doc comment
+   * above) -- the real, pre-computed evidence bundle (GET
+   * /devops-evidence) that mode's prompt is grounded in. Absent for every
+   * other mode.
+   */
+  devopsEvidence?: DevopsEvidence;
   /**
    * Project Memory/Steering (roadmap Phase 16, source requirement §24/§25).
    * The combined markdown content of every file under this project's
@@ -369,11 +395,11 @@ export type ReviewVerdict = "approve" | "concerns";
  * critic. See apps/cloud-agent-gateway/src/runners/personas.ts for each
  * persona's review focus and PERSONA_MODE_MAP for how an AgentMode task
  * (plus, for "build" mode, a lightweight path-based heuristic over the
- * proposed edits) is classified into one of these. "devops" is defined
- * here for completeness against the roadmap's named persona list but is
- * not yet reachable by any shipped AgentMode — DevOps/Infrastructure
- * Generation is roadmap Phase 14; wiring it in is that phase's job, not
- * invented early against nothing real to review.
+ * proposed edits) is classified into one of these. "devops" is reachable
+ * since roadmap Phase 14 (DevOps/Infrastructure Generation) shipped its
+ * own "devops" AgentMode -- see classifyPersona in personas.ts for the
+ * direct 1:1 mapping, and AgentMode's own doc comment for what that mode
+ * actually generates.
  */
 export type AgentPersona = "architecture" | "database" | "backend" | "frontend" | "api" | "testing" | "devops" | "documentation" | "debugger";
 
