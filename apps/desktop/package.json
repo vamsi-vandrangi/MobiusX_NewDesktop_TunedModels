@@ -1,11 +1,13 @@
 {
   "name": "@mobiusx/desktop-shell",
+  "productName": "MobiusX.ai",
   "version": "0.0.1",
   "private": true,
   "description": "MobiusX Desktop shell — Engineering Studio / X-Coder workspace (Phase 1 v0)",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "postinstall": "node scripts/brand-electron-mac.js"
   },
   "devDependencies": {
     "electron": "^33.2.1"

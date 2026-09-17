@@ -63,6 +63,9 @@ export async function getSettings(): Promise<AgentSettings> {
   if (isValidModelSelection(parsed.defaultModel)) {
     result.defaultModel = parsed.defaultModel;
   }
+  if (parsed.fixLoopMode === "manual" || parsed.fixLoopMode === "auto") {
+    result.fixLoopMode = parsed.fixLoopMode;
+  }
   return result;
 }
 
@@ -90,6 +93,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<AgentSetting
     } else if (patch.defaultModel !== undefined) {
       next.defaultModel = patch.defaultModel;
     }
+  }
+  if (patch.fixLoopMode !== undefined) {
+    next.fixLoopMode = patch.fixLoopMode;
   }
 
   await mkdir(SETTINGS_DIR, { recursive: true });

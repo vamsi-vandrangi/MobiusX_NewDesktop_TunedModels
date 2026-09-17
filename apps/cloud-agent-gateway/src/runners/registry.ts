@@ -4,6 +4,7 @@ import { demoRunner } from "./demoRunner.js";
 import { anthropicRunner } from "./anthropicRunner.js";
 import { openrouterRunner } from "./openrouterRunner.js";
 import { groqRunner } from "./groqRunner.js";
+import { deepseekRunner } from "./deepseekRunner.js";
 import { ollamaRunner } from "./ollamaRunner.js";
 
 /**
@@ -19,6 +20,7 @@ export const RUNNERS: Record<ModelProvider, AgentRunner> = {
   anthropic: anthropicRunner,
   openrouter: openrouterRunner,
   groq: groqRunner,
+  deepseek: deepseekRunner,
   ollama: ollamaRunner,
 };
 
@@ -31,11 +33,25 @@ export const RUNNERS: Record<ModelProvider, AgentRunner> = {
  * machine — using it is always an explicit choice, either per-task or as
  * an explicitly-set default (see resolveRunner). Anthropic is tried first
  * when configured (paid, generally the highest-quality option a user who
- * set it up presumably wants used by default); the free providers are
- * tried after, in no particular quality order — just the order they were
- * added.
+ * set it up presumably wants used by default).
+ *
+ * groq before openrouter is NOT arbitrary (it originally was, in
+ * provider-added order) -- swapped Sept 2026 after live evidence: every
+ * OpenRouter model this gateway could offer a free tier for (see
+ * openrouterRunner.ts's history) turned out to be a "reasoning" model that
+ * reliably burned its whole token budget on internal chain-of-thought
+ * without ever producing a real answer, on perfectly ordinary build-mode
+ * prompts, confirmed on two separate live runs. Groq's free-tier models are
+ * plain instruction-tuned chat models with no such failure mode observed —
+ * a meaningfully safer default until OpenRouter's free catalog looks
+ * different.
  */
-const AUTO_PRIORITY: ModelProvider[] = ["anthropic", "openrouter", "groq"];
+// "deepseek" is deliberately absent here too, alongside ollama -- see
+// ModelProvider's doc comment in packages/protocol/src/cloud.ts: it's a
+// paid, metered provider (DeepSeek's own API), so it must only ever run
+// when a user explicitly picks it, never as an automatic fallback that
+// starts charging their account without them choosing that.
+const AUTO_PRIORITY: ModelProvider[] = ["anthropic", "groq", "openrouter"];
 
 /** Full catalog across every provider — what GET /models returns for the picker UI, availability warts and all. */
 export async function listAllModels(): Promise<ModelOption[]> {

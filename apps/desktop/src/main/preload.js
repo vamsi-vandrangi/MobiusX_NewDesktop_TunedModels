@@ -26,4 +26,7 @@ contextBridge.exposeInMainWorld("mobiusx", {
   openFolderDialog: () => ipcRenderer.invoke("dialog:openFolder"),
   // See main.js's "shell:openInBrowser" handler's doc comment.
   openInBrowser: (projectPath, relativePath) => ipcRenderer.invoke("shell:openInBrowser", projectPath, relativePath),
+  // See main.js's "shell:openExternal" handler's doc comment -- for a
+  // running dev server's URL, not a project-relative file.
+  openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
 });

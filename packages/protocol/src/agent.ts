@@ -32,6 +32,82 @@ export interface OpenProjectResponse {
   fileCount: number;
 }
 
+/**
+ * Creates a brand-new, empty project folder on disk (inside an existing
+ * parent directory the user picked via the native folder dialog) and opens
+ * it as the active project — the "New Project" flow. `name` becomes the new
+ * folder's name; it's validated server-side (letters/numbers/dots/dashes/
+ * underscores only, must start with a letter or number) so it can never
+ * contain a path separator or resolve outside parentPath. If a folder with
+ * that name already exists and is empty, it's reused rather than rejected
+ * (lets a user recover from "created the folder in Finder first"); a
+ * non-empty existing folder or an existing file at that path is rejected —
+ * this endpoint only ever creates/opens an EMPTY project, never overwrites
+ * one. Response shape deliberately mirrors OpenProjectResponse (fileCount
+ * is always 0 for a truly new folder) so the renderer can treat "created" and
+ * "opened" the same way from here on.
+ */
+export interface CreateProjectRequest {
+  parentPath: string;
+  name: string;
+}
+
+export interface CreateProjectResponse {
+  path: string;
+  isGitRepo: boolean;
+  fileCount: number;
+}
+
+/**
+ * Live Preview (item 6, phase 2): the desktop agent spawning a real dev
+ * server for the open project (never a browser-only mock) and reporting its
+ * actual status/URL/log back to the shell. "frontend"/"backend" mirror the
+ * two halves previewOps.ts's detectFrontend/detectBackend look for; either
+ * can be null when this project genuinely doesn't have that half (e.g. a
+ * frontend-only repo has no backend entry to report on) -- never fabricated
+ * as "not started" when there was nothing to start in the first place.
+ */
+
+/**
+ * "installing" (Sept 2026, explicit user request): a project whose
+ * dependencies (node_modules / a .venv with the right packages) aren't on
+ * disk yet gets them installed automatically before its real dev server
+ * ever spawns -- see previewOps.ts's frontendInstallSteps/
+ * backendInstallSteps/startServiceWithInstall. The service reports this
+ * status for the whole install phase, with the install command(s)' real
+ * output streaming into the same `log` the dev server itself uses once it
+ * starts -- never silently rolled into "starting".
+ */
+export type PreviewServiceKind = "frontend" | "backend";
+export type PreviewServiceStatusValue = "installing" | "starting" | "running" | "exited" | "failed";
+
+export interface PreviewServiceState {
+  kind: PreviewServiceKind;
+  /** Absolute path to the directory the dev server was started in. */
+  cwd: string;
+  /** The exact command that was run, e.g. "npm run dev" -- never hidden from the user. */
+  command: string;
+  status: PreviewServiceStatusValue;
+  port: number | null;
+  url: string | null;
+  /** Recent stdout/stderr lines, capped -- real process output, not a summary. */
+  log: string[];
+  exitCode: number | null;
+  startedAt: string;
+}
+
+export interface PreviewStartResponse {
+  frontend: PreviewServiceState | null;
+  backend: PreviewServiceState | null;
+  /** What was actually found in the project, independent of whether it started cleanly. */
+  detected: { frontend: boolean; backend: boolean };
+}
+
+export interface PreviewStatusResponse {
+  frontend: PreviewServiceState | null;
+  backend: PreviewServiceState | null;
+}
+
 export interface FsNode {
   name: string;
   path: string; // relative to project root
@@ -147,6 +223,21 @@ export interface AgentSettings {
    * never writes to it.
    */
   defaultModel?: ModelSelection;
+  /**
+   * Autonomy level for the Autonomous Build/Test/Fix Loop (roadmap Phase 6,
+   * source requirement §16). Mirrors terminalApprovalMode's off/guarded
+   * shape rather than inventing a new autonomy model: "manual" (the
+   * implicit default when this field is absent) means each Diagnose & Fix
+   * cycle's proposed edits still require an explicit Apply click, same as
+   * any other task's edits. "auto" lets the desktop shell apply a fix
+   * task's edits automatically and immediately re-verify, repeating up to
+   * a small capped number of iterations before it stops and reports an
+   * honest "still failing after N attempts" rather than looping forever.
+   * Absent (not defaulted to "manual" in storage) so an older
+   * settings.json with no opinion on this behaves exactly like today's
+   * fully-manual flow without needing a migration.
+   */
+  fixLoopMode?: "manual" | "auto";
 }
 
 /**
@@ -180,6 +271,49 @@ export interface VerifyResponse {
   overall: "passed" | "failed" | "no-verification-available";
   steps: VerificationStep[];
 }
+
+/** One line item in a Project Completion Report — see ProjectCompletionReport below. */
+export interface ProjectCompletionCriterion {
+  /** Stable id, e.g. "verify:Build (npm run build)", "git_initialized", "auth_verified". */
+  id: string;
+  label: string;
+  /**
+   * "not_configured" means this capability isn't implemented/measured by
+   * this codebase yet — see apps/desktop-agent/src/completion.ts's doc
+   * comment. Never reported as a fabricated "pass" just because nothing
+   * checks it yet.
+   */
+  status: "pass" | "fail" | "not_configured";
+  detail?: string;
+}
+
+/**
+ * Project Completion Contract (roadmap Phase 6, source requirement §31): a
+ * real, computed report of what's actually verifiable about the open
+ * project right now — never a claim that code was generated, always
+ * evidence that it works. Computed by
+ * apps/desktop-agent/src/completion.ts#computeCompletionReport and served
+ * by GET /completion; also written to
+ * `<project>/.mobiusx/PROJECT_COMPLETION.json` on every call so it's a
+ * real, inspectable artifact, not just an API response.
+ *
+ * completionPercent is computed over MEASURED criteria only (pass+fail) —
+ * "not_configured" criteria are excluded from the denominator entirely, so
+ * an unimplemented capability can never silently drag the percentage down
+ * (or, worse, be counted as passing) just because this build doesn't
+ * measure it yet.
+ */
+export interface ProjectCompletionReport {
+  projectPath: string;
+  generatedAt: string;
+  /** "unknown" only when there is nothing measurable at all yet (e.g. a brand-new, empty project with no package.json). */
+  overall: "not_started" | "in_progress" | "verified" | "unknown";
+  completionPercent: number;
+  criteria: ProjectCompletionCriterion[];
+}
+
+/** Body of GET /completion — currently identical to ProjectCompletionReport; kept as a distinct alias so the route's response type can evolve (e.g. gain fields) independently of the on-disk artifact's shape later. */
+export type ProjectCompletionResponse = ProjectCompletionReport;
 
 /**
  * Messages sent from the renderer, over the /terminal WebSocket, to the

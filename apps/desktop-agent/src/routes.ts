@@ -1,22 +1,29 @@
 import { Router } from "express";
-import { stat } from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
+import { mkdir, readdir, stat } from "node:fs/promises";
+import { join, resolve as resolvePath } from "node:path";
 import { appendAuditEntry, readAuditLog } from "@mobiusx/audit-log";
 import type {
   AgentSettings,
   ApplyEditsRequest,
   ApplyEditsResponse,
   AuditLogResponse,
+  CreateProjectRequest,
+  CreateProjectResponse,
   EffectivePolicyResponse,
   FsTreeResponse,
   GitDiffRequest,
   OpenProjectRequest,
   OpenProjectResponse,
+  PreviewStartResponse,
+  PreviewStatusResponse,
+  ProjectCompletionResponse,
   ProposedEdit,
   VerifyResponse,
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
+import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
 import { verifyProject } from "./verify.js";
+import { computeCompletionReport } from "./completion.js";
 import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
@@ -44,6 +51,7 @@ export function buildRouter(): Router {
       return;
     }
 
+    stopPreview(); // switching projects -- don't leave the previous project's dev server(s) running
     const snapshot = await buildSnapshot(abs);
     const gitRepo = await isGitRepo(abs);
     projectState.path = abs;
@@ -52,6 +60,85 @@ export function buildRouter(): Router {
     projectState.semanticIndexBuilt = false;
 
     const body: OpenProjectResponse = {
+      path: abs,
+      isGitRepo: gitRepo,
+      fileCount: Object.values(snapshot.nodes).filter((n) => n.type === "file").length,
+    };
+    res.json(body);
+  });
+
+  // "New Project" (item 6, phase 1): creates an empty folder on the user's
+  // own machine inside a parent directory they picked via the native folder
+  // dialog, then opens it exactly like /project/open. Deliberately narrow:
+  // it only ever creates/opens an EMPTY project, never touches an existing
+  // non-empty folder or file — scaffolding the actual code is a normal
+  // Build-mode task against this now-open (empty) project, reusing the
+  // existing propose -> review -> apply pipeline rather than a new one.
+  router.post("/project/create", async (req, res) => {
+    const { parentPath, name } = req.body as CreateProjectRequest;
+    if (!parentPath || typeof parentPath !== "string") {
+      res.status(400).json({ error: "parentPath is required" });
+      return;
+    }
+    if (!name || typeof name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+      res.status(400).json({
+        error: "name is required, must start with a letter or number, and may only contain letters, numbers, dots, dashes, and underscores",
+      });
+      return;
+    }
+
+    const parentAbs = resolvePath(parentPath);
+    try {
+      const parentSt = await stat(parentAbs);
+      if (!parentSt.isDirectory()) {
+        res.status(400).json({ error: "parentPath is not a directory" });
+        return;
+      }
+    } catch {
+      res.status(404).json({ error: "parentPath does not exist" });
+      return;
+    }
+
+    const abs = join(parentAbs, name);
+    try {
+      const existing = await stat(abs).catch(() => null);
+      if (existing) {
+        if (!existing.isDirectory()) {
+          res.status(400).json({ error: "a file already exists with that name" });
+          return;
+        }
+        const entries = await readdir(abs);
+        if (entries.length > 0) {
+          res.status(400).json({ error: "a non-empty folder already exists with that name" });
+          return;
+        }
+        // Exists and is empty — reuse it rather than erroring, so a user who
+        // already made the folder in Finder isn't blocked.
+      } else {
+        await mkdir(abs);
+      }
+    } catch (err) {
+      res.status(500).json({ error: "failed to create project folder", detail: (err as Error).message });
+      return;
+    }
+
+    stopPreview(); // switching projects -- don't leave the previous project's dev server(s) running
+    const snapshot = await buildSnapshot(abs);
+    const gitRepo = await isGitRepo(abs);
+    projectState.path = abs;
+    projectState.snapshot = snapshot;
+    projectState.isGitRepo = gitRepo;
+    projectState.semanticIndexBuilt = false;
+
+    void appendAuditEntry({
+      source: "desktop-agent",
+      category: "project-created",
+      severity: "info",
+      summary: `Created new project folder at ${abs}`,
+      detail: { path: abs },
+    });
+
+    const body: CreateProjectResponse = {
       path: abs,
       isGitRepo: gitRepo,
       fileCount: Object.values(snapshot.nodes).filter((n) => n.type === "file").length,
@@ -155,6 +242,57 @@ export function buildRouter(): Router {
     } catch (err) {
       res.status(500).json({ error: "verify failed", detail: (err as Error).message });
     }
+  });
+
+  // Project Completion Contract (roadmap Phase 6, source requirement §31):
+  // a real, computed report of what's actually verifiable about the open
+  // project right now — see completion.ts's doc comment for exactly which
+  // criteria are measured vs honestly reported "not_configured". Also
+  // written to .mobiusx/PROJECT_COMPLETION.json as a real artifact.
+  router.get("/completion", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: ProjectCompletionResponse = await computeCompletionReport(projectState.path, projectState.isGitRepo);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "completion report failed", detail: (err as Error).message });
+    }
+  });
+
+  // Live Preview (item 6, phase 2): starts real dev server(s) for the open
+  // project (see previewOps.ts's detectFrontend/detectBackend for exactly
+  // what's checked) and reports their genuine status/URL back to the shell,
+  // which embeds a <webview> pointed at the frontend's URL once it's
+  // running. Nothing here is simulated -- a project with neither a
+  // frontend "dev" script nor a recognizable FastAPI backend gets an
+  // honest {frontend: null, backend: null}, not a fabricated preview.
+  router.post("/preview/start", (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const body: PreviewStartResponse = startPreview(projectState.path);
+    void appendAuditEntry({
+      source: "desktop-agent",
+      category: "preview-started",
+      severity: "info",
+      summary: `Preview started for ${projectState.path} (frontend: ${body.detected.frontend}, backend: ${body.detected.backend})`,
+      detail: { projectPath: projectState.path, detected: body.detected },
+    });
+    res.json(body);
+  });
+
+  router.get("/preview/status", (_req, res) => {
+    const body: PreviewStatusResponse = getPreviewStatus();
+    res.json(body);
+  });
+
+  router.post("/preview/stop", (_req, res) => {
+    stopPreview();
+    res.json({ ok: true });
   });
 
   router.get("/git/status", async (_req, res) => {
@@ -281,6 +419,11 @@ export function buildRouter(): Router {
     const patch = req.body as SettingsPatch;
     if (patch.terminalApprovalMode !== undefined && patch.terminalApprovalMode !== "off" && patch.terminalApprovalMode !== "guarded") {
       res.status(400).json({ error: "terminalApprovalMode must be 'off' or 'guarded'" });
+      return;
+    }
+    // Autonomous Build/Test/Fix Loop (roadmap Phase 6) autonomy level — see AgentSettings.fixLoopMode's doc comment.
+    if (patch.fixLoopMode !== undefined && patch.fixLoopMode !== "manual" && patch.fixLoopMode !== "auto") {
+      res.status(400).json({ error: "fixLoopMode must be 'manual' or 'auto'" });
       return;
     }
     // defaultModel (multi-model support): null explicitly clears the standing

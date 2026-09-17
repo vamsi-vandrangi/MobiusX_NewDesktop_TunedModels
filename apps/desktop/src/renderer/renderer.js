@@ -1,4 +1,4 @@
-const { agentBaseUrl, agentWsUrl, agentToken, cloudBaseUrl, cloudWsUrl, cloudToken, openFolderDialog, openInBrowser } = window.mobiusx;
+const { agentBaseUrl, agentWsUrl, agentToken, cloudBaseUrl, cloudWsUrl, cloudToken, openFolderDialog, openInBrowser, openExternal } = window.mobiusx;
 
 // ============================================================
 // Nav / view switching
@@ -75,6 +75,25 @@ function pushRecent(path) {
   renderRecents();
 }
 
+/**
+ * Drops a path from Recent Projects — called when opening it just failed
+ * because the folder itself is gone (moved/deleted outside the app).
+ * Recents is a convenience shortcut list, not a record of anything; a dead
+ * shortcut that never clears itself is a real, confirmed source of
+ * confusion (a user hit exactly this with two of this app's own leftover
+ * test folders after they'd been deleted) — better to quietly prune it
+ * than leave a permanently-broken entry sitting there.
+ */
+function removeRecent(path) {
+  const list = getRecents().filter((p) => p !== path);
+  try {
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(list));
+  } catch {
+    /* private-mode / quota — non-fatal */
+  }
+  renderRecents();
+}
+
 function renderRecents() {
   const el = document.getElementById("recent-projects");
   const list = getRecents();
@@ -111,10 +130,17 @@ async function openProject(path) {
     closeAllTabs();
     document.getElementById("debug-results").innerHTML = "";
     document.getElementById("debug-index-status").textContent = "No index built yet for this project";
+    resetPreviewUI(); // switching projects — desktop-agent already stopped the previous project's dev server(s)
     await loadTree();
     showView("workspace");
   } catch (err) {
     projectChipLabel.textContent = `Failed: ${err.message}`;
+    fileTreeEl.innerHTML = "<div class='debug-empty'>Open a project to see its files.</div>";
+    // "path does not exist" (see desktop-agent's /project/open — a real
+    // stat() check, not guessed) means the folder itself is gone, so this
+    // Recents entry can never succeed again — prune it rather than leave a
+    // permanently-broken shortcut in the list.
+    if (/does not exist/i.test(err.message)) removeRecent(path);
   }
 }
 
@@ -125,6 +151,96 @@ async function pickAndOpenProject() {
 
 document.getElementById("open-project-btn").addEventListener("click", pickAndOpenProject);
 document.getElementById("qa-open-project").addEventListener("click", pickAndOpenProject);
+
+// ============================================================
+// New Project (item 6, phase 1) — create an empty folder on the user's own
+// machine (inside a parent dir picked via the native folder dialog) via
+// desktop-agent's real POST /project/create, open it, then hand off to
+// Build mode so the user's next message scaffolds real files into it
+// through the existing propose -> review -> apply pipeline. No project
+// template is fabricated here — the folder starts genuinely empty.
+// ============================================================
+const newProjectModal = document.getElementById("new-project-modal");
+const newProjectLocationEl = document.getElementById("new-project-location");
+const newProjectNameInput = document.getElementById("new-project-name-input");
+const newProjectErrorEl = document.getElementById("new-project-error");
+const newProjectCreateBtn = document.getElementById("new-project-create-btn");
+const newProjectCancelBtn = document.getElementById("new-project-cancel-btn");
+
+async function createProject() {
+  const parent = await openFolderDialog();
+  if (!parent) return;
+
+  newProjectLocationEl.textContent = `New folder will be created inside: ${parent}`;
+  newProjectNameInput.value = "";
+  newProjectErrorEl.hidden = true;
+  newProjectModal.hidden = false;
+  newProjectNameInput.focus();
+
+  return new Promise((resolveOuter) => {
+    function cleanup() {
+      newProjectModal.hidden = true;
+      newProjectCreateBtn.removeEventListener("click", onCreate);
+      newProjectCancelBtn.removeEventListener("click", onCancel);
+      newProjectNameInput.removeEventListener("keydown", onKeydown);
+    }
+    async function onCreate() {
+      const name = newProjectNameInput.value.trim();
+      if (!name) {
+        newProjectErrorEl.textContent = "Enter a project name.";
+        newProjectErrorEl.hidden = false;
+        return;
+      }
+      newProjectCreateBtn.disabled = true;
+      newProjectCreateBtn.textContent = "Creating…";
+      try {
+        const result = await api("/project/create", {
+          method: "POST",
+          body: JSON.stringify({ parentPath: parent, name }),
+        });
+        cleanup();
+        currentProjectPath = result.path;
+        projectChipLabel.textContent = `${result.path.split("/").pop()} (${result.fileCount} files${result.isGitRepo ? ", git" : ""})`;
+        pushRecent(result.path);
+        closeAllTabs();
+        document.getElementById("debug-results").innerHTML = "";
+        document.getElementById("debug-index-status").textContent = "No index built yet for this project";
+        resetPreviewUI(); // switching projects — desktop-agent already stopped the previous project's dev server(s)
+        await loadTree();
+        showView("workspace");
+        // Hand off straight to Build mode — this is a brand-new empty
+        // project, so the natural next step is describing what to scaffold.
+        embeddedAssistantPanel.setMode("build");
+        embeddedAssistantPanel.addMsg(
+          `Created "${name}" — describe the app you want and Build mode will propose the files to scaffold it (you'll review and click Apply before anything is written).`,
+          "system",
+        );
+        embeddedAssistantPanel.focusInput();
+        resolveOuter(result.path);
+      } catch (err) {
+        newProjectErrorEl.textContent = err.message;
+        newProjectErrorEl.hidden = false;
+      } finally {
+        newProjectCreateBtn.disabled = false;
+        newProjectCreateBtn.textContent = "Create";
+      }
+    }
+    function onCancel() {
+      cleanup();
+      resolveOuter(null);
+    }
+    function onKeydown(e) {
+      if (e.key === "Enter") onCreate();
+      if (e.key === "Escape") onCancel();
+    }
+    newProjectCreateBtn.addEventListener("click", onCreate);
+    newProjectCancelBtn.addEventListener("click", onCancel);
+    newProjectNameInput.addEventListener("keydown", onKeydown);
+  });
+}
+
+document.getElementById("new-project-btn").addEventListener("click", createProject);
+document.getElementById("qa-new-project").addEventListener("click", createProject);
 
 function buildNestedTree(nodes) {
   const root = { children: new Map() };
@@ -178,6 +294,10 @@ async function loadTree() {
   const tree = buildNestedTree(nodes);
   fileTreeEl.innerHTML = "";
   const sorted = [...tree.children.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  if (sorted.length === 0) {
+    fileTreeEl.innerHTML = "<div class='debug-empty'>No files found in this project.</div>";
+    return;
+  }
   for (const [name, entry] of sorted) renderTreeNode(name, entry, 0, fileTreeEl);
 }
 
@@ -186,14 +306,42 @@ async function loadTree() {
 // ============================================================
 const tabsBar = document.getElementById("tabs-bar");
 const editorContent = document.getElementById("editor-content");
+const editorStatusbar = document.getElementById("editor-statusbar");
 const openTabs = []; // { path, content, truncated }
 let activeTabPath = null;
+
+// Extension → display label for the editor's status bar (below). Cosmetic
+// only — this app doesn't have a real code-editor component (the editor is
+// a plain read-only <pre>, not something with an actual text cursor), so
+// unlike the mockup this reflects, there's no real "Ln 18, Col 12" to show
+// honestly. What IS real and worth showing: the file's language by
+// extension, its line count, and that it's read as UTF-8.
+const LANGUAGE_LABELS = {
+  ts: "TypeScript", tsx: "TypeScript JSX", js: "JavaScript", jsx: "JavaScript JSX",
+  json: "JSON", css: "CSS", html: "HTML", md: "Markdown", py: "Python",
+  yml: "YAML", yaml: "YAML", sh: "Shell Script", sql: "SQL", rs: "Rust", go: "Go",
+};
+function languageForPath(path) {
+  const ext = path.split(".").pop()?.toLowerCase();
+  return LANGUAGE_LABELS[ext] ?? "Plain Text";
+}
+
+function updateEditorStatusbar(tab) {
+  if (!tab) {
+    editorStatusbar.hidden = true;
+    return;
+  }
+  const lineCount = tab.content.split("\n").length;
+  editorStatusbar.hidden = false;
+  editorStatusbar.textContent = `${languageForPath(tab.path)}  ·  ${lineCount} line${lineCount === 1 ? "" : "s"}  ·  UTF-8`;
+}
 
 function closeAllTabs() {
   openTabs.length = 0;
   activeTabPath = null;
   renderTabs();
   editorContent.textContent = "Open a project, then select a file.";
+  updateEditorStatusbar(null);
 }
 
 function renderTabs() {
@@ -216,6 +364,7 @@ function activateTab(path) {
   activeTabPath = path;
   const tab = openTabs.find((t) => t.path === path);
   editorContent.textContent = tab ? tab.content + (tab.truncated ? "\n\n… (truncated)" : "") : "";
+  updateEditorStatusbar(tab);
   renderTabs();
 }
 
@@ -228,6 +377,7 @@ function closeTab(path) {
     if (activeTabPath) activateTab(activeTabPath);
     else {
       editorContent.textContent = "Open a project, then select a file.";
+      updateEditorStatusbar(null);
       renderTabs();
     }
   } else {
@@ -391,6 +541,165 @@ window.addEventListener("resize", () => fitAndSendSize());
 new ResizeObserver(() => fitAndSendSize()).observe(terminalContainer);
 
 // ============================================================
+// Live Preview (item 6, phase 2) — a real dev server for the open project,
+// spawned server-side by desktop-agent's previewOps.ts, shown here in an
+// embedded <webview>. This panel only ever reflects genuine process state
+// polled from GET /preview/status — never a simulated "running" indicator.
+// ============================================================
+const previewPanel = document.getElementById("preview-panel");
+const previewStartBtn = document.getElementById("preview-start-btn");
+const previewStopBtn = document.getElementById("preview-stop-btn");
+const previewBackBtn = document.getElementById("preview-back-btn");
+const previewForwardBtn = document.getElementById("preview-forward-btn");
+const previewReloadBtn = document.getElementById("preview-reload-btn");
+const previewUrlInput = document.getElementById("preview-url-input");
+const previewOpenBrowserBtn = document.getElementById("preview-open-browser-btn");
+const previewStatusText = document.getElementById("preview-status-text");
+const previewLog = document.getElementById("preview-log");
+const previewWebview = document.getElementById("preview-webview");
+const previewEmpty = document.getElementById("preview-empty");
+let previewPollTimer = null;
+
+function describeService(label, svc) {
+  if (!svc) return null;
+  const where = svc.url ? ` at ${svc.url}` : "";
+  return `${label}: ${svc.status}${where} (${svc.command})`;
+}
+
+function renderPreviewStatus(status) {
+  const parts = [describeService("Frontend", status.frontend), describeService("Backend", status.backend)].filter(Boolean);
+  const running = Boolean(status.frontend || status.backend);
+  previewStatusText.textContent = parts.length
+    ? parts.join("  ·  ")
+    : "No frontend \"dev\" script or recognizable FastAPI backend found in this project — nothing to preview.";
+
+  // Surface the actual failure, not just "failed" -- the real stdout/stderr
+  // this process produced is already sent over the wire (log, capped at
+  // MAX_LOG_LINES in previewOps.ts) but was never shown anywhere before
+  // this. A dev server (npm run dev, uvicorn) that exits non-zero almost
+  // always says exactly why in its last few lines -- missing deps, a
+  // syntax error, a port already in use -- so show those instead of making
+  // the user go find a terminal to re-run the same command by hand.
+  // Also surfaced (not just "failed"): "installing" -- npm install / pip
+  // install can genuinely take a while on a fresh project (see
+  // previewOps.ts's frontendInstallSteps/backendInstallSteps), and with no
+  // visible output during that stretch this looked indistinguishable from
+  // being frozen. Same real-process-output principle as the "failed" case
+  // below, just shown while it's still in progress rather than only after
+  // it's too late to reassure anyone.
+  const notable = [status.frontend, status.backend].find(
+    (s) => s && (s.status === "failed" || s.status === "installing") && s.log.length > 0,
+  );
+  if (notable) {
+    previewLog.textContent = notable.log.slice(-20).join("\n");
+    previewLog.hidden = false;
+  } else {
+    previewLog.hidden = true;
+  }
+
+  const frontendUrl = status.frontend?.url ?? null;
+  // Only auto-navigate the webview the FIRST time a URL becomes known for
+  // this run — once the user has typed their own address into the bar
+  // (e.g. to view a specific route), further polling shouldn't yank them
+  // back to the root.
+  if (frontendUrl && previewWebview.getAttribute("src") === "about:blank") {
+    previewWebview.src = frontendUrl;
+    previewUrlInput.value = frontendUrl;
+  }
+
+  previewBackBtn.disabled = !frontendUrl;
+  previewForwardBtn.disabled = !frontendUrl;
+  previewReloadBtn.disabled = !frontendUrl;
+  previewUrlInput.disabled = !frontendUrl;
+  previewOpenBrowserBtn.disabled = !frontendUrl;
+  previewEmpty.hidden = Boolean(frontendUrl);
+  previewStopBtn.hidden = !running;
+  previewStartBtn.hidden = running;
+}
+
+function resetPreviewUI() {
+  if (previewPollTimer) {
+    clearInterval(previewPollTimer);
+    previewPollTimer = null;
+  }
+  previewWebview.src = "about:blank";
+  previewUrlInput.value = "";
+  previewStatusText.textContent = "";
+  previewLog.hidden = true;
+  previewStopBtn.hidden = true;
+  previewStartBtn.hidden = false;
+  previewBackBtn.disabled = true;
+  previewForwardBtn.disabled = true;
+  previewReloadBtn.disabled = true;
+  previewUrlInput.disabled = true;
+  previewOpenBrowserBtn.disabled = true;
+  previewEmpty.hidden = false;
+}
+
+async function refreshPreviewStatus() {
+  try {
+    const status = await api("/preview/status");
+    renderPreviewStatus(status);
+  } catch {
+    // agent unreachable this tick — leave last known state, next poll retries
+  }
+}
+
+previewStartBtn.addEventListener("click", async () => {
+  if (!currentProjectPath) {
+    previewStatusText.textContent = "Open a project first.";
+    return;
+  }
+  previewStartBtn.disabled = true;
+  previewStatusText.textContent = "Detecting and starting dev server(s)…";
+  try {
+    const result = await api("/preview/start", { method: "POST" });
+    renderPreviewStatus(result);
+    if (previewPollTimer) clearInterval(previewPollTimer);
+    previewPollTimer = setInterval(refreshPreviewStatus, 2000);
+  } catch (err) {
+    previewStatusText.textContent = `Failed to start preview: ${err.message}`;
+  } finally {
+    previewStartBtn.disabled = false;
+  }
+});
+
+previewStopBtn.addEventListener("click", async () => {
+  previewStopBtn.disabled = true;
+  try {
+    await api("/preview/stop", { method: "POST" });
+  } catch {
+    // best effort — the panel resets client-side regardless
+  }
+  resetPreviewUI();
+  previewStatusText.textContent = "Preview stopped.";
+  previewStopBtn.disabled = false;
+});
+
+previewBackBtn.addEventListener("click", () => {
+  if (previewWebview.canGoBack()) previewWebview.goBack();
+});
+previewForwardBtn.addEventListener("click", () => {
+  if (previewWebview.canGoForward()) previewWebview.goForward();
+});
+previewReloadBtn.addEventListener("click", () => previewWebview.reload());
+previewUrlInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  let url = previewUrlInput.value.trim();
+  if (!url) return;
+  if (!/^https?:\/\//.test(url)) url = `http://${url}`;
+  previewWebview.src = url;
+});
+previewOpenBrowserBtn.addEventListener("click", () => {
+  if (previewUrlInput.value) openExternal(previewUrlInput.value);
+});
+
+document.getElementById("preview-toggle").addEventListener("click", () => {
+  const collapsed = previewPanel.classList.toggle("collapsed");
+  document.getElementById("preview-toggle").textContent = (collapsed ? "▸ " : "▾ ") + "Preview";
+});
+
+// ============================================================
 // Changes (git) view
 // ============================================================
 async function loadGit() {
@@ -466,6 +775,20 @@ async function cloudApi(path, opts = {}) {
   return res.json();
 }
 
+/** Reads a Blob (a recorded voice clip, here) into a base64 string with no "data:" prefix — what POST /transcribe expects. */
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result; // "data:<mime>;base64,<data>"
+      const comma = result.indexOf(",");
+      resolve(comma === -1 ? result : result.slice(comma + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 /**
  * Best-effort: ground a cloud task in locally-relevant code via Phase 2's
  * semantic search. Never blocks submission on failure.
@@ -479,12 +802,35 @@ async function cloudApi(path, opts = {}) {
  * shown in full here — never a file it only ever saw a snippet of.
  */
 async function findRelevantFiles(query, mode) {
-  if (!currentProjectPath) return [];
+  // Returns { hits, storeSize } rather than a bare array -- storeSize (the
+  // semantic index's total chunk count, from /debug/search's response) is
+  // what distinguishes "this project is empty" from "this project has
+  // files, none matched" once the caller passes it through as
+  // projectContext.indexedChunkCount. Confirmed live (Sept 2026,
+  // qwen/qwen3.8-27b) that leaving that ambiguous made a careful model
+  // refuse to propose any files at all for a brand-new project rather than
+  // guess whether "create" was safe -- see promptShared.ts's
+  // relevantFilesContext for how this gets used.
+  if (!currentProjectPath) return { hits: [], storeSize: undefined };
   try {
     const result = await api(`/debug/search?q=${encodeURIComponent(query)}&k=3`);
     const hits = result.hits.map((h) => ({ relPath: h.relPath, snippet: h.snippet }));
-    if (mode !== "build") return hits;
-    return await Promise.all(
+    // "fix" mode needs full content just as much as "build" does --
+    // promptShared.ts's fix-mode branch only allows action "modify" for a
+    // path it was shown FULL content for (fixFullContentPaths), and
+    // otherwise instructs the model to only ever "create", which
+    // fsOps.ts#applyEdits then correctly refuses for a path that already
+    // exists. Before this fix, fix-mode hits were always snippet-only, so
+    // every fix-mode task was deterministically steered into proposing
+    // "create" for a file that already exists -- confirmed live against 3
+    // different models (groq/gpt-oss-120b twice, openrouter/ling-3.0):
+    // each either declined to edit at all, or proposed a correct fix
+    // labeled "create", which Apply then silently skipped with "file
+    // already exists -- refusing to overwrite a create". Not a model
+    // quality problem -- the prompt's own instructions left no other
+    // option once content was withheld.
+    if (mode !== "build" && mode !== "fix") return { hits, storeSize: result.storeSize };
+    const withContent = await Promise.all(
       hits.map(async (h) => {
         try {
           const file = await api(`/fs/read?path=${encodeURIComponent(h.relPath)}`);
@@ -494,8 +840,9 @@ async function findRelevantFiles(query, mode) {
         }
       }),
     );
+    return { hits: withContent, storeSize: result.storeSize };
   } catch {
-    return [];
+    return { hits: [], storeSize: undefined };
   }
 }
 
@@ -609,6 +956,7 @@ function buildEditsCard(edits, taskProjectPath, review) {
       <button class="edits-apply-btn" ${agentBaseUrl && !projectMismatch ? "" : "disabled"}>Apply</button>
       <span class="edits-apply-result"></span>
       <button class="edits-verify-btn" hidden>Run verification</button>
+      <button class="edits-diagnose-btn" hidden>Diagnose &amp; Fix</button>
     </div>
     <div class="verify-results" hidden></div>
   `;
@@ -721,11 +1069,21 @@ function buildEditsCard(edits, taskProjectPath, review) {
   // ---- Verification Engine (PRD §22): real build/test evidence, not a claim ----
   const verifyBtn = card.querySelector(".edits-verify-btn");
   const verifyResultsEl = card.querySelector(".verify-results");
+  // Autonomous Build/Test/Fix Loop (roadmap Phase 6, source requirement §16):
+  // the failing steps from the MOST RECENT verify run, in the shape a
+  // "fix"-mode task's ProjectContext.failingVerification expects -- kept
+  // here (not re-derived from the DOM later) so Diagnose & Fix always acts
+  // on real, just-captured evidence rather than stale text scraped back out
+  // of the rendered output.
+  const diagnoseBtn = card.querySelector(".edits-diagnose-btn");
+  let lastFailingSteps = [];
   verifyBtn.addEventListener("click", async () => {
     verifyBtn.disabled = true;
     verifyBtn.textContent = "Verifying…";
     verifyResultsEl.hidden = false;
     verifyResultsEl.innerHTML = `<div class="verify-pending">Running the project's build/test scripts…</div>`;
+    diagnoseBtn.hidden = true;
+    lastFailingSteps = [];
     try {
       const result = await api("/verify", { method: "POST" });
       if (result.overall === "no-verification-available") {
@@ -757,12 +1115,92 @@ function buildEditsCard(edits, taskProjectPath, review) {
           });
           stepsEl.appendChild(stepEl);
         }
+        lastFailingSteps = result.steps
+          .filter((s) => s.status !== "passed")
+          .map((s) => ({ label: s.label, command: s.command, output: s.output }));
+        if (lastFailingSteps.length > 0 && cloudBaseUrl) {
+          diagnoseBtn.hidden = false;
+          diagnoseBtn.disabled = false;
+          diagnoseBtn.textContent = "Diagnose & Fix";
+        }
       }
     } catch (err) {
       verifyResultsEl.innerHTML = `<div class="verify-none">Verification failed to run: ${escapeHtml(err.message)}</div>`;
     }
     verifyBtn.disabled = false;
     verifyBtn.textContent = "Run verification again";
+  });
+
+  // Autonomous Build/Test/Fix Loop (roadmap Phase 6, source requirement
+  // §16): takes the real failing-step evidence just captured above,
+  // creates a "fix"-mode task grounded in it (same propose -> review ->
+  // apply pipeline as any other task -- see AgentMode's doc comment in
+  // @mobiusx/protocol), and renders its proposed edits as ANOTHER
+  // edits-card nested inside this one's verify-results area, so the user
+  // can Apply -> Run verification -> (if still failing) Diagnose & Fix
+  // again, chaining as many cycles as the failure actually needs. This is
+  // the "manual" autonomy mode (AgentSettings.fixLoopMode) -- each cycle
+  // still requires an explicit Apply click; an "auto" mode that chains
+  // cycles without a click is a documented follow-up (see
+  // docs/AI_ENGINEERING_PLATFORM_ROADMAP.md's Phase 6 entry), not built here.
+  diagnoseBtn.addEventListener("click", async () => {
+    if (!currentProjectPath || !cloudBaseUrl || lastFailingSteps.length === 0) return;
+    diagnoseBtn.disabled = true;
+    diagnoseBtn.textContent = "Diagnosing…";
+    const pendingEl = document.createElement("div");
+    pendingEl.className = "verify-pending";
+    pendingEl.textContent = "Diagnosing the verification failure and drafting a fix…";
+    verifyResultsEl.appendChild(pendingEl);
+    try {
+      const searchText = lastFailingSteps.map((s) => `${s.label}\n${s.output}`).join("\n\n").slice(0, 2000);
+      const { hits: relevantFiles, storeSize: indexedChunkCount } = await findRelevantFiles(searchText || "build failure", "fix");
+      const prompt = `Diagnose and fix the failing verification step(s): ${lastFailingSteps.map((s) => s.label).join(", ")}.`;
+      const { task } = await cloudApi("/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "fix",
+          prompt,
+          projectContext: { projectPath: currentProjectPath, relevantFiles, indexedChunkCount, failingVerification: lastFailingSteps },
+        }),
+      });
+      let detail = await cloudApi(`/tasks/${task.id}`);
+      if (detail.status === "queued" || detail.status === "running") {
+        const refresh = async () => {
+          detail = await cloudApi(`/tasks/${task.id}`);
+        };
+        await streamTask(task.id, { onEdits: refresh, onStatus: refresh, onError: refresh, onOutput: refresh, onStep: refresh, onReview: refresh });
+        // streamTask() resolves as soon as the WS "done" message arrives,
+        // which can race ahead of the in-flight refresh() an earlier
+        // "edits"/"status" message kicked off (that refresh's own GET may
+        // still be in flight when "done" shows up right behind it) --
+        // observed live: a fix-mode task whose Tasks-view detail clearly
+        // had 1 proposed edit still rendered "No concrete fix was
+        // proposed" here because `detail` hadn't caught up yet. "done"
+        // means the task is terminal server-side, so one guaranteed-fresh
+        // fetch after the WS closes removes the race instead of trusting
+        // whichever refresh() happened to finish last.
+        detail = await cloudApi(`/tasks/${task.id}`);
+      }
+      pendingEl.remove();
+      const prefix = document.createElement("div");
+      prefix.className = "verify-pending";
+      prefix.textContent = `[runner: ${detail.runner}${detail.model ? " / " + detail.model : ""}]${detail.modelNote ? ` — ${detail.modelNote}` : ""}`;
+      verifyResultsEl.appendChild(prefix);
+      if (detail.edits && detail.edits.length > 0) {
+        verifyResultsEl.appendChild(buildEditsCard(detail.edits, detail.projectPath, detail.review));
+      } else {
+        const none = document.createElement("div");
+        none.className = "verify-none";
+        none.textContent = detail.output?.trim()
+          ? `No concrete fix was proposed. Runner said: ${detail.output.trim().slice(0, 400)}`
+          : "No concrete fix was proposed.";
+        verifyResultsEl.appendChild(none);
+      }
+    } catch (err) {
+      pendingEl.textContent = `Diagnose & Fix failed: ${err.message}`;
+    }
+    diagnoseBtn.disabled = false;
+    diagnoseBtn.textContent = "Diagnose & Fix";
   });
 
   return card;
@@ -798,9 +1236,16 @@ function modelOptionLabel(m) {
  * `includeAuto` adds a leading, selected-by-default "Auto" option whose
  * value is "" — submitting a task with no model means exactly this: let
  * the gateway's own resolveRunner() choose (Settings default, else the
- * best configured provider, else demo). Unavailable models are shown, not
- * hidden, but disabled — same "never hidden" principle as everywhere else
- * in this app's governance UI.
+ * best configured provider, else demo).
+ *
+ * Models with no configured key/endpoint are filtered out entirely (not
+ * just disabled) — explicit user request (Sept 2026), after this list's
+ * previous "show everything, disable what's unavailable" behavior (this
+ * app's usual "never hidden" governance-UI principle) left an unusable
+ * model sitting in the list as dead weight. A provider being configured
+ * doesn't imply every model on it is reliable, though -- see
+ * groqRunner.ts's removal of qwen/qwen3.8-27b for a case this filter does
+ * NOT catch on its own (a key was present; the model just didn't work).
  */
 async function populateModelSelect(selectEl, { includeAuto, selectedValue } = {}) {
   const models = await fetchModelOptions();
@@ -822,8 +1267,10 @@ async function populateModelSelect(selectEl, { includeAuto, selectedValue } = {}
     selectEl.appendChild(opt);
   }
 
+  const available = models.filter((m) => m.available);
+
   const byProvider = new Map();
-  for (const m of models) {
+  for (const m of available) {
     if (!byProvider.has(m.provider)) byProvider.set(m.provider, []);
     byProvider.get(m.provider).push(m);
   }
@@ -835,10 +1282,17 @@ async function populateModelSelect(selectEl, { includeAuto, selectedValue } = {}
       const opt = document.createElement("option");
       opt.value = JSON.stringify({ provider: m.provider, model: m.model });
       opt.textContent = modelOptionLabel(m);
-      opt.disabled = !m.available;
       group.appendChild(opt);
     }
     selectEl.appendChild(group);
+  }
+
+  if (available.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No models configured — add an API key in Settings";
+    opt.disabled = true;
+    selectEl.appendChild(opt);
   }
 
   if (selectedValue !== undefined) {
@@ -852,16 +1306,23 @@ async function populateModelSelect(selectEl, { includeAuto, selectedValue } = {}
 // ============================================================
 function createAssistantPanel(container) {
   container.innerHTML = `
+    <div class="assistant-titlebar">
+      <img class="assistant-icon" src="../../assets/logo.png" alt="" />
+      <span class="assistant-title">MobiusX AI Assistant</span>
+    </div>
     <div class="assistant-header">
-      <button class="mode-btn active" data-mode="ask" title="Chat only — answers questions and can show code in its reply, but never writes a file to disk">Ask</button>
-      <button class="mode-btn" data-mode="plan" title="Drafts a numbered implementation plan in prose — describes what to build, never writes a file to disk">Plan</button>
-      <button class="mode-btn" data-mode="build" title="The only mode that writes real files — proposes edits you review and click Apply before anything touches disk">Build</button>
-      <button class="mode-btn" data-mode="spec" title="Requirements Engineering — generates a structured spec file for review, doesn't write code">Spec</button>
+      <div class="assistant-mode-tabs">
+        <button class="mode-btn active" data-mode="ask" title="Chat only — answers questions and can show code in its reply, but never writes a file to disk">Ask</button>
+        <button class="mode-btn" data-mode="plan" title="Drafts a numbered implementation plan in prose — describes what to build, never writes a file to disk">Plan</button>
+        <button class="mode-btn" data-mode="build" title="The only mode that writes real files — proposes edits you review and click Apply before anything touches disk">Build</button>
+        <button class="mode-btn" data-mode="spec" title="Requirements Engineering — generates a structured spec file for review, doesn't write code">Spec</button>
+      </div>
       <select class="model-select" title="Which AI model handles this task — overrides the Settings default for this task only"></select>
     </div>
     <div class="assistant-feed"></div>
     <div class="assistant-input-row">
       <input placeholder="Ask a follow-up question…" />
+      <button class="mic-btn" type="button" title="Voice input"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></button>
       <button class="send-btn">→</button>
     </div>
   `;
@@ -885,6 +1346,16 @@ function createAssistantPanel(container) {
 
   populateModelSelect(modelSelect, { includeAuto: true });
 
+  // Spins the panel's header logo for as long as at least one streaming
+  // response in this feed is still in flight (a follow-up can be sent while
+  // an older message has already finished, so this is a count, not a flag).
+  const titlebarIcon = container.querySelector(".assistant-icon");
+  let activeStreamCount = 0;
+  function setStreamingIndicator(active) {
+    activeStreamCount += active ? 1 : -1;
+    titlebarIcon.classList.toggle("spinning", activeStreamCount > 0);
+  }
+
   modeBtns.forEach((btn) => {
     btn.addEventListener("click", () => {
       mode = btn.dataset.mode;
@@ -906,7 +1377,13 @@ function createAssistantPanel(container) {
     div.className = "assistant-msg system streaming";
     div.innerHTML = `
       <div class="assistant-stream-head">
-        <div class="assistant-steps"></div>
+        <div class="assistant-stream-left">
+          <div class="assistant-stream-status">
+            <img class="assistant-spinner-icon" src="../../assets/logo.png" alt="" />
+            <span class="assistant-stream-label">Working…</span>
+          </div>
+          <div class="assistant-steps"></div>
+        </div>
         <button class="assistant-stop-btn" disabled title="Cancel this task">■ Stop</button>
       </div>
       <div class="assistant-output"></div>
@@ -914,48 +1391,76 @@ function createAssistantPanel(container) {
     feed.appendChild(div);
     feed.scrollTop = feed.scrollHeight;
     const stopBtn = div.querySelector(".assistant-stop-btn");
+    const labelEl = div.querySelector(".assistant-stream-label");
+    setStreamingIndicator(true);
+    let finished = false;
+    // Stops the spinner (both the per-message one and, once nothing else in
+    // this panel is still running, the titlebar one) and freezes the status
+    // label — called from whichever terminal event actually arrives
+    // (setStatus's completed/cancelled/failed, or setError), and guarded so
+    // a status *and* an error for the same task can't double-decrement the
+    // shared activeStreamCount.
+    function finish(label) {
+      if (finished) return;
+      finished = true;
+      div.classList.add("done");
+      labelEl.textContent = label;
+      setStreamingIndicator(false);
+    }
+    const stepsEl = div.querySelector(".assistant-steps");
+    const outputEl = div.querySelector(".assistant-output");
     return {
       stopBtn,
-      setStep(step) {
-        const stepsEl = div.querySelector(".assistant-steps");
-        const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "…" : "·";
-        let line = stepsEl.querySelector(`[data-step="${step.id}"]`);
-        if (!line) {
-          line = document.createElement("div");
-          line.dataset.step = step.id;
+      // Re-renders this message from an AUTHORITATIVE, freshly GET-ed
+      // TaskDetail, instead of accumulating individual WS event deltas.
+      // Why: the demo runner (and a fast real model) routinely finishes in
+      // well under a second — faster than this client can finish the POST
+      // /tasks round trip and open the streaming WebSocket, so this can
+      // easily be subscribing after some or all of a task's events already
+      // fired. The gateway does replay current state to a late subscriber
+      // (see server.ts's upgrade handler), but trusting a client-side
+      // accumulator to have seen every delta, in order, exactly once is
+      // exactly the kind of assumption that leaves a panel stuck forever on
+      // "Composing response" if any single message is missed or reordered.
+      // Re-fetching ground truth on every signal — the same thing the Tasks
+      // view's showTaskDetail()/renderTaskDetail() already does — sidesteps
+      // that class of bug entirely: whatever we render is always this
+      // task's actual current state, never a guess built from a delta log.
+      // Safe to call repeatedly, including with a snapshot no newer than
+      // the last one.
+      renderFromDetail(task, { prefixLines = [], taskProjectPath } = {}) {
+        stepsEl.innerHTML = "";
+        for (const step of task.steps) {
+          const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "…" : "·";
+          const line = document.createElement("div");
+          line.className = "assistant-step-line";
+          line.innerHTML = `<span class="assistant-step-marker ${step.status}">${marker}</span>${escapeHtml(step.label)}`;
           stepsEl.appendChild(line);
         }
-        line.textContent = `${marker} ${step.label}`;
-      },
-      appendOutput(delta) {
-        div.querySelector(".assistant-output").textContent += delta;
-        feed.scrollTop = feed.scrollHeight;
-      },
-      setEdits(edits, taskProjectPath) {
-        if (!edits?.length) return;
-        div.appendChild(buildEditsCard(edits, taskProjectPath));
-        feed.scrollTop = feed.scrollHeight;
-      },
-      setReview(review) {
-        // The review event can arrive after setEdits already built the card (that's the
-        // normal order — edits, then review) — inject it into the existing card rather
-        // than requiring buildEditsCard to be re-called.
-        const reviewSlot = div.querySelector(".edits-card-review");
-        if (!reviewSlot) return; // no edits card yet — shouldn't happen given emission order, but never throw over it
-        reviewSlot.innerHTML = renderReviewBannerHtml(review);
-        feed.scrollTop = feed.scrollHeight;
-      },
-      setStatus(status) {
-        if (status === "cancelled") {
-          div.querySelector(".assistant-output").textContent += "\n[cancelled]";
+
+        const bodyText = task.output || (task.status === "failed" ? (task.error ?? "") : "");
+        outputEl.textContent = prefixLines.join("") + bodyText + (task.status === "cancelled" ? "\n[cancelled]" : "");
+
+        if (task.edits?.length && !div.querySelector(".edits-card")) {
+          div.appendChild(buildEditsCard(task.edits, taskProjectPath, task.review));
+        } else if (task.review) {
+          const reviewSlot = div.querySelector(".edits-card-review");
+          if (reviewSlot) reviewSlot.innerHTML = renderReviewBannerHtml(task.review);
         }
-        if (status === "completed" || status === "cancelled" || status === "failed") {
+
+        feed.scrollTop = feed.scrollHeight;
+
+        if (task.status === "completed" || task.status === "cancelled" || task.status === "failed") {
           stopBtn.remove();
+          finish(task.status === "completed" ? "Done" : task.status === "cancelled" ? "Cancelled" : "Failed");
         }
       },
+      // For failures that never got as far as a task existing at all (e.g.
+      // the initial POST /tasks itself rejected) — nothing to re-fetch.
       setError(message) {
-        div.querySelector(".assistant-output").textContent += `\n[error] ${message}`;
+        outputEl.textContent += `\n[error] ${message}`;
         stopBtn.remove();
+        finish("Failed");
       },
     };
   }
@@ -970,14 +1475,32 @@ function createAssistantPanel(container) {
   async function submit() {
     const text = input.value.trim();
     if (!text || !cloudBaseUrl) return;
+
+    // Build/Spec modes propose real file edits, and Apply refuses to write
+    // anywhere without a currently-open project (see buildEditsCard's
+    // "Open a project first." guard) -- catching that up front, before
+    // spending a whole generation, instead of letting the user go through
+    // the full response only to hit a dead end at Apply time. Confirmed
+    // real friction, not a hypothetical: a user submitted a Build request
+    // with no project open, got a full proposed-edits response, and had no
+    // way to tell anything was wrong until Apply silently did nothing.
+    if ((mode === "build" || mode === "spec") && !currentProjectPath) {
+      addMsg(text, "user");
+      input.value = "";
+      addMsg(
+        `${mode === "build" ? "Build" : "Spec"} mode writes real files, so it needs a project open first — click "New Project…" or "Open Project…" at the top, then send this again.`,
+        "system",
+      );
+      return;
+    }
+
     addMsg(text, "user");
     input.value = "";
 
     const stream = addStreamingMsg();
     const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
-    let fullOutputText = ""; // accumulated from onOutput only (never the "[runner: ...]"/"[model note] ..." lines below, which are display-only and shouldn't be fed back to the model as if it said them) — this is what becomes this turn's history entry once the task finishes
     try {
-      const relevantFiles = await findRelevantFiles(text, mode);
+      const { hits: relevantFiles, storeSize: indexedChunkCount } = await findRelevantFiles(text, mode);
       // "" (Auto) means: omit `model` entirely and let the gateway's
       // resolveRunner() choose (Settings default, else best configured
       // provider, else demo) — see populateModelSelect above.
@@ -987,13 +1510,14 @@ function createAssistantPanel(container) {
         body: JSON.stringify({
           mode,
           prompt: text,
-          projectContext: taskProjectPath ? { projectPath: taskProjectPath, relevantFiles } : undefined,
+          projectContext: taskProjectPath ? { projectPath: taskProjectPath, relevantFiles, indexedChunkCount } : undefined,
           model,
           history: historyTurns.slice(-MAX_HISTORY_TURNS),
         }),
       });
-      stream.appendOutput(`[runner: ${task.runner}${task.model ? " / " + task.model : ""}]\n`);
-      if (task.modelNote) stream.appendOutput(`[model note] ${task.modelNote}\n`);
+      const prefixLines = [`[runner: ${task.runner}${task.model ? " / " + task.model : ""}]\n`];
+      if (task.modelNote) prefixLines.push(`[model note] ${task.modelNote}\n`);
+      const renderOpts = { prefixLines, taskProjectPath };
       stream.stopBtn.disabled = false;
       stream.stopBtn.addEventListener("click", async () => {
         stream.stopBtn.disabled = true;
@@ -1005,24 +1529,36 @@ function createAssistantPanel(container) {
           stream.stopBtn.textContent = `Cancel failed: ${err.message}`;
         }
       });
-      await streamTask(task.id, {
-        onStep: (step) => stream.setStep(step),
-        onOutput: (delta) => {
-          fullOutputText += delta;
-          stream.appendOutput(delta);
-        },
-        onEdits: (edits) => stream.setEdits(edits, taskProjectPath),
-        onReview: (review) => stream.setReview(review),
-        onStatus: (status) => stream.setStatus(status),
-        onError: (message) => stream.setError(message),
-      });
+
+      // Fetch ground truth immediately, before ever opening the streaming
+      // WebSocket — see renderFromDetail's doc comment. A fast task (the
+      // demo runner typically finishes in under 1.5s) can easily already be
+      // "completed" by this point, in which case we render the final result
+      // right away and never open the WS at all.
+      let detail = await cloudApi(`/tasks/${task.id}`);
+      stream.renderFromDetail(detail, renderOpts);
+
+      if (detail.status === "queued" || detail.status === "running") {
+        const refresh = async () => {
+          detail = await cloudApi(`/tasks/${task.id}`);
+          stream.renderFromDetail(detail, renderOpts);
+        };
+        await streamTask(task.id, {
+          onStep: refresh,
+          onOutput: refresh,
+          onEdits: refresh,
+          onReview: refresh,
+          onStatus: refresh,
+          onError: (message) => stream.setError(message),
+        });
+      }
       stream.stopBtn.remove();
       // Remember this exchange for the NEXT follow-up in this panel — see
       // the historyTurns comment above. Skipped for an empty response (e.g.
       // the task was cancelled before producing anything) since there's
       // nothing worth reminding the model of.
-      if (fullOutputText.trim()) {
-        historyTurns.push({ role: "user", content: text }, { role: "assistant", content: fullOutputText });
+      if (detail.output?.trim()) {
+        historyTurns.push({ role: "user", content: text }, { role: "assistant", content: detail.output });
         if (historyTurns.length > MAX_HISTORY_TURNS * 2) {
           historyTurns = historyTurns.slice(-MAX_HISTORY_TURNS * 2);
         }
@@ -1037,15 +1573,108 @@ function createAssistantPanel(container) {
     if (e.key === "Enter") submit();
   });
 
-  return { addMsg };
+  // ============================================================
+  // Voice input add-on (AI Assistant page): records with MediaRecorder,
+  // then POSTs the clip to MobiusX Cloud Gateway's /transcribe (Groq
+  // Whisper — see apps/cloud-agent-gateway/src/voice.ts). Electron doesn't
+  // ship Chrome's built-in SpeechRecognition web service, so a
+  // browser-only Web Speech API approach reliably fails here with a
+  // "network" error — this real server round-trip is what actually works.
+  // ============================================================
+  const micBtn = container.querySelector(".mic-btn");
+  let mediaRecorder = null;
+  let recordedChunks = [];
+
+  if (cloudBaseUrl) {
+    cloudApi("/transcribe/status")
+      .then((status) => {
+        if (!status.available) {
+          micBtn.disabled = true;
+          micBtn.title = `Voice input unavailable — ${status.reason}`;
+        }
+      })
+      .catch(() => {
+        // Couldn't even reach the gateway to check — leave the button
+        // enabled and let an actual record attempt surface the real error,
+        // rather than guessing "unavailable" from a transient failure.
+      });
+  } else {
+    micBtn.disabled = true;
+    micBtn.title = "Voice input unavailable — Cloud Agent Gateway did not start";
+  }
+
+  async function toggleRecording() {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.stop(); // the rest happens in onstop below
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      addMsg(`[voice input] Microphone access failed: ${err.message}`, "system");
+      return;
+    }
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) recordedChunks.push(e.data);
+    };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop()); // release the OS mic indicator promptly
+      micBtn.classList.remove("recording");
+      micBtn.disabled = true;
+      micBtn.title = "Transcribing…";
+      try {
+        const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+        const audio = await blobToBase64(blob);
+        const { text } = await cloudApi("/transcribe", {
+          method: "POST",
+          body: JSON.stringify({ audio, mimeType: blob.type }),
+        });
+        if (text) {
+          input.value = input.value ? `${input.value} ${text}` : text;
+          input.focus();
+        } else {
+          addMsg("[voice input] No speech was recognized in that clip.", "system");
+        }
+      } catch (err) {
+        addMsg(`[voice input] Transcription failed: ${err.message}`, "system");
+      } finally {
+        micBtn.disabled = false;
+        micBtn.title = "Voice input";
+      }
+    };
+    mediaRecorder.start();
+    micBtn.classList.add("recording");
+    micBtn.title = "Recording… click to stop";
+  }
+
+  micBtn.addEventListener("click", toggleRecording);
+
+  return {
+    addMsg,
+    // Used by the "New Project" flow to drop a freshly-created (empty)
+    // project straight into Build mode with focus in the input, instead of
+    // leaving the user to notice and click Build themselves.
+    setMode(newMode) {
+      mode = newMode;
+      modeBtns.forEach((b) => b.classList.toggle("active", b.dataset.mode === newMode));
+    },
+    focusInput() {
+      input.focus();
+    },
+  };
 }
 
-createAssistantPanel(document.getElementById("assistant-embedded"));
+const embeddedAssistantPanel = createAssistantPanel(document.getElementById("assistant-embedded"));
 createAssistantPanel(document.getElementById("assistant-full"));
 
 // ============================================================
 // Home "ask" box — routes into the AI Assistant view
 // ============================================================
+const homeModelSelectEl = document.getElementById("home-model-select");
+populateModelSelect(homeModelSelectEl, { includeAuto: true });
 document.querySelectorAll(".ask-modes .mode-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".ask-modes .mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
@@ -1058,6 +1687,12 @@ document.getElementById("home-ask-send").addEventListener("click", () => {
     document.getElementById("home-ask-input").value = "";
     const input = document.querySelector("#assistant-full .assistant-input-row input");
     input.value = val;
+    // Carry the Home page's model choice into the panel that actually
+    // sends the request — this is the whole point of the Home dropdown:
+    // letting the user pick a faster model right where they noticed the lag.
+    const homeModel = homeModelSelectEl.value;
+    const fullModelSelect = document.querySelector("#assistant-full .model-select");
+    if (homeModel && fullModelSelect) fullModelSelect.value = homeModel;
     document.querySelector("#assistant-full .send-btn").click();
   }
 });
@@ -1102,9 +1737,17 @@ async function runDebugSearch() {
     for (const hit of result.hits) {
       const card = document.createElement("div");
       card.className = "debug-hit";
+      // Real relevance score from the local semantic-ish index (see
+      // /debug/search) — not a fabricated "confidence" figure. Banded into
+      // high/medium/low just for the badge's color, same number either way.
+      const scoreBand = hit.score >= 0.7 ? "high" : hit.score >= 0.4 ? "medium" : "low";
       card.innerHTML = `
         <div class="debug-hit-head">
-          <span class="debug-hit-path">${escapeHtml(hit.relPath)}:${hit.startLine}-${hit.endLine} <span class="debug-hit-meta">(${hit.kind}, score ${hit.score.toFixed(3)})</span></span>
+          <span class="debug-hit-path">${escapeHtml(hit.relPath)}:${hit.startLine}-${hit.endLine}</span>
+          <span class="debug-hit-badges">
+            <span class="debug-hit-kind-badge">${escapeHtml(hit.kind)}</span>
+            <span class="debug-hit-score-badge ${scoreBand}">${hit.score.toFixed(2)} match</span>
+          </span>
         </div>
         <pre class="debug-hit-snippet">${escapeHtml(hit.snippet)}</pre>
         <div class="debug-hit-history">
@@ -1145,13 +1788,72 @@ debugQueryInput.addEventListener("keydown", (e) => {
 });
 
 // ============================================================
+// Project Completion Contract (roadmap Phase 6, source requirement §31):
+// GET /completion returns a real, computed report of what's actually
+// verifiable about the open project right now -- see
+// apps/desktop-agent/src/completion.ts's doc comment for exactly which
+// criteria are measured vs honestly reported "not_configured". This is a
+// pull-on-demand panel (no auto-refresh) since computing it re-runs the
+// project's verification steps.
+// ============================================================
+const completionCheckBtn = document.getElementById("completion-check-btn");
+const completionResultsEl = document.getElementById("completion-results");
+
+function renderCompletionReport(report) {
+  const overallLabel = { verified: "Verified", in_progress: "In progress", not_started: "Not started", unknown: "Unknown" }[report.overall] || report.overall;
+  const rows = report.criteria
+    .map((c) => {
+      const icon = c.status === "pass" ? "✓" : c.status === "fail" ? "✗" : "○";
+      return `
+        <div class="completion-criterion ${c.status}">
+          <span class="completion-criterion-status ${c.status}">${icon}</span>
+          <span class="completion-criterion-label">${escapeHtml(c.label)}</span>
+          ${c.detail ? `<span class="completion-criterion-detail">${escapeHtml(c.detail)}</span>` : ""}
+        </div>`;
+    })
+    .join("");
+  completionResultsEl.innerHTML = `
+    <div class="completion-summary ${report.overall}">${overallLabel} — ${report.completionPercent}% of measured criteria pass</div>
+    <div class="completion-criteria">${rows}</div>
+    <div class="completion-meta">Generated ${new Date(report.generatedAt).toLocaleString()} · written to .mobiusx/PROJECT_COMPLETION.json</div>
+  `;
+}
+
+completionCheckBtn?.addEventListener("click", async () => {
+  completionCheckBtn.disabled = true;
+  completionCheckBtn.textContent = "Checking…";
+  completionResultsEl.innerHTML = `<div class="verify-pending">Computing the completion report (re-runs verification)…</div>`;
+  try {
+    const report = await api("/completion");
+    renderCompletionReport(report);
+  } catch (err) {
+    completionResultsEl.innerHTML = `<div class="verify-none">Completion check failed: ${escapeHtml(err.message)}</div>`;
+  }
+  completionCheckBtn.disabled = false;
+  completionCheckBtn.textContent = "Check completion";
+});
+
+// ============================================================
 // Tasks view — list + detail, backed by the Cloud Agent Gateway.
 // ============================================================
 let activeTaskId = null;
+// Which Task Details tab is showing — persisted across the repeated
+// renderTaskDetail() re-renders a streaming task triggers (see showTaskDetail),
+// and reset to "overview" only when the user actually selects a different task.
+let activeTaskTab = "overview";
 
 function formatTaskTime(iso) {
   try {
     return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+function formatStepTime(iso) {
+  if (!iso) return null;
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   } catch {
     return iso;
   }
@@ -1190,6 +1892,7 @@ async function loadTasksList() {
 }
 
 async function showTaskDetail(taskId) {
+  if (taskId !== activeTaskId) activeTaskTab = "overview"; // fresh selection — don't carry over e.g. "Changes" from a prior task
   activeTaskId = taskId;
   document.querySelectorAll(".task-row").forEach((el) => el.classList.remove("active"));
   const detailEl = document.getElementById("task-detail");
@@ -1213,10 +1916,102 @@ async function showTaskDetail(taskId) {
   }
 }
 
+// ---- Task Details tab bodies -------------------------------------------
+// Every number/timestamp below comes straight off the real TaskDetail the
+// gateway returned (see packages/protocol/src/cloud.ts) — the progress ring
+// is a real steps-completed fraction, the timeline uses each step's real
+// startedAt/completedAt. The one thing this reference gateway genuinely
+// doesn't track (token/cost usage) is called out as a labeled, disabled
+// preview rather than shown with invented numbers.
+
+function buildTaskOverviewTab(task) {
+  const total = task.steps.length;
+  const completed = task.steps.filter((s) => s.status === "completed").length;
+  const fraction = task.status === "completed" ? 1 : total > 0 ? completed / total : 0;
+  const r = 26;
+  const c = 2 * Math.PI * r;
+  const offset = c * (1 - fraction);
+  const ringColor =
+    task.status === "failed" ? "#e0685f" : task.status === "cancelled" ? "#8a8b92" : task.status === "completed" ? "#6fcf73" : "#7c9eff";
+
+  return `
+    <div class="task-overview">
+      <div class="task-progress-ring">
+        <svg width="72" height="72" viewBox="0 0 72 72">
+          <circle cx="36" cy="36" r="${r}" fill="none" stroke="#232429" stroke-width="6" />
+          <circle cx="36" cy="36" r="${r}" fill="none" stroke="${ringColor}" stroke-width="6"
+            stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"
+            stroke-linecap="round" transform="rotate(-90 36 36)" />
+        </svg>
+        <div class="task-progress-ring-label">${total > 0 ? `${completed}/${total}` : "—"}</div>
+      </div>
+      <div class="task-overview-stats">
+        <div class="task-overview-stat"><span>Status</span><span class="task-status ${task.status}">${task.status}</span></div>
+        <div class="task-overview-stat"><span>Runner</span><span>${escapeHtml(task.runner)}</span></div>
+        <div class="task-overview-stat"><span>Model</span><span>${task.model ? escapeHtml(task.model) : "—"}</span></div>
+        <div class="task-overview-stat"><span>Created</span><span>${formatTaskTime(task.createdAt)}</span></div>
+        <div class="task-overview-stat"><span>Updated</span><span>${formatTaskTime(task.updatedAt)}</span></div>
+        ${
+          task.edits?.length
+            ? `<div class="task-overview-stat"><span>Changes</span><span>${task.edits.length} file${task.edits.length === 1 ? "" : "s"} proposed${task.review ? ` · review: ${escapeHtml(task.review.verdict)}` : ""}</span></div>`
+            : ""
+        }
+      </div>
+    </div>
+    ${task.modelNote ? `<div class="task-model-note">${escapeHtml(task.modelNote)}</div>` : ""}
+    <div class="task-usage-preview" title="This local reference gateway doesn't do token/cost accounting — a real Cloud Agent backend would report it here.">
+      Token &amp; cost usage <span class="status-text">(preview — not tracked by this reference gateway)</span>
+    </div>
+  `;
+}
+
+function buildTaskStepsTab(task) {
+  if (task.steps.length === 0) {
+    return `<div class="debug-empty">No steps recorded yet.</div>`;
+  }
+  return `
+    <div class="task-timeline">
+      ${task.steps
+        .map((s) => {
+          const completedAt = formatStepTime(s.completedAt);
+          const startedAt = formatStepTime(s.startedAt);
+          const timeLabel = completedAt ?? (startedAt ? `started ${startedAt}` : "");
+          return `
+            <div class="task-timeline-item">
+              <span class="task-step-dot ${s.status}"></span>
+              <div class="task-timeline-body">
+                <div class="task-timeline-label">${escapeHtml(s.label)}</div>
+                ${timeLabel ? `<div class="task-timeline-time">${escapeHtml(timeLabel)}</div>` : ""}
+              </div>
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function buildTaskLogsTab(task) {
+  const text = task.output || (task.status === "failed" ? (task.error ?? "") : "");
+  if (!text) return `<div class="debug-empty">No output yet.</div>`;
+  return `<pre class="task-detail-output">${escapeHtml(text)}</pre>`;
+}
+
+function buildTaskArtifactsTab() {
+  return `
+    <div class="task-artifacts-preview">
+      Generated artifacts (specs, diagrams, docs) from this task would appear here.
+      <span class="status-text">(preview — the Artifacts pipeline is Phase 3; see the Artifacts nav item)</span>
+    </div>
+  `;
+}
+
 function renderTaskDetail(task) {
   if (task.id !== activeTaskId) return; // a newer selection has since superseded this render
   const detailEl = document.getElementById("task-detail");
   const cancellable = task.status === "queued" || task.status === "running";
+  const changesCount = task.edits?.length ?? 0;
+
   detailEl.innerHTML = `
     <div class="task-detail-header">
       <div class="task-row-prompt">${escapeHtml(task.prompt)}</div>
@@ -1226,19 +2021,42 @@ function renderTaskDetail(task) {
         <span>runner: ${task.runner}${task.model ? " / " + escapeHtml(task.model) : ""}</span>
         ${cancellable ? `<button class="task-cancel-btn">■ Cancel</button>` : ""}
       </div>
-      ${task.modelNote ? `<div class="task-model-note">${escapeHtml(task.modelNote)}</div>` : ""}
     </div>
-    <div class="task-detail-steps">
-      ${task.steps
-        .map((s) => `<div class="task-step-row"><span class="task-step-dot ${s.status}"></span>${escapeHtml(s.label)}</div>`)
-        .join("")}
+    <div class="task-tabs">
+      <button class="task-tab-btn" data-task-tab="overview">Overview</button>
+      <button class="task-tab-btn" data-task-tab="steps">Steps${task.steps.length ? ` (${task.steps.length})` : ""}</button>
+      <button class="task-tab-btn" data-task-tab="changes">Changes${changesCount ? ` (${changesCount})` : ""}</button>
+      <button class="task-tab-btn" data-task-tab="logs">Logs</button>
+      <button class="task-tab-btn" data-task-tab="artifacts">Artifacts</button>
     </div>
-    <pre class="task-detail-output">${escapeHtml(task.output || (task.status === "failed" ? task.error ?? "" : "…"))}</pre>
-    <div class="task-detail-edits"></div>
+    <div class="task-tab-panel" data-task-tab-panel="overview">${buildTaskOverviewTab(task)}</div>
+    <div class="task-tab-panel" data-task-tab-panel="steps">${buildTaskStepsTab(task)}</div>
+    <div class="task-tab-panel" data-task-tab-panel="changes"></div>
+    <div class="task-tab-panel" data-task-tab-panel="logs">${buildTaskLogsTab(task)}</div>
+    <div class="task-tab-panel" data-task-tab-panel="artifacts">${buildTaskArtifactsTab()}</div>
   `;
+
+  const changesPanel = detailEl.querySelector('[data-task-tab-panel="changes"]');
   if (task.edits?.length) {
-    detailEl.querySelector(".task-detail-edits").appendChild(buildEditsCard(task.edits, task.projectPath, task.review));
+    changesPanel.appendChild(buildEditsCard(task.edits, task.projectPath, task.review));
+  } else {
+    changesPanel.innerHTML = `<div class="debug-empty">No changes proposed for this task.</div>`;
   }
+
+  detailEl.querySelectorAll(".task-tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.taskTab === activeTaskTab);
+    btn.addEventListener("click", () => {
+      activeTaskTab = btn.dataset.taskTab;
+      detailEl.querySelectorAll(".task-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      detailEl.querySelectorAll(".task-tab-panel").forEach((p) => {
+        p.hidden = p.dataset.taskTabPanel !== activeTaskTab;
+      });
+    });
+  });
+  detailEl.querySelectorAll(".task-tab-panel").forEach((p) => {
+    p.hidden = p.dataset.taskTabPanel !== activeTaskTab;
+  });
+
   if (cancellable) {
     const btn = detailEl.querySelector(".task-cancel-btn");
     btn.addEventListener("click", async () => {
@@ -1396,11 +2214,45 @@ document.getElementById("terminal-reconnect-btn").addEventListener("click", () =
   terminalApprovalModeStatusEl.textContent = "Reconnected.";
 });
 
+// Settings' two sub-tabs (Workspace Settings / Application Settings) — a
+// purely visual split matching the mockup's structure; both tabs' contents
+// still live in the same view-settings section and share its scroll.
+document.querySelectorAll(".settings-tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".settings-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+    const target = btn.dataset.settingsTab;
+    document.getElementById("settings-tab-workspace").hidden = target !== "workspace";
+    document.getElementById("settings-tab-application").hidden = target !== "application";
+  });
+});
+
+/** Workspace Settings' "Repositories" section — the one real thing that section
+ * has to show, since this app has no multi-repo linking (see the Repositories
+ * nav item's own placeholder view). Renders the currently open project as a
+ * single real entry, or an honest empty state — never a fabricated repo list. */
+function renderSettingsRepositories() {
+  const el = document.getElementById("settings-repositories");
+  if (!currentProjectPath) {
+    el.innerHTML = "<div class='recent-empty'>No project open — open one from Home or the top bar.</div>";
+    return;
+  }
+  const name = currentProjectPath.split("/").filter(Boolean).pop();
+  el.innerHTML = `
+    <div class="settings-repo-item">
+      <div>
+        <div class="settings-repo-name">${escapeHtml(name)} <span class="status-text">main</span></div>
+        <div class="settings-repo-path">${escapeHtml(currentProjectPath)}</div>
+      </div>
+    </div>
+  `;
+}
+
 function loadSettings() {
   loadPolicy();
   loadAuditLog();
   loadTerminalApprovalSettings();
   loadDefaultModelSettings();
+  renderSettingsRepositories();
 }
 
 document.getElementById("audit-refresh-btn").addEventListener("click", loadAuditLog);

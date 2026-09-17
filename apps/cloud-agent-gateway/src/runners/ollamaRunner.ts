@@ -163,7 +163,7 @@ export const ollamaRunner: AgentRunner = {
               delta: `\n\n(${droppedCount} proposed edit(s) omitted: the model tried to "modify" a file it wasn't shown in full, or its edits JSON didn't parse — see apps/cloud-agent-gateway/src/runners/promptShared.ts#parseBuildResponse.)`,
             });
           }
-          if (input.mode === "build" && edits.length > 0) {
+          if ((input.mode === "build" || input.mode === "fix") && edits.length > 0) {
             emit({
               type: "output",
               delta:

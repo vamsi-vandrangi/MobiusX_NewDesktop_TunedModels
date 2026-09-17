@@ -21,26 +21,43 @@
  * anthropicRunner.ts's MODES_WITH_STRUCTURED_EDITS, and
  * apps/desktop-agent/src/fsOps.ts#applyEdits). It never touches existing
  * code — only ever proposes a brand-new spec file.
+ *
+ * "fix" (roadmap Phase 6, source requirement §16 — Autonomous Build/Test/Fix
+ * Loop) also reuses the exact same propose-edits/review/apply pipeline as
+ * "build": given real failure evidence from POST /verify (see
+ * ProjectContext.failingVerification below), it proposes the minimal
+ * ProposedEdit[] needed to address those specific failures — never a
+ * broader refactor. It is deliberately NOT a new pipeline: the only
+ * difference from "build" is what grounds the prompt (verification
+ * failures instead of a user's free-form request) and that its edits, once
+ * applied, are expected to be re-verified (see apps/desktop/src/renderer/renderer.js's
+ * "Diagnose & Fix" flow) rather than treated as a one-shot task.
  */
-export type AgentMode = "ask" | "plan" | "build" | "spec";
+export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 /**
  * Multi-model support: this gateway can route a task to more than one
- * model provider, not just Anthropic — including free-tier open-weight
- * models (Llama, Qwen2.5-Coder, DeepSeek), so the user can pick a model
- * the way Claude/Cursor's own UIs let you, either as a standing default
+ * model provider, not just Anthropic, so the user can pick a model the
+ * way Claude/Cursor's own UIs let you, either as a standing default
  * (AgentSettings.defaultModel in agent.ts) or per task (CreateTaskRequest.model
  * below). See apps/cloud-agent-gateway/src/runners/registry.ts#resolveRunner
  * for exactly how a requested selection is honored or — visibly, never
- * silently — substituted.
+ * silently — substituted. Free-tier lineups (openrouter, groq) change over
+ * time as providers deprecate/add models — see each runner file's own doc
+ * comment for the current, live-verified state rather than trusting this
+ * comment to stay current.
  *
- * "ollama" is local-only (no API key, talks to a local Ollama install) and
- * is deliberately never auto-selected — see registry.ts's AUTO_PRIORITY
- * comment for why. It only ever runs when explicitly chosen.
+ * Two providers are deliberately excluded from automatic selection
+ * (registry.ts's AUTO_PRIORITY) and only ever run when explicitly chosen:
+ * "ollama" (local-only, depends on a background process happening to be
+ * running on the user's machine) and "deepseek" (a paid, metered API —
+ * DeepSeek's own platform.deepseek.com, not free like openrouter/groq's
+ * current lineups — so using it should always be an explicit choice, never
+ * a silent fallback that starts charging the user's account).
  */
-export type ModelProvider = "demo" | "anthropic" | "openrouter" | "groq" | "ollama";
+export type ModelProvider = "demo" | "anthropic" | "openrouter" | "groq" | "deepseek" | "ollama";
 
 export interface ModelSelection {
   provider: ModelProvider;
@@ -77,8 +94,36 @@ export interface ListModelsResponse {
   models: ModelOption[];
 }
 
+/**
+ * One failed/timed-out step from a real POST /verify run (see
+ * VerificationStep in agent.ts), carried into a "fix"-mode task's context
+ * so the model is grounded in actual evidence — never asked to guess what
+ * broke. Deliberately a narrower shape than VerificationStep itself (no
+ * id/exitCode/durationMs/truncated) since those fields exist for the
+ * verify UI, not for prompting; `output` here is whatever the caller
+ * chooses to include (renderer.js passes verify.ts's own already-capped
+ * output through as-is).
+ */
+export interface FailingVerificationStep {
+  /** e.g. "Build (npm run build)" — same as VerificationStep.label. */
+  label: string;
+  /** The exact command that was run, e.g. "npm run build". */
+  command: string;
+  /** Captured stdout+stderr from the failing run — the actual error text a fix must address. */
+  output: string;
+}
+
 export interface ProjectContext {
   projectPath?: string;
+  /**
+   * Present only for a "fix"-mode task (see AgentMode's doc comment above)
+   * — the real, failing VerificationStep(s) (mapped down to
+   * FailingVerificationStep) this task exists to address. Absent for every
+   * other mode. promptShared.ts's systemPromptFor includes this verbatim
+   * in the fix-mode prompt so the model is diagnosing actual captured
+   * output, not a paraphrase of it.
+   */
+  failingVerification?: FailingVerificationStep[];
   /**
    * Optional relevant-code hints, e.g. top hits from a Phase 2 /debug/search
    * — keeps the cloud call grounded in local context without shipping the
@@ -91,6 +136,22 @@ export interface ProjectContext {
    * overwritten.
    */
   relevantFiles?: { relPath: string; snippet: string; content?: string }[];
+  /**
+   * Total chunks currently in the project's semantic search index (see
+   * apps/desktop-agent/src/semanticOps.ts's searchSemanticIndex / the
+   * @mobiusx/semantic-index package) -- a signal for a different question
+   * than relevantFiles answers: not "what's relevant to this prompt" but
+   * "does this project have ANY indexed content at all". 0 means the
+   * project is genuinely empty or effectively so; undefined means this
+   * wasn't measured (an older client, or no project open at all).
+   * promptShared.ts's relevantFilesContext uses this to tell a build-mode
+   * model plainly when relevantFiles is empty BECAUSE the project is empty,
+   * as opposed to empty because nothing matched a search over a non-empty
+   * project -- confirmed live (Sept 2026, qwen/qwen3.8-27b) that leaving
+   * this ambiguous can make a careful model refuse to propose any files at
+   * all for a brand-new project rather than guess which case it's in.
+   */
+  indexedChunkCount?: number;
 }
 
 /**
@@ -238,3 +299,32 @@ export type TaskEvent =
   | { type: "status"; status: TaskStatus }
   | { type: "error"; message: string }
   | { type: "done" };
+
+/**
+ * Voice input for the AI Assistant's prompt box (an "add-on" input method,
+ * not a replacement for typing) — see apps/cloud-agent-gateway/src/voice.ts
+ * for the actual transcription call (Groq's hosted Whisper endpoint, reusing
+ * GROQ_API_KEY rather than a dedicated new provider/key). Electron doesn't
+ * ship Chrome's built-in SpeechRecognition web service, so this is a real
+ * server round-trip: the renderer records with MediaRecorder, base64-encodes
+ * the blob, and POSTs it here rather than relying on the browser's Web
+ * Speech API (unreliable/non-functional in Electron — see renderer.js's
+ * voice-input block for the full reasoning).
+ */
+export interface TranscribeRequest {
+  /** Base64-encoded audio data (no "data:" URL prefix). */
+  audio: string;
+  /** MediaRecorder's mimeType for the captured clip, e.g. "audio/webm". */
+  mimeType: string;
+}
+
+export interface TranscribeResponse {
+  text: string;
+}
+
+/** GET /transcribe/status — lets the renderer show/enable the mic button only when it will actually work, same honest-availability pattern as ModelOption.available. */
+export interface TranscribeAvailabilityResponse {
+  available: boolean;
+  /** Present when unavailable, e.g. "requires GROQ_API_KEY". */
+  reason?: string;
+}

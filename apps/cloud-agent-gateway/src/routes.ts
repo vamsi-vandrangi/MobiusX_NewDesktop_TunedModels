@@ -6,18 +6,22 @@ import type {
   ListModelsResponse,
   ListTasksResponse,
   ModelSelection,
+  TranscribeAvailabilityResponse,
+  TranscribeRequest,
+  TranscribeResponse,
 } from "@mobiusx/protocol";
 import { getTask, listTasks } from "./store.js";
 import { cancelTask, startTask } from "./taskEngine.js";
 import { listAllModels } from "./runners/registry.js";
+import { transcribeAudio, voiceAvailable, voiceUnavailableReason } from "./voice.js";
 
 export function buildRouter(): Router {
   const router = Router();
 
   router.post("/tasks", async (req, res) => {
     const body = req.body as Partial<CreateTaskRequest>;
-    if (!body.mode || !["ask", "plan", "build", "spec"].includes(body.mode)) {
-      res.status(400).json({ error: "mode must be one of ask|plan|build|spec" });
+    if (!body.mode || !["ask", "plan", "build", "spec", "fix"].includes(body.mode)) {
+      res.status(400).json({ error: "mode must be one of ask|plan|build|spec|fix" });
       return;
     }
     if (!body.prompt || typeof body.prompt !== "string") {
@@ -107,6 +111,42 @@ export function buildRouter(): Router {
   router.get("/models", async (_req, res) => {
     const response: ListModelsResponse = { models: await listAllModels() };
     res.json(response);
+  });
+
+  // Voice input (AI Assistant add-on): lets the renderer show/enable its
+  // mic button only when a transcription call will actually succeed,
+  // rather than the user discovering GROQ_API_KEY is unset only after
+  // recording something -- same honest-availability pattern GET /models
+  // already uses for each ModelOption.
+  router.get("/transcribe/status", (_req, res) => {
+    const available = voiceAvailable();
+    const response: TranscribeAvailabilityResponse = available ? { available } : { available, reason: voiceUnavailableReason() };
+    res.json(response);
+  });
+
+  router.post("/transcribe", async (req, res) => {
+    const body = req.body as Partial<TranscribeRequest>;
+    if (!body.audio || typeof body.audio !== "string") {
+      res.status(400).json({ error: "audio (base64 string) is required" });
+      return;
+    }
+    if (!body.mimeType || typeof body.mimeType !== "string") {
+      res.status(400).json({ error: "mimeType is required" });
+      return;
+    }
+    try {
+      const response: TranscribeResponse = await transcribeAudio(body.audio, body.mimeType);
+      res.json(response);
+    } catch (err) {
+      const message = (err as Error).message;
+      // requires GROQ_API_KEY -> the feature just isn't configured (503,
+      // "unavailable"); anything else is a real upstream/transport failure
+      // (502, "bad gateway") -- distinguished so the renderer can show a
+      // "set up voice input" message instead of a generic error for the
+      // former.
+      const status = message.startsWith("requires GROQ_API_KEY") ? 503 : 502;
+      res.status(status).json({ error: message });
+    }
   });
 
   return router;

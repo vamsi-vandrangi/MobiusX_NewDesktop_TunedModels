@@ -25,7 +25,7 @@ export const demoRunner: AgentRunner = {
       }
 
       emit({ type: "output", delta: renderOutput(input) });
-      if (input.mode === "build") {
+      if (input.mode === "build" || input.mode === "fix") {
         emit({ type: "edits", edits: [demoEdit(input)] });
         // Second-pass Reviewer agent (PRD §11/§46) — scripted here, same as everything else in this runner.
         emit({
@@ -67,6 +67,7 @@ function stepsFor(mode: RunnerInput["mode"]): string[] {
   if (mode === "ask") return ["Reading request", "Composing response"];
   if (mode === "plan") return ["Reading request", "Reviewing project context", "Drafting plan"];
   if (mode === "spec") return ["Reading request", "Identifying requirements", "Drafting specification"];
+  if (mode === "fix") return ["Reading verification failure", "Reviewing project context", "Drafting fix"];
   return ["Reading request", "Reviewing project context", "Drafting proposed changes"];
 }
 
@@ -87,6 +88,11 @@ function renderOutput(input: RunnerInput): string {
   if (input.mode === "spec") {
     return `${banner}Requirements specification for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "spec" mode proposes a single new markdown spec file (below, under .mobiusx/specs/) the same way "build" mode proposes code edits: only desktop-agent ever writes it, and only once you review and click Apply. Below is a clearly-labeled DEMO spec so you can exercise that flow without a real model configured. A real model would produce an actual requirements breakdown of your prompt (functional/non-functional requirements, constraints, risks, Given/When/Then acceptance criteria) instead.${context}`;
   }
+  if (input.mode === "fix") {
+    const failing = input.projectContext?.failingVerification ?? [];
+    const failingSummary = failing.length > 0 ? failing.map((s) => s.label).join(", ") : "(no failing-step evidence attached)";
+    return `${banner}Diagnose & Fix for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "fix" mode (roadmap Phase 6, Autonomous Build/Test/Fix Loop) proposes full-file-content edits addressing a real verification failure the same way "build" mode proposes edits for a feature request: only desktop-agent ever writes them, and only once you review and click Apply. Failing step(s) this demo run was given: ${failingSummary}. Below is a clearly-labeled DEMO fix so you can exercise the verify → diagnose & fix → apply → re-verify loop without a real model configured. A real model would diagnose the actual failure output instead.${context}`;
+  }
   return `${banner}Proposed-changes summary for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "build" mode proposes full-file-content edits (below) that only desktop-agent ever writes to disk, and only once you review and click Apply (see docs/ARCHITECTURE.md §8's approval step). Below is a clearly-labeled DEMO edit so you can exercise that full propose → review → apply flow without a real model configured. A real model (see README) would propose an edit addressing your actual prompt instead.${context}`;
 }
 
@@ -101,6 +107,13 @@ function renderOutput(input: RunnerInput): string {
  * overwritten.
  */
 function demoEdit(input: RunnerInput): { path: string; action: "create"; content: string } {
+  if (input.mode === "fix") {
+    return {
+      path: "MOBIUSX_DEMO_FIX.md",
+      action: "create",
+      content: `# Demo fix (not a real AI-diagnosed repair)\n\nThis file was created by the cloud-agent-gateway's **demo runner**, not a real\nmodel. No ANTHROPIC_API_KEY is configured, so there is no real diagnosis\nbehind this change — it exists only to prove that MobiusX.ai WDC's\nverify -> diagnose & fix -> apply -> re-verify loop (roadmap Phase 6) works\nend-to-end:\n\n1. POST /verify reported a real failure.\n2. The gateway proposed this file (a "fix" task).\n3. You reviewed it and clicked Apply.\n4. The desktop agent wrote it to disk exactly here.\n\nOriginal prompt: "${input.prompt}"\n\nSafe to delete. Configure a real model (see apps/cloud-agent-gateway/README.md) to get an actual diagnosed fix instead of this placeholder.\n`,
+    };
+  }
   return {
     path: "MOBIUSX_DEMO_EDIT.md",
     action: "create",

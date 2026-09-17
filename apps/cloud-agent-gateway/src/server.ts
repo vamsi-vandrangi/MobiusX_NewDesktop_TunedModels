@@ -14,7 +14,11 @@ const VERSION = "0.0.1";
 
 export function createGatewayServer(token: string): { app: Express; server: Server } {
   const app = express();
-  app.use(express.json());
+  // Default 100kb body limit is fine for every other route here, but
+  // voice input (POST /transcribe) sends a base64-encoded audio clip --
+  // raised so a several-minute prompt does not get rejected before
+  // routes.ts even sees it.
+  app.use(express.json({ limit: "15mb" }));
 
   app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
@@ -67,7 +71,15 @@ export function createGatewayServer(token: string): { app: Express; server: Serv
           ws.send(JSON.stringify({ type: "status", status: task.status }));
           for (const step of task.steps) ws.send(JSON.stringify({ type: "step", step }));
           if (task.output) ws.send(JSON.stringify({ type: "output", delta: task.output }));
-          if (task.status === "completed" || task.status === "failed") ws.send(JSON.stringify({ type: "done" }));
+          // Any terminal status means this task is never going to emit
+          // anything else — a late subscriber needs "done" for all three,
+          // not just the two most common ones, or a client that's only
+          // waiting on "done" to stop listening (see streamTask() in
+          // renderer.js) hangs forever on a task that was cancelled before
+          // it ever connected.
+          if (task.status === "completed" || task.status === "failed" || task.status === "cancelled") {
+            ws.send(JSON.stringify({ type: "done" }));
+          }
         }
       });
     });

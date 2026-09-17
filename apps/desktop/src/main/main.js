@@ -1,10 +1,36 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, session } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 
 const APPS_DIR = path.join(__dirname, "..", "..", "..");
 const START_TIMEOUT_MS = 15000;
+
+// package.json's "name" is the npm-scoped "@mobiusx/desktop-shell" — Electron
+// can't use that as a display name, so without this it silently falls back
+// to "Electron" everywhere the OS shows an app name (menu bar, Cmd+Tab,
+// About panel). Must run before app.whenReady()/createWindow() to take
+// effect. "productName" in package.json is set to match, for when this is
+// eventually packaged with electron-builder/electron-forge, which read that
+// field instead of calling this API.
+app.setName("MobiusX.ai");
+
+const ICON_PATH = path.join(__dirname, "..", "..", "assets", "icon-1024.png");
+
+// Electron's own multi-process architecture (a separate OS process each for
+// the main process, the GPU process, and every renderer — the same reason
+// Chrome/VS Code/Slack each show up as several rows in Activity Monitor) is
+// often mistaken for "multiple copies of the app running." That's normal and
+// not a bug. What IS worth guarding against is a genuine second *instance* —
+// e.g. re-running `npm run start -w apps/desktop` without having fully
+// stopped a previous run — which would spawn a second full app (its own
+// window, its own desktop-agent/cloud-agent-gateway child processes on their
+// own ports) alongside the first. This lock makes a second launch instead
+// hand off to the first instance and quit immediately.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 const childProcesses = [];
 let mainWindow = null;
@@ -27,8 +53,23 @@ function startService({ label, dir, readyPrefix, env }) {
     const useBuilt = fs.existsSync(builtEntry);
     const spawnEnv = { ...process.env, ...env };
 
+    // THE actual cause of "3 desktop apps opening" (confirmed from a Dock
+    // screenshot showing one MobiusX icon + two bare Electron icons): when a
+    // sibling service has been built (dist/index.js exists), this spawns
+    // `process.execPath` — which, inside an Electron app, IS the Electron
+    // binary itself, not plain Node — to run that service's compiled JS.
+    // Without ELECTRON_RUN_AS_NODE=1, Electron doesn't treat that argument as
+    // "a script to run under Node": it treats it as "an app to launch," and
+    // boots a second full Electron/Chromium instance for it — one per built
+    // service, each showing its own unbranded Dock icon (since it never runs
+    // this file's app.setName/dock.setIcon calls). Setting this env var makes
+    // Electron behave as a pure Node.js runtime for the child, exactly like
+    // the tsx branch below already does. This bug was latent (it only
+    // triggers once dist/ exists) and only started firing after building
+    // apps/desktop-agent and apps/cloud-agent-gateway to verify an earlier,
+    // unrelated fix in this same session.
     const child = useBuilt
-      ? spawn(process.execPath, [builtEntry], { cwd: dir, env: spawnEnv })
+      ? spawn(process.execPath, [builtEntry], { cwd: dir, env: { ...spawnEnv, ELECTRON_RUN_AS_NODE: "1" } })
       : spawn(resolveTsxBin(), [path.join(dir, "src", "index.ts")], { cwd: dir, env: spawnEnv });
 
     let settled = false;
@@ -119,6 +160,11 @@ async function createWindow() {
     width: 1280,
     height: 800,
     title: "MobiusX Desktop",
+    // Sets the window icon (used on Windows/Linux taskbars, and as a
+    // fallback everywhere else); macOS's Dock icon is set separately below
+    // via app.dock.setIcon since that's the API macOS actually reads from
+    // in unpackaged/dev-mode runs.
+    icon: ICON_PATH,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       additionalArguments: [
@@ -127,11 +173,50 @@ async function createWindow() {
       ],
       contextIsolation: true,
       nodeIntegration: false,
+      // Live Preview (item 6, phase 2): the Workspace's Preview panel embeds
+      // a <webview> pointed at the open project's own dev server
+      // (127.0.0.1, spawned by desktop-agent -- see previewOps.ts). Off by
+      // default in Electron; each <webview> still runs in its own separate
+      // process/context from this window, same isolation model as a regular
+      // browser tab.
+      webviewTag: true,
     },
   });
 
   mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
 }
+
+// macOS-only: sets the Dock icon at runtime. This is the one piece of
+// branding that genuinely works before packaging — app.setName() fixes the
+// menu bar/Cmd+Tab text in dev mode too, but the Dock icon and the
+// Activity Monitor process name stay "Electron" until this app is actually
+// packaged (electron-builder/electron-forge) with a real .icns/.ico, which
+// is a separate, bigger step than this fix. Wrapped defensively since
+// app.dock is undefined on Windows/Linux.
+function setDockIcon() {
+  if (process.platform !== "darwin" || !app.dock) return;
+  try {
+    const image = nativeImage.createFromPath(ICON_PATH);
+    if (!image.isEmpty()) app.dock.setIcon(image);
+  } catch (err) {
+    console.error("[main] failed to set Dock icon", err);
+  }
+}
+
+/**
+ * Opens an arbitrary URL in the user's default OS browser -- used by the
+ * Preview panel's "open in browser" button. Distinct from
+ * shell:openInBrowser above, which only ever opens a path *inside the open
+ * project*; this one is for a running dev server's http://127.0.0.1:PORT
+ * URL, which isn't a project-relative file at all.
+ */
+ipcMain.handle("shell:openExternal", async (_event, url) => {
+  if (typeof url !== "string" || !/^https?:\/\//.test(url)) {
+    return { ok: false, error: "url must be an http(s) URL" };
+  }
+  await shell.openExternal(url);
+  return { ok: true };
+});
 
 ipcMain.handle("dialog:openFolder", async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
@@ -167,7 +252,31 @@ ipcMain.handle("shell:openInBrowser", async (_event, projectPath, relativePath) 
   return error ? { ok: false, error } : { ok: true };
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  // Voice input (AI Assistant add-on): the renderer's mic button uses
+  // getUserMedia({ audio: true }) to record a prompt, then POSTs it to
+  // MobiusX Cloud Gateway's /transcribe (see renderer.js's voice-input
+  // block). Electron auto-denies "media" permission requests unless
+  // explicitly allowed here -- this only controls Electron's own layer;
+  // NSMicrophoneUsageDescription is already present in the branded
+  // Electron.app's own Info.plist (see scripts/brand-electron-mac.js), so
+  // macOS still shows its own native permission prompt on first use.
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === "media");
+  });
+  setDockIcon();
+  createWindow();
+});
+
+// See the requestSingleInstanceLock() call above — a second launch quits
+// itself and instead triggers this on the first instance, which just
+// refocuses the existing window rather than doing nothing silently.
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

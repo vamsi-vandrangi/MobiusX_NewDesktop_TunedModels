@@ -10,7 +10,7 @@
   <div id="app">
     <aside id="sidebar">
       <div class="brand">
-        <span class="brand-mark">M</span>
+        <img class="brand-mark" src="../../assets/logo.png" alt="MobiusX.ai" />
         <span class="brand-name">MobiusX</span>
       </div>
       <nav id="nav">
@@ -40,8 +40,16 @@
         <input id="search" placeholder="Search anything…" />
         <div id="project-chip">
           <span id="project-chip-label">No project open</span>
+          <button id="new-project-btn">New Project…</button>
           <button id="open-project-btn">Open Project…</button>
         </div>
+        <div id="org-switcher" class="org-switcher" title="Workspace/org switching isn't built yet — visual placeholder for the single-user setup this app runs today">
+          <span class="org-switcher-name">ACME Corp</span>
+          <span class="org-switcher-caret">▾</span>
+        </div>
+        <button id="notif-btn" class="icon-btn" title="Notifications aren't wired up yet — visual placeholder">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </button>
         <div id="user-chip">
           <span class="avatar">V</span>
           <div>
@@ -64,12 +72,17 @@
               <button class="mode-btn" data-mode="plan">Plan</button>
               <button class="mode-btn" data-mode="build">Build</button>
               <button class="mode-btn" data-mode="spec">Spec</button>
+              <select id="home-model-select" class="model-select" title="Which AI model handles this — pick a specific one here if the default feels slow"></select>
               <button id="home-ask-send" class="send-btn">→</button>
             </div>
           </div>
 
           <h3 class="section-title">Quick actions</h3>
           <div class="quick-actions">
+            <button class="quick-action" id="qa-new-project">
+              <div class="qa-title">New Project</div>
+              <div class="qa-sub">Create a project folder and scaffold an app into it</div>
+            </button>
             <button class="quick-action" id="qa-open-project">
               <div class="qa-title">Open Project</div>
               <div class="qa-sub">Select or create a workspace</div>
@@ -102,7 +115,7 @@
           <div id="workspace">
             <div id="tree-panel" class="panel">
               <h3>Explorer</h3>
-              <div id="file-tree"></div>
+              <div id="file-tree"><div class="debug-empty">Open a project to see its files.</div></div>
             </div>
 
             <div id="center-panel">
@@ -110,6 +123,34 @@
               <div id="editor-panel" class="panel">
                 <pre id="editor-content">Open a project, then select a file.</pre>
               </div>
+              <div id="editor-statusbar" class="editor-statusbar" hidden></div>
+
+              <!-- LIVE PREVIEW (item 6, phase 2) -- a real dev server for the
+                   open project, spawned by desktop-agent (see previewOps.ts),
+                   shown in an embedded <webview>. Nothing runs until you
+                   click Start Preview; a project with no recognizable
+                   frontend/backend says so honestly instead of faking it. -->
+              <div id="preview-bar">
+                <button id="preview-toggle">▸ Preview</button>
+              </div>
+              <div id="preview-panel" class="panel collapsed">
+                <div id="preview-toolbar">
+                  <button id="preview-start-btn">Start Preview</button>
+                  <button id="preview-stop-btn" hidden>Stop Preview</button>
+                  <button id="preview-back-btn" title="Back" disabled>◂</button>
+                  <button id="preview-forward-btn" title="Forward" disabled>▸</button>
+                  <button id="preview-reload-btn" title="Reload" disabled>↻</button>
+                  <input id="preview-url-input" placeholder="Preview URL appears here once a dev server is running" disabled />
+                  <button id="preview-open-browser-btn" title="Open in your default browser" disabled>⧉</button>
+                </div>
+                <div id="preview-status-text" class="scope-note-small"></div>
+                <pre id="preview-log" class="preview-log" hidden></pre>
+                <div id="preview-body">
+                  <webview id="preview-webview" src="about:blank"></webview>
+                  <div id="preview-empty">Click "Start Preview" to detect and run this project's dev server(s) — nothing starts until you do.</div>
+                </div>
+              </div>
+
               <div id="terminal-bar">
                 <button id="terminal-toggle">▾ Terminal</button>
               </div>
@@ -144,15 +185,33 @@
         <!-- PLACEHOLDER VIEWS -->
         <section class="view placeholder-view" id="view-repositories" hidden>
           <h2>Repositories</h2>
-          <p>Cross-repo linking and enterprise repo intelligence lands in a later phase. See <code>docs/ARCHITECTURE.md</code> §5.2.</p>
+          <div class="placeholder-card">
+            <div class="placeholder-card-icon">⌥</div>
+            <div class="placeholder-card-body">
+              <div class="placeholder-card-title">Not built yet <span class="status-text">(future phase)</span></div>
+              <p>Cross-repo linking and enterprise repo intelligence lands in a later phase. See <code>docs/ARCHITECTURE.md</code> §5.2.</p>
+            </div>
+          </div>
         </section>
         <section class="view placeholder-view" id="view-knowledge" hidden>
           <h2>Knowledge</h2>
-          <p>Enterprise Knowledge stays primarily on MobiusX Web (see <code>docs/ARCHITECTURE.md</code> §2) — this is a read-only pass-through, not yet built.</p>
+          <div class="placeholder-card">
+            <div class="placeholder-card-icon">◈</div>
+            <div class="placeholder-card-body">
+              <div class="placeholder-card-title">Not built yet <span class="status-text">(Phase 4)</span></div>
+              <p>Enterprise Knowledge stays primarily on MobiusX Web (see <code>docs/ARCHITECTURE.md</code> §2) — this is a read-only pass-through, not yet built.</p>
+            </div>
+          </div>
         </section>
         <section class="view placeholder-view" id="view-agents" hidden>
           <h2>Agents</h2>
-          <p>Cloud Agent orchestration is Phase 3. See <code>docs/ARCHITECTURE.md</code> §12.</p>
+          <div class="placeholder-card">
+            <div class="placeholder-card-icon">◎</div>
+            <div class="placeholder-card-body">
+              <div class="placeholder-card-title">Not built yet <span class="status-text">(future phase)</span></div>
+              <p>A dedicated view for browsing and managing Cloud Agent orchestration beyond individual tasks — see the <strong>Tasks</strong> view in the meantime, which is fully live (docs/ARCHITECTURE.md §12).</p>
+            </div>
+          </div>
         </section>
         <section class="view" id="view-tasks" hidden>
           <h2>Tasks</h2>
@@ -163,6 +222,19 @@
             Settings or override per task in the AI Assistant panel. Each task shows which runner and model
             actually served it.
           </p>
+          <!-- Project Completion Contract (roadmap Phase 6, source requirement
+               31): a real, computed report of what's actually verifiable about
+               the open project right now (see apps/desktop-agent/src/completion.ts).
+               Never a fabricated "done" -- criteria this codebase doesn't measure
+               yet show as "not configured", not a false pass. -->
+          <div id="completion-panel" class="panel">
+            <div id="completion-header">
+              <h3>Project Completion Contract</h3>
+              <button id="completion-check-btn" class="edits-verify-btn">Check completion</button>
+            </div>
+            <div id="completion-results"></div>
+          </div>
+
           <div id="tasks-layout">
             <div id="tasks-list" class="panel"></div>
             <div id="task-detail" class="panel">
@@ -195,78 +267,185 @@
         </section>
         <section class="view" id="view-settings" hidden>
           <h2>Settings</h2>
-          <p class="scope-note">
-            A terminal command guard (with an optional guarded hold-for-approval mode), a default AI
-            model for the Assistant, and a secret scan on outbound task context, all with a shared
-            audit trail. This is <strong>advisory</strong>, single-user governance — not enterprise
-            policy management (no multi-tenant auth, no centrally-pushed org policy) and, for the
-            terminal specifically, not a security sandbox: anyone with terminal access to this
-            machine can bypass it. See docs/ARCHITECTURE.md §12 and the root README.
-          </p>
+          <div class="settings-tabs">
+            <button class="settings-tab-btn active" data-settings-tab="workspace">Workspace Settings</button>
+            <button class="settings-tab-btn" data-settings-tab="application">Application Settings</button>
+          </div>
 
-          <div class="settings-section">
-            <div class="settings-section-head">
-              <h3>Default AI Model</h3>
-              <button id="model-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
-            </div>
-            <p class="scope-note-small">
-              Which model the AI Assistant uses when you don't pick one for a specific task (the
-              per-task dropdown in Ask/Plan/Build/Spec always overrides this). "Auto" lets the gateway
-              choose — a configured Anthropic key first, then a configured free provider, else the
-              demo runner. Models greyed out below aren't usable yet — the reason (a missing API key,
-              or Ollama not reachable) is shown next to each. See
-              <code>apps/cloud-agent-gateway/README.md</code> for how to set up OpenRouter, Groq, or a
-              local Ollama install.
+          <!-- WORKSPACE SETTINGS — org/team/repo concepts this single-user desktop
+               app doesn't actually have yet. Laid out to match the multi-tenant
+               product's settings screen, but every value here is either the one
+               real thing this app knows (the currently open project) or a
+               clearly-labeled, disabled preview — never a fabricated org, repo
+               list, or member roster standing in as if it were real data. -->
+          <div class="settings-tab-panel" id="settings-tab-workspace">
+            <p class="scope-note">
+              This app is single-project, single-user today — no multi-tenant workspaces, team
+              members, or centrally-pushed policy exist yet (see <code>docs/ARCHITECTURE.md</code>
+              §12). The sections below preview that future screen's layout; only "Repositories"
+              reflects something real — the project you currently have open.
             </p>
-            <div class="default-model-row">
-              <select id="default-model-select"></select>
-              <span id="default-model-status" class="terminal-approval-mode-status"></span>
+
+            <div class="settings-section">
+              <h3>Workspace</h3>
+              <div class="workspace-overview-row">
+                <div>
+                  <div class="workspace-overview-name">ACME Corp <span class="status-text">(preview)</span></div>
+                  <div class="workspace-overview-sub">Multi-tenant workspaces aren't built yet — this name is illustrative</div>
+                </div>
+                <button class="refresh-btn" disabled title="Not implemented — visual placeholder">Edit</button>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Repositories</h3>
+              <div id="settings-repositories" class="settings-repo-list"></div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Environments <span class="status-text">(preview)</span></h3>
+              <div class="settings-chip-row">
+                <span class="settings-chip">dev</span>
+                <span class="settings-chip">staging</span>
+                <span class="settings-chip">prod</span>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Members <span class="status-text">(preview — single-user app)</span></h3>
+              <div class="settings-member-row">
+                <span class="avatar">V</span>
+                <div>
+                  <div class="user-name">Vamsi</div>
+                  <div class="user-role">AI Architect</div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div class="settings-section">
-            <h3>Command Guard <span class="status-text">(terminal — best-effort, reactive)</span></h3>
-            <p id="policy-project-note" class="scope-note-small"></p>
-            <div id="policy-rules" class="policy-rules"></div>
-          </div>
-
-          <div class="settings-section">
-            <h3>Terminal Approval <span class="status-text">(autonomy level)</span></h3>
-            <p class="scope-note-small">
-              "Off" is the reactive guard above: a flagged command still reaches the shell, then gets
-              a best-effort Ctrl+C. "Guarded" catches a flagged command's Enter keystroke before it
-              ever reaches the shell and holds it until you click Approve or Reject in the terminal
-              panel. Same advisory caveat as above — this is not a security sandbox. Changing this
-              only affects the terminal's <em>next</em> connection; use "Reconnect Terminal" below to
-              apply it to the one currently open.
+          <!-- APPLICATION SETTINGS — everything below this line is real, existing
+               functionality (unchanged from before this pass), just regrouped
+               under the mockup's naming with two added preview-only sections
+               (Authentication, Updates) that this app doesn't implement. -->
+          <div class="settings-tab-panel" id="settings-tab-application" hidden>
+            <p class="scope-note">
+              A terminal command guard (with an optional guarded hold-for-approval mode), a default AI
+              model for the Assistant, and a secret scan on outbound task context, all with a shared
+              audit trail. This is <strong>advisory</strong>, single-user governance — not enterprise
+              policy management (no multi-tenant auth, no centrally-pushed org policy) and, for the
+              terminal specifically, not a security sandbox: anyone with terminal access to this
+              machine can bypass it. See docs/ARCHITECTURE.md §12 and the root README.
             </p>
-            <div class="terminal-approval-mode-options">
-              <label class="terminal-approval-mode-option">
-                <input type="radio" name="terminal-approval-mode" value="off" />
-                Off — reactive Ctrl+C after the fact
-              </label>
-              <label class="terminal-approval-mode-option">
-                <input type="radio" name="terminal-approval-mode" value="guarded" />
-                Guarded — hold for explicit Approve/Reject
-              </label>
-            </div>
-            <div class="terminal-approval-mode-footer">
-              <span id="terminal-approval-mode-status" class="terminal-approval-mode-status"></span>
-              <button id="terminal-reconnect-btn" class="refresh-btn">Reconnect Terminal</button>
-            </div>
-          </div>
 
-          <div class="settings-section">
-            <div class="settings-section-head">
-              <h3>Audit Log</h3>
-              <button id="audit-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+            <div class="settings-section">
+              <div class="settings-section-head">
+                <h3>Default AI Model</h3>
+                <button id="model-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+              </div>
+              <p class="scope-note-small">
+                Which model the AI Assistant uses when you don't pick one for a specific task (the
+                per-task dropdown in Ask/Plan/Build/Spec always overrides this). "Auto" lets the gateway
+                choose — a configured Anthropic key first, then a configured free provider, else the
+                demo runner. Models greyed out below aren't usable yet — the reason (a missing API key,
+                or Ollama not reachable) is shown next to each. See
+                <code>apps/cloud-agent-gateway/README.md</code> for how to set up OpenRouter, Groq, or a
+                local Ollama install.
+              </p>
+              <div class="default-model-row">
+                <select id="default-model-select"></select>
+                <span id="default-model-status" class="terminal-approval-mode-status"></span>
+              </div>
             </div>
-            <div id="audit-log" class="audit-log"></div>
+
+            <div class="settings-section">
+              <h3>Local Agent Permissions <span class="status-text">(terminal command guard — best-effort, reactive)</span></h3>
+              <p id="policy-project-note" class="scope-note-small"></p>
+              <div id="policy-rules" class="policy-rules"></div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Terminal Approval <span class="status-text">(autonomy level)</span></h3>
+              <p class="scope-note-small">
+                "Off" is the reactive guard above: a flagged command still reaches the shell, then gets
+                a best-effort Ctrl+C. "Guarded" catches a flagged command's Enter keystroke before it
+                ever reaches the shell and holds it until you click Approve or Reject in the terminal
+                panel. Same advisory caveat as above — this is not a security sandbox. Changing this
+                only affects the terminal's <em>next</em> connection; use "Reconnect Terminal" below to
+                apply it to the one currently open.
+              </p>
+              <div class="terminal-approval-mode-options">
+                <label class="terminal-approval-mode-option">
+                  <input type="radio" name="terminal-approval-mode" value="off" />
+                  Off — reactive Ctrl+C after the fact
+                </label>
+                <label class="terminal-approval-mode-option">
+                  <input type="radio" name="terminal-approval-mode" value="guarded" />
+                  Guarded — hold for explicit Approve/Reject
+                </label>
+              </div>
+              <div class="terminal-approval-mode-footer">
+                <span id="terminal-approval-mode-status" class="terminal-approval-mode-status"></span>
+                <button id="terminal-reconnect-btn" class="refresh-btn">Reconnect Terminal</button>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Authentication <span class="status-text">(preview — not implemented)</span></h3>
+              <div class="settings-auth-row">
+                <div>
+                  <div class="user-name">SSO / OIDC</div>
+                  <div class="scope-note-small">No identity provider integration exists in this single-user app yet</div>
+                </div>
+                <button class="refresh-btn" disabled title="Not implemented — visual placeholder">Manage</button>
+              </div>
+              <div class="settings-auth-row">
+                <div>
+                  <div class="user-name">Multi-Factor Authentication</div>
+                  <div class="scope-note-small">No auth backend exists in this single-user app yet</div>
+                </div>
+                <button class="refresh-btn" disabled title="Not implemented — visual placeholder">Manage</button>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <div class="settings-section-head">
+                <h3>Audit Log</h3>
+                <button id="audit-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+              </div>
+              <div id="audit-log" class="audit-log"></div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Updates <span class="status-text">(preview — not implemented)</span></h3>
+              <p class="scope-note-small">This dev build has no auto-updater — install updates via <code>git pull</code> and <code>npm install</code>.</p>
+              <div class="settings-auth-row">
+                <div class="user-name">Check for updates</div>
+                <button class="refresh-btn" disabled title="Not implemented — visual placeholder">Check now</button>
+              </div>
+            </div>
           </div>
         </section>
       </main>
     </div>
   </div>
+
+  <!-- NEW PROJECT MODAL — item 6 phase 1: create an empty folder on disk
+       (inside a parent dir picked via the native folder dialog) and open it
+       as the active project. Real folder creation via desktop-agent's
+       POST /project/create — no fabricated success state. -->
+  <div id="new-project-modal" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <h3>New Project</h3>
+      <p id="new-project-location" class="scope-note-small"></p>
+      <input id="new-project-name-input" placeholder="Project folder name, e.g. employee-onboarding" />
+      <div id="new-project-error" class="modal-error" hidden></div>
+      <div class="modal-actions">
+        <button id="new-project-cancel-btn" class="refresh-btn">Cancel</button>
+        <button id="new-project-create-btn" class="send-btn">Create</button>
+      </div>
+    </div>
+  </div>
+
   <script src="../../../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../../../node_modules/diff/dist/diff.min.js"></script>

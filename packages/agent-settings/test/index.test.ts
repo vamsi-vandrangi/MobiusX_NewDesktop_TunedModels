@@ -73,3 +73,32 @@ test("settings file on disk is valid, readable JSON", async () => {
   assert.equal(parsed.terminalApprovalMode, "guarded");
   assert.deepEqual(parsed.defaultModel, { provider: "ollama", model: "qwen2.5-coder" });
 });
+
+// Phase 6: fixLoopMode (Autonomous Build/Test/Fix Loop autonomy level) —
+// same validate-independently, optional-field pattern as defaultModel
+// above, deliberately NOT defaulted in storage (see AgentSettings's doc
+// comment) so an older settings.json with no opinion on this still means
+// "manual" without a migration.
+test("getSettings reports no fixLoopMode by default (manual is the implicit default, never stored)", async () => {
+  const settings = await getSettings();
+  assert.equal(settings.fixLoopMode, undefined);
+});
+
+test("updateSettings persists fixLoopMode and getSettings reflects it, without disturbing terminalApprovalMode", async () => {
+  await updateSettings({ terminalApprovalMode: "guarded" });
+  const updated = await updateSettings({ fixLoopMode: "auto" });
+  assert.equal(updated.fixLoopMode, "auto");
+  const settings = await getSettings();
+  assert.equal(settings.fixLoopMode, "auto");
+  assert.equal(settings.terminalApprovalMode, "guarded");
+});
+
+test("getSettings drops an invalid fixLoopMode without discarding other fields", async () => {
+  const file = join(settingsDir, "settings.json");
+  await import("node:fs/promises").then((fs) =>
+    fs.writeFile(file, JSON.stringify({ terminalApprovalMode: "off", fixLoopMode: "sometimes" })),
+  );
+  const settings = await getSettings();
+  assert.equal(settings.terminalApprovalMode, "off");
+  assert.equal(settings.fixLoopMode, undefined);
+});
