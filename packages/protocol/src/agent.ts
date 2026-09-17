@@ -288,6 +288,51 @@ export interface VerifyResponse {
   steps: VerificationStep[];
 }
 
+/**
+ * Body/response of POST /browser-validate — "Browser / Application
+ * Validation" (roadmap Phase 12, source requirement §18): drives the
+ * ALREADY-RUNNING preview (see previewOps.ts / POST /preview/start) with a
+ * real headless browser (apps/desktop-agent/src/browserOps.ts) and reports
+ * genuine evidence -- console errors, failed network requests, and a
+ * screenshot -- never a simulated result. Deliberately independent of
+ * VerificationStep (a browser navigation has no exit code, and carries an
+ * optional screenshot VerificationStep doesn't) but intentionally KEEPS
+ * the same {label, command, output} shape that FailingVerificationStep
+ * needs, so a failing browser step can feed the exact same Fix Loop
+ * (ProjectContext.failingVerification) that verify.ts's results already
+ * do, with zero further protocol changes -- see promptShared.ts's "fix"
+ * mode prompt, which only ever reads label/command/output off each entry.
+ */
+export interface BrowserValidationStep {
+  id: string;
+  /** Human label, e.g. "Open http://localhost:5173/" or "Open http://localhost:5173/pricing". */
+  label: string;
+  /** What was actually driven — never a command line, since this isn't a spawned process. */
+  command: string;
+  status: "passed" | "failed" | "timed_out";
+  /** The real URL this step navigated to — always the frontend preview's own discovered URL or a same-origin link found in its rendered DOM, never invented. */
+  url: string;
+  /** Console `error`/`warning` messages captured from the real page (bounded count). */
+  consoleErrors: string[];
+  /** Failed same-page network requests captured (HTTP >=400 or a real request failure), bounded count. */
+  networkErrors: string[];
+  /** Human-readable combination of any navigation/page error plus consoleErrors/networkErrors -- this is what's embedded verbatim into the Fix Loop prompt when this step fails, exactly as VerificationStep.output already is. */
+  output: string;
+  /** Bounded-size JPEG screenshot at the end of this step, as a data: URI. Omitted only when capture itself failed. */
+  screenshot?: string;
+  durationMs: number;
+}
+
+export interface BrowserValidationResponse {
+  projectPath: string;
+  /** The frontend preview URL validation started from, or null when no preview was running yet -- see previewUnavailableReason for why. */
+  previewUrl: string | null;
+  /** Set only when previewUrl is null — an honest reason, never a silently empty result. */
+  previewUnavailableReason?: string;
+  overall: "passed" | "failed" | "no-preview-running";
+  steps: BrowserValidationStep[];
+}
+
 /** One line item in a Project Completion Report — see ProjectCompletionReport below. */
 export interface ProjectCompletionCriterion {
   /** Stable id, e.g. "verify:Build (npm run build)", "git_initialized", "auth_verified". */

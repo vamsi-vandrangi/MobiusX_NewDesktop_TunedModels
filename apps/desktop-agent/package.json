@@ -13,14 +13,15 @@
     "postinstall": "node scripts/fix-node-pty-perms.js"
   },
   "dependencies": {
-    "@mobiusx/audit-log": "*",
     "@mobiusx/agent-settings": "*",
+    "@mobiusx/audit-log": "*",
     "@mobiusx/context-engine": "*",
     "@mobiusx/protocol": "*",
     "@mobiusx/secret-scan": "*",
     "@mobiusx/semantic-index": "*",
     "express": "^4.21.2",
     "node-pty": "^1.1.0",
+    "playwright": "^1.63.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

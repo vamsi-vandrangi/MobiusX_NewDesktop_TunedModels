@@ -1188,9 +1188,11 @@ function buildEditsCard(edits, taskProjectPath, review) {
       <button class="edits-apply-btn" ${agentBaseUrl && !projectMismatch ? "" : "disabled"}>Apply</button>
       <span class="edits-apply-result"></span>
       <button class="edits-verify-btn" hidden>Run verification</button>
+      <button class="edits-browser-validate-btn" hidden>Run browser validation</button>
       <button class="edits-diagnose-btn" hidden>Diagnose &amp; Fix</button>
     </div>
     <div class="verify-results" hidden></div>
+    <div class="browser-validate-results" hidden></div>
   `;
   const list = card.querySelector(".edits-card-list");
 
@@ -1340,7 +1342,10 @@ function buildEditsCard(edits, taskProjectPath, review) {
         }
       });
       await refreshAfterApply(results.filter((r) => r.status === "applied").map((r) => r.path));
-      if (appliedCount > 0) verifyBtn.hidden = false;
+      if (appliedCount > 0) {
+        verifyBtn.hidden = false;
+        browserValidateBtn.hidden = false;
+      }
     } catch (err) {
       applyBtn.disabled = false;
       applyBtn.textContent = "Apply";
@@ -1351,21 +1356,44 @@ function buildEditsCard(edits, taskProjectPath, review) {
   // ---- Verification Engine (PRD §22): real build/test evidence, not a claim ----
   const verifyBtn = card.querySelector(".edits-verify-btn");
   const verifyResultsEl = card.querySelector(".verify-results");
+  // Browser / Application Validation (roadmap Phase 12, source requirement
+  // §18): a second, independent evidence source alongside build/test
+  // verification -- drives the already-running preview with a real
+  // headless browser (see apps/desktop-agent/src/browserOps.ts) and
+  // reports genuine console/network/screenshot evidence.
+  const browserValidateBtn = card.querySelector(".edits-browser-validate-btn");
+  const browserValidateResultsEl = card.querySelector(".browser-validate-results");
   // Autonomous Build/Test/Fix Loop (roadmap Phase 6, source requirement §16):
-  // the failing steps from the MOST RECENT verify run, in the shape a
-  // "fix"-mode task's ProjectContext.failingVerification expects -- kept
-  // here (not re-derived from the DOM later) so Diagnose & Fix always acts
-  // on real, just-captured evidence rather than stale text scraped back out
-  // of the rendered output.
+  // the failing steps from the MOST RECENT verify run AND the most recent
+  // browser validation run, in the shape a "fix"-mode task's
+  // ProjectContext.failingVerification expects -- kept here (not
+  // re-derived from the DOM later) so Diagnose & Fix always acts on real,
+  // just-captured evidence rather than stale text scraped back out of the
+  // rendered output. Two sources are tracked separately and merged, so a
+  // fresh verify run never wipes out browser-validation findings (or vice
+  // versa) -- both are still-valid evidence about the same open project
+  // until their own "run again" is clicked.
   const diagnoseBtn = card.querySelector(".edits-diagnose-btn");
+  let lastFailingVerifySteps = [];
+  let lastFailingBrowserSteps = [];
   let lastFailingSteps = [];
+  function recomputeFailingSteps() {
+    lastFailingSteps = [...lastFailingVerifySteps, ...lastFailingBrowserSteps];
+    if (lastFailingSteps.length > 0 && cloudBaseUrl) {
+      diagnoseBtn.hidden = false;
+      diagnoseBtn.disabled = false;
+      diagnoseBtn.textContent = "Diagnose & Fix";
+    } else {
+      diagnoseBtn.hidden = true;
+    }
+  }
   verifyBtn.addEventListener("click", async () => {
     verifyBtn.disabled = true;
     verifyBtn.textContent = "Verifying…";
     verifyResultsEl.hidden = false;
     verifyResultsEl.innerHTML = `<div class="verify-pending">Running the project's build/test scripts…</div>`;
-    diagnoseBtn.hidden = true;
-    lastFailingSteps = [];
+    lastFailingVerifySteps = [];
+    recomputeFailingSteps();
     try {
       const result = await api("/verify", { method: "POST" });
       if (result.overall === "no-verification-available") {
@@ -1397,20 +1425,70 @@ function buildEditsCard(edits, taskProjectPath, review) {
           });
           stepsEl.appendChild(stepEl);
         }
-        lastFailingSteps = result.steps
+        lastFailingVerifySteps = result.steps
           .filter((s) => s.status !== "passed")
           .map((s) => ({ label: s.label, command: s.command, output: s.output }));
-        if (lastFailingSteps.length > 0 && cloudBaseUrl) {
-          diagnoseBtn.hidden = false;
-          diagnoseBtn.disabled = false;
-          diagnoseBtn.textContent = "Diagnose & Fix";
-        }
+        recomputeFailingSteps();
       }
     } catch (err) {
       verifyResultsEl.innerHTML = `<div class="verify-none">Verification failed to run: ${escapeHtml(err.message)}</div>`;
     }
     verifyBtn.disabled = false;
     verifyBtn.textContent = "Run verification again";
+  });
+
+  // ---- Browser / Application Validation (roadmap Phase 12, source requirement §18) ----
+  browserValidateBtn.addEventListener("click", async () => {
+    browserValidateBtn.disabled = true;
+    browserValidateBtn.textContent = "Validating…";
+    browserValidateResultsEl.hidden = false;
+    browserValidateResultsEl.innerHTML = `<div class="verify-pending">Driving the running preview with a real browser…</div>`;
+    lastFailingBrowserSteps = [];
+    recomputeFailingSteps();
+    try {
+      const result = await api("/browser-validate", { method: "POST" });
+      if (result.overall === "no-preview-running") {
+        browserValidateResultsEl.innerHTML = `<div class="verify-none">${escapeHtml(result.previewUnavailableReason || "No preview is running yet.")}</div>`;
+      } else {
+        const passedCount = result.steps.filter((s) => s.status === "passed").length;
+        browserValidateResultsEl.innerHTML = `
+          <div class="verify-summary ${result.overall}">${result.overall === "passed" ? "✓" : "✗"} Browser validation ${result.overall} — ${passedCount}/${result.steps.length} page(s) passed (starting from ${escapeHtml(result.previewUrl || "")})</div>
+          <div class="verify-steps"></div>
+        `;
+        const stepsEl = browserValidateResultsEl.querySelector(".verify-steps");
+        for (const step of result.steps) {
+          const stepEl = document.createElement("div");
+          stepEl.className = "verify-step";
+          const icon = step.status === "passed" ? "✓" : step.status === "timed_out" ? "⏱" : "✗";
+          stepEl.innerHTML = `
+            <div class="verify-step-head">
+              <span class="verify-step-status ${step.status}">${icon}</span>
+              <span class="verify-step-label">${escapeHtml(step.label)}</span>
+              <span class="verify-step-meta">${step.durationMs}ms</span>
+              <button class="verify-step-toggle">Show details</button>
+            </div>
+            <div class="browser-step-detail" hidden>
+              ${step.screenshot ? `<img class="browser-step-screenshot" src="${step.screenshot}" alt="Screenshot of ${escapeHtml(step.url)}" />` : ""}
+              <pre class="verify-step-output">${escapeHtml(step.output)}</pre>
+            </div>
+          `;
+          stepEl.querySelector(".verify-step-toggle").addEventListener("click", () => {
+            const out = stepEl.querySelector(".browser-step-detail");
+            out.hidden = !out.hidden;
+            stepEl.querySelector(".verify-step-toggle").textContent = out.hidden ? "Show details" : "Hide details";
+          });
+          stepsEl.appendChild(stepEl);
+        }
+        lastFailingBrowserSteps = result.steps
+          .filter((s) => s.status !== "passed")
+          .map((s) => ({ label: s.label, command: s.command, output: s.output }));
+        recomputeFailingSteps();
+      }
+    } catch (err) {
+      browserValidateResultsEl.innerHTML = `<div class="verify-none">Browser validation failed to run: ${escapeHtml(err.message)}</div>`;
+    }
+    browserValidateBtn.disabled = false;
+    browserValidateBtn.textContent = "Run browser validation again";
   });
 
   // Autonomous Build/Test/Fix Loop (roadmap Phase 6, source requirement

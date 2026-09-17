@@ -24,10 +24,12 @@ import type {
   TestingEvidenceResponse,
   ProposedEdit,
   VerifyResponse,
+  BrowserValidationResponse,
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
 import { verifyProject } from "./verify.js";
+import { runBrowserValidation } from "./browserOps.js";
 import { computeCompletionReport } from "./completion.js";
 import { detectProjectContext } from "./projectContext.js";
 import { checkDatabaseConsistency } from "./dbOps.js";
@@ -376,6 +378,41 @@ export function buildRouter(): Router {
   router.post("/preview/stop", (_req, res) => {
     stopPreview();
     res.json({ ok: true });
+  });
+
+  // Browser / Application Validation (roadmap Phase 12, source requirement
+  // §18): drives the already-running preview with a real headless browser
+  // -- see browserOps.ts's doc comment. Requires /preview/start to have
+  // been called first and to have reported a running frontend URL; when it
+  // hasn't, this honestly reports overall: "no-preview-running" rather
+  // than an error, the same "no-verification-available" pattern /verify
+  // already uses for "nothing to check yet".
+  router.post("/browser-validate", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: BrowserValidationResponse = await runBrowserValidation(projectState.path);
+      if (result.overall !== "no-preview-running") {
+        const passedCount = result.steps.filter((s) => s.status === "passed").length;
+        void appendAuditEntry({
+          source: "desktop-agent",
+          category: "browser-validation",
+          severity: result.overall === "passed" ? "info" : "warning",
+          summary: `Browser validation ${result.overall} (${passedCount}/${result.steps.length} step(s) passed) in ${projectState.path}`,
+          detail: {
+            projectPath: projectState.path,
+            previewUrl: result.previewUrl,
+            overall: result.overall,
+            steps: result.steps.map((s) => ({ label: s.label, status: s.status, url: s.url })),
+          },
+        });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "browser validation failed", detail: (err as Error).message });
+    }
   });
 
   router.get("/git/status", async (_req, res) => {
