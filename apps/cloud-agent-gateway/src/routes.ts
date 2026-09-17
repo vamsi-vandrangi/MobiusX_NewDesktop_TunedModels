@@ -20,7 +20,7 @@ export function buildRouter(): Router {
 
   router.post("/tasks", async (req, res) => {
     const body = req.body as Partial<CreateTaskRequest>;
-    if (!body.mode || !["ask", "plan", "build", "spec", "fix"].includes(body.mode)) {
+    if (!body.mode || !["ask", "plan", "build", "spec", "fix", "database"].includes(body.mode)) {
       res.status(400).json({ error: "mode must be one of ask|plan|build|spec|fix" });
       return;
     }

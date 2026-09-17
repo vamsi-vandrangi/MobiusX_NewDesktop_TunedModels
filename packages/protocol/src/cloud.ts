@@ -33,7 +33,18 @@
  * applied, are expected to be re-verified (see apps/desktop/src/renderer/renderer.js's
  * "Diagnose & Fix" flow) rather than treated as a one-shot task.
  */
-export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix";
+/**
+ * "database" (roadmap Phase 8, source requirement §8 — Database Engineering)
+ * also reuses the same propose-edits/review/apply pipeline as "build": it
+ * proposes a schema definition, a forward migration, and ORM model file(s)
+ * as one coherent set (never just files inside a generic build request) --
+ * see apps/cloud-agent-gateway/src/runners/promptShared.ts's "database"
+ * branch for the exact convention. Distinct from "build" only in what its
+ * prompt asks for and that its output is checked afterward by a real,
+ * evidence-based Database Consistency Check (GET /db/consistency, see
+ * apps/desktop-agent/src/dbOps.ts) rather than trusted on the model's word.
+ */
+export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 

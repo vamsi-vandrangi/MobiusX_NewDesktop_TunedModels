@@ -247,6 +247,20 @@
             <div id="completion-results"></div>
           </div>
 
+          <!-- Database Engineering (roadmap Phase 8, source requirement §8):
+               a real cross-check between this project's SQL schema/migration
+               source(s) and its ORM model file(s) (see
+               apps/desktop-agent/src/dbOps.ts). Reports what it can actually
+               parse today; anything it can't recognize is left out rather
+               than guessed. -->
+          <div id="db-consistency-panel" class="panel">
+            <div id="db-consistency-header">
+              <h3>Database Consistency</h3>
+              <button id="db-consistency-check-btn" class="edits-verify-btn">Check consistency</button>
+            </div>
+            <div id="db-consistency-results"></div>
+          </div>
+
           <div id="tasks-layout">
             <div id="tasks-list" class="panel"></div>
             <div id="task-detail" class="panel">

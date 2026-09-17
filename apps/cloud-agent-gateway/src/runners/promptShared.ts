@@ -16,7 +16,7 @@ import type { RunnerInput } from "./types.js";
 export const EDITS_MARKER = "===MOBIUSX_EDITS===";
 
 /** Modes whose response is buffered and parsed for a structured ProposedEdit[] block, rather than streamed live token-by-token. */
-export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix"]);
+export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database"]);
 
 /**
  * Splits a build-mode response into its human-readable prose and its
@@ -215,6 +215,41 @@ export function systemPromptFor(input: RunnerInput): string {
       'Only use action "create" for a path you are confident does not already exist in this project.',
       `Omit the ${EDITS_MARKER} marker and JSON block ONLY if you cannot propose any concrete fix from the evidence given.`,
       evidence,
+      relevantFilesContext(input, true),
+    ].join("\n");
+  }
+
+  if (input.mode === "database") {
+    // Database Engineering (roadmap Phase 8, source requirement §8):
+    // schema/migration/ORM-model generation as its own reviewable
+    // artifact class -- reuses the exact same propose-edits/review/apply
+    // pipeline as "build" (see MODES_WITH_STRUCTURED_EDITS above), but the
+    // prompt is specifically scoped to database artifacts and, critically,
+    // instructed to follow whatever real ORM/DB convention the project
+    // already uses (evidenced by relevantFiles below) rather than
+    // inventing a new one -- the same "never guess, only react to what's
+    // actually there" principle previewOps.ts and projectContext.ts use.
+    // GET /db/consistency (dbOps.ts) checks the result afterward for real
+    // schema<->ORM agreement rather than trusting the model's own claim.
+    const dbFullContentPaths = (input.projectContext?.relevantFiles ?? [])
+      .filter((f) => f.content !== undefined)
+      .map((f) => f.relPath);
+    return [
+      "You are the MobiusX Desktop AI Assistant in DATABASE mode (Database Engineering, roadmap Phase 8) -- proposing a schema, its forward migration, and ORM model changes as ONE coherent set, not scattered files inside a generic build request.",
+      "First, inspect the files shown to you below (if any) for an EXISTING database/ORM convention already used in this project -- an ORM's model classes (e.g. SQLModel/SQLAlchemy/Prisma/Sequelize/TypeORM/Mongoose), an existing schema file, or a migrations directory. If you find one, follow that exact convention and file layout. If you find none, default to plain SQL DDL for PostgreSQL under \"db/schema.sql\" and a matching forward migration under \"db/migrations/<NNN>_<slug>.sql\" (zero-padded 3-digit NNN, incrementing from the highest existing migration number you were shown, or 001 if none) -- and say so explicitly in your prose summary (e.g. \"No existing ORM or schema convention was found, so this assumes plain PostgreSQL.\"). Never silently switch technology away from what the project already evidently uses.",
+      "Every table you add or change in the schema/migration MUST have a corresponding entry in the ORM model file when this project uses an ORM -- never update one layer and leave the other stale. State the entities and their relationships in one to two prose sentences (a brief domain model) before the file list, so the schema's intent is reviewable on its own, not just its SQL.",
+      "If the request requires a destructive operation (DROP TABLE, DROP COLUMN, TRUNCATE, a non-additive column type change), say so explicitly and plainly in your prose summary as a risk -- this codebase has no migration rollback/checkpoint mechanism yet (see roadmap Phase 15), so a destructive migration cannot be undone automatically once applied.",
+      "CRITICAL OUTPUT FORMAT -- follow this exactly, even for a multi-file schema change:",
+      "1. First write a brief prose summary (2-5 sentences): the domain model/entities, which convention you followed or assumed, and any destructive-operation risk. Do NOT put any file's contents in a markdown code fence in this summary.",
+      `2. Then, on its own line by itself, output exactly ${EDITS_MARKER}`,
+      '3. Then exactly ONE fenced json code block containing every file being created or changed (schema + migration + ORM model(s), as applicable), as entries in a single "edits" array, in this exact shape:',
+      '{"edits": [{"path": "relative/path", "action": "modify" | "create", "content": "COMPLETE new file content"}]}',
+      '"content" must be the entire new file content, never a diff or partial snippet.',
+      "When a file's content spans multiple lines, each line break must be encoded as exactly ONE JSON escape sequence: \\n. Do NOT double it to \\\\n.",
+      dbFullContentPaths.length > 0
+        ? `Only use action "modify" for one of these exact paths, which you were shown in full below: ${dbFullContentPaths.join(", ")}. Do not use "modify" for any other path -- propose a new migration file instead of editing an already-applied one.`
+        : 'You were not shown the full content of any existing file, so prefer action "create" for new schema/migration/model files; only use "modify" for a path you are highly confident exists and whose current content you can safely infer is being fully replaced (rare -- prefer a new migration file when in doubt).',
+      'Only use action "create" for a path you are confident does not already exist in this project.',
       relevantFilesContext(input, true),
     ].join("\n");
   }

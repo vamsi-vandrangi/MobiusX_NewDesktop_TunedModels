@@ -58,4 +58,21 @@ export const DEFAULT_IGNORE = new Set([
   ".next",
   "coverage",
   ".DS_Store",
+  // Python virtualenvs and caches -- confirmed live (Phase 8 verification,
+  // GreenThumbGarden) that leaving these out is not a hypothetical: a
+  // 4-line backend/models.py lost to 6240 indexed chunks of vendored
+  // backend/.venv/lib/python3.14/site-packages/** code (sqlalchemy,
+  // pytest, click, pip, ...), so the semantic search's k=3 results for a
+  // prompt that explicitly named "backend/models.py" returned only
+  // site-packages internals -- the real file never got shown to the model
+  // as full content, and it proposed "create" for a file that already
+  // existed. Exact directory-name matches only (this walker has no glob
+  // support -- see walkDir() above), so this covers the conventional names
+  // themselves, not every possible venv location.
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".tox",
 ]);

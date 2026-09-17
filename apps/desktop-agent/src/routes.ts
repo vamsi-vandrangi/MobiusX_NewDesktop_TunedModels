@@ -18,6 +18,7 @@ import type {
   PreviewStatusResponse,
   ProjectCompletionResponse,
   ProjectContextResponse,
+  DatabaseConsistencyResponse,
   ProposedEdit,
   VerifyResponse,
 } from "@mobiusx/protocol";
@@ -26,6 +27,7 @@ import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
 import { verifyProject } from "./verify.js";
 import { computeCompletionReport } from "./completion.js";
 import { detectProjectContext } from "./projectContext.js";
+import { checkDatabaseConsistency } from "./dbOps.js";
 import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
@@ -279,6 +281,23 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "project context detection failed", detail: (err as Error).message });
+    }
+  });
+
+  // Database Engineering (roadmap Phase 8, source requirement §8): a real
+  // cross-check between this project's SQL schema/migration source(s) and
+  // its ORM model file(s) -- see dbOps.ts's doc comment for exactly what's
+  // parsed and what's honestly reported as not detected instead of guessed.
+  router.get("/db/consistency", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: DatabaseConsistencyResponse = await checkDatabaseConsistency(projectState.path);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "database consistency check failed", detail: (err as Error).message });
     }
   });
 

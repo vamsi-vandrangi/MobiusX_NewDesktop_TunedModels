@@ -653,6 +653,8 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .completion-summary.verified { color: #6fd48a; }
 .completion-summary.in_progress { color: #e0b37c; }
 .completion-summary.not_started, .completion-summary.unknown { color: #9a9ba1; }
+.completion-summary.consistent { color: #6fd48a; }
+.completion-summary.mismatches_found { color: #e06c6c; }
 .completion-criteria { display: flex; flex-direction: column; gap: 4px; }
 .completion-criterion { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 3px 4px; }
 .completion-criterion-status { width: 14px; text-align: center; font-weight: 700; }

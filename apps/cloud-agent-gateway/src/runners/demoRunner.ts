@@ -25,8 +25,8 @@ export const demoRunner: AgentRunner = {
       }
 
       emit({ type: "output", delta: renderOutput(input) });
-      if (input.mode === "build" || input.mode === "fix") {
-        emit({ type: "edits", edits: [demoEdit(input)] });
+      if (input.mode === "build" || input.mode === "fix" || input.mode === "database") {
+        emit({ type: "edits", edits: input.mode === "database" ? demoDatabaseEdits(input) : [demoEdit(input)] });
         // Second-pass Reviewer agent (PRD §11/§46) — scripted here, same as everything else in this runner.
         emit({
           type: "review",
@@ -68,6 +68,7 @@ function stepsFor(mode: RunnerInput["mode"]): string[] {
   if (mode === "plan") return ["Reading request", "Reviewing project context", "Drafting plan"];
   if (mode === "spec") return ["Reading request", "Identifying requirements", "Drafting specification"];
   if (mode === "fix") return ["Reading verification failure", "Reviewing project context", "Drafting fix"];
+  if (mode === "database") return ["Reading request", "Checking for an existing DB/ORM convention", "Drafting schema, migration, and model changes"];
   return ["Reading request", "Reviewing project context", "Drafting proposed changes"];
 }
 
@@ -92,6 +93,9 @@ function renderOutput(input: RunnerInput): string {
     const failing = input.projectContext?.failingVerification ?? [];
     const failingSummary = failing.length > 0 ? failing.map((s) => s.label).join(", ") : "(no failing-step evidence attached)";
     return `${banner}Diagnose & Fix for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "fix" mode (roadmap Phase 6, Autonomous Build/Test/Fix Loop) proposes full-file-content edits addressing a real verification failure the same way "build" mode proposes edits for a feature request: only desktop-agent ever writes them, and only once you review and click Apply. Failing step(s) this demo run was given: ${failingSummary}. Below is a clearly-labeled DEMO fix so you can exercise the verify → diagnose & fix → apply → re-verify loop without a real model configured. A real model would diagnose the actual failure output instead.${context}`;
+  }
+  if (input.mode === "database") {
+    return `${banner}Database Engineering for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "database" mode (roadmap Phase 8) proposes a schema, its forward migration, and ORM model changes as one coherent set, the same way "build" mode proposes code edits: only desktop-agent ever writes them, and only once you review and click Apply. Below is a clearly-labeled DEMO schema/migration/model set so you can exercise that flow, and GET /db/consistency, without a real model configured. A real model would generate an actual schema grounded in your request and this project's existing DB/ORM convention instead.${context}`;
   }
   return `${banner}Proposed-changes summary for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "build" mode proposes full-file-content edits (below) that only desktop-agent ever writes to disk, and only once you review and click Apply (see docs/ARCHITECTURE.md §8's approval step). Below is a clearly-labeled DEMO edit so you can exercise that full propose → review → apply flow without a real model configured. A real model (see README) would propose an edit addressing your actual prompt instead.${context}`;
 }
@@ -175,6 +179,57 @@ Then (placeholder expected outcome)
 Safe to delete. Configure a real model (see apps/cloud-agent-gateway/README.md) to get an actual requirements breakdown instead of this placeholder.
 `,
   };
+}
+
+/**
+ * Same idea as demoEdit/demoSpecEdit above, but for "database" mode
+ * (roadmap Phase 8, Database Engineering): a clearly-labeled placeholder
+ * schema + matching forward migration, so GET /db/consistency (dbOps.ts)
+ * and the whole propose -> review -> apply -> consistency-check flow is
+ * exercisable without a model configured. Two files, like a real database
+ * task would propose, so "Proposed changes -- 2 files" isn't misleading
+ * even in demo mode.
+ */
+function demoDatabaseEdits(input: RunnerInput): { path: string; action: "create"; content: string }[] {
+  return [
+    {
+      path: "db/schema.sql",
+      action: "create",
+      content: `-- Demo schema (not a real AI-designed schema)
+--
+-- Created by the cloud-agent-gateway's DEMO runner, not a real model. No
+-- ANTHROPIC_API_KEY is configured, so there is no real domain-model
+-- reasoning behind this -- it exists only to exercise MobiusX.ai WDC's
+-- Database Engineering flow (roadmap Phase 8) end-to-end:
+--
+-- 1. The gateway proposed this schema + db/migrations/001_demo.sql (a "database" task).
+-- 2. You reviewed them and clicked Apply.
+-- 3. GET /db/consistency (dbOps.ts) can now check them against any ORM models.
+--
+-- Original prompt: "${input.prompt}"
+-- Safe to delete. Configure a real model to get an actual schema instead.
+
+CREATE TABLE demo_items (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`,
+    },
+    {
+      path: "db/migrations/001_demo.sql",
+      action: "create",
+      content: `-- Demo forward migration (not real) -- see db/schema.sql for context.
+-- Original prompt: "${input.prompt}"
+
+CREATE TABLE demo_items (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`,
+    },
+  ];
 }
 
 /** Rejects with a named AbortError (matching the DOM/fetch convention) the moment `signal` aborts, so callers can `if (err.name === "AbortError")` regardless of whether the abort came from a timer or a fetch call. */

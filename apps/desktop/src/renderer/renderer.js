@@ -910,7 +910,7 @@ async function findRelevantFiles(query, mode) {
     // already exists -- refusing to overwrite a create". Not a model
     // quality problem -- the prompt's own instructions left no other
     // option once content was withheld.
-    if (mode !== "build" && mode !== "fix") return { hits, storeSize: result.storeSize };
+    if (mode !== "build" && mode !== "fix" && mode !== "database") return { hits, storeSize: result.storeSize };
     const withContent = await Promise.all(
       hits.map(async (h) => {
         try {
@@ -1447,6 +1447,7 @@ function createAssistantPanel(container) {
         <button class="mode-btn" data-mode="plan" title="Drafts a numbered implementation plan in prose — describes what to build, never writes a file to disk">Plan</button>
         <button class="mode-btn" data-mode="build" title="The only mode that writes real files — proposes edits you review and click Apply before anything touches disk">Build</button>
         <button class="mode-btn" data-mode="spec" title="Requirements Engineering — generates a structured spec file for review, doesn't write code">Spec</button>
+        <button class="mode-btn" data-mode="database" title="Database Engineering — proposes a schema, migration, and ORM model changes as one set; writes real files like Build">Database</button>
       </div>
       <select class="model-select" title="Which AI model handles this task — overrides the Settings default for this task only"></select>
     </div>
@@ -1615,11 +1616,12 @@ function createAssistantPanel(container) {
     // real friction, not a hypothetical: a user submitted a Build request
     // with no project open, got a full proposed-edits response, and had no
     // way to tell anything was wrong until Apply silently did nothing.
-    if ((mode === "build" || mode === "spec") && !currentProjectPath) {
+    if ((mode === "build" || mode === "spec" || mode === "database") && !currentProjectPath) {
       addMsg(text, "user");
       input.value = "";
+      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : "Database";
       addMsg(
-        `${mode === "build" ? "Build" : "Spec"} mode writes real files, so it needs a project open first — click "New Project…" or "Open Project…" at the top, then send this again.`,
+        `${modeLabel} mode writes real files, so it needs a project open first — click "New Project…" or "Open Project…" at the top, then send this again.`,
         "system",
       );
       return;
@@ -1962,6 +1964,61 @@ completionCheckBtn?.addEventListener("click", async () => {
   }
   completionCheckBtn.disabled = false;
   completionCheckBtn.textContent = "Check completion";
+});
+
+// ============================================================
+// Database Engineering (roadmap Phase 8, source requirement §8): GET
+// /db/consistency runs a real cross-check between the project's SQL
+// schema/migration source(s) and its ORM model file(s) -- see dbOps.ts's
+// doc comment for exactly what's parsed (v1: Python SQLModel/SQLAlchemy
+// only) and what's honestly left unrecognized rather than guessed.
+// ============================================================
+const dbConsistencyCheckBtn = document.getElementById("db-consistency-check-btn");
+const dbConsistencyResultsEl = document.getElementById("db-consistency-results");
+
+const DB_OVERALL_LABELS = { consistent: "Consistent", mismatches_found: "Mismatches found", unknown: "Not enough to cross-check yet" };
+
+function renderDbConsistencyReport(report) {
+  const mismatchRows = report.mismatches
+    .map(
+      (m) => `
+        <div class="completion-criterion fail">
+          <span class="completion-criterion-status fail">✗</span>
+          <span class="completion-criterion-label">${escapeHtml(m.tableName)}</span>
+          <span class="completion-criterion-detail">${escapeHtml(m.detail)}</span>
+        </div>`,
+    )
+    .join("");
+  const schemaList = report.schemaTables.length
+    ? report.schemaTables.map((t) => `${escapeHtml(t.name)} <span class="context-row-loc">(${escapeHtml(t.source)}:${t.line})</span>`).join(", ")
+    : "None found";
+  const ormList = report.ormEntities.length
+    ? report.ormEntities.map((e) => `${escapeHtml(e.name)} → "${escapeHtml(e.tableName)}" <span class="context-row-loc">(${escapeHtml(e.source)}:${e.line})</span>`).join(", ")
+    : "None found";
+  dbConsistencyResultsEl.innerHTML = `
+    <div class="completion-summary ${report.overall}">${DB_OVERALL_LABELS[report.overall] || report.overall}${report.mismatches.length > 0 ? ` — ${report.mismatches.length} issue${report.mismatches.length === 1 ? "" : "s"}` : ""}</div>
+    ${report.mismatches.length > 0 ? `<div class="completion-criteria">${mismatchRows}</div>` : ""}
+    <div class="context-rows" style="margin-top:8px;">
+      <div class="context-row"><span class="context-row-label">Schema tables</span><span class="context-row-value">${schemaList}</span></div>
+      <div class="context-row"><span class="context-row-label">ORM entities</span><span class="context-row-value">${ormList}</span></div>
+      <div class="context-row"><span class="context-row-label">ORM convention recognized</span><span class="context-row-value">${report.ormDetected ? escapeHtml(report.ormDetected) : "None (Python SQLModel/SQLAlchemy is the only convention this v1 recognizes)"}</span></div>
+    </div>
+    <div class="completion-meta">Generated ${new Date(report.generatedAt).toLocaleString()}</div>
+  `;
+}
+
+dbConsistencyCheckBtn?.addEventListener("click", async () => {
+  dbConsistencyCheckBtn.disabled = true;
+  dbConsistencyCheckBtn.textContent = "Checking…";
+  dbConsistencyResultsEl.innerHTML = `<div class="verify-pending">Scanning for schema sources and ORM model files…</div>`;
+  try {
+    const report = await api("/db/consistency");
+    renderDbConsistencyReport(report);
+  } catch (err) {
+    dbConsistencyResultsEl.innerHTML = `<div class="verify-none">Consistency check failed: ${escapeHtml(err.message)}</div>`;
+  }
+  dbConsistencyCheckBtn.disabled = false;
+  dbConsistencyCheckBtn.textContent = "Check consistency";
 });
 
 // ============================================================

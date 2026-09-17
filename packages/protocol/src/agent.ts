@@ -368,6 +368,64 @@ export interface ProjectContextReport {
 export type ProjectContextResponse = ProjectContextReport;
 
 /**
+ * Database Engineering (roadmap Phase 8, source requirement §8): one
+ * table found in a schema/migration source (a `CREATE TABLE` statement),
+ * or one entity found in an ORM model file — see DatabaseConsistencyReport
+ * below. Kept as two separate arrays (schemaTables / ormEntities) rather
+ * than merged, so a mismatch in either direction is visible: a table with
+ * no matching model, or a model with no matching table.
+ */
+export interface DatabaseSchemaTable {
+  name: string;
+  /** File the CREATE TABLE (or equivalent) was found in, project-relative. */
+  source: string;
+  /** 1-indexed line within `source`. */
+  line: number;
+}
+
+export interface DatabaseOrmEntity {
+  /** The ORM class name, e.g. "User". */
+  name: string;
+  /** The table name this entity actually maps to (explicit __tablename__/table_name, or the ORM's own default-casing convention applied to `name` when none is given). */
+  tableName: string;
+  source: string;
+  line: number;
+}
+
+/** One requirement gap or mismatch between the schema and the ORM models — see DatabaseConsistencyReport.mismatches. */
+export interface DatabaseConsistencyMismatch {
+  kind: "table_without_model" | "model_without_table";
+  tableName: string;
+  detail: string;
+}
+
+/**
+ * Database Engineering (roadmap Phase 8, source requirement §8): a real,
+ * computed cross-check between a project's schema/migration source(s) and
+ * its ORM model file(s) — the "domain-model -> ER -> schema -> ORM ->
+ * API consistency check" the source requirement asks for, scoped for v1 to
+ * schema<->ORM (the two ends this codebase can parse without a real SQL/AST
+ * parser — see dbOps.ts's doc comment for exactly what's supported and
+ * what's honestly reported as not_configured instead of guessed).
+ *
+ * overall is "unknown" only when no schema source AND no ORM model file
+ * was found at all (nothing to check yet, not a claim that it's fine).
+ */
+export interface DatabaseConsistencyReport {
+  projectPath: string;
+  generatedAt: string;
+  /** The ORM/dialect convention this scan actually understood, e.g. "SQLModel/SQLAlchemy (Python)" — or null when nothing recognizable was found. Never a guess; see dbOps.ts. */
+  ormDetected: string | null;
+  schemaTables: DatabaseSchemaTable[];
+  ormEntities: DatabaseOrmEntity[];
+  mismatches: DatabaseConsistencyMismatch[];
+  overall: "consistent" | "mismatches_found" | "unknown";
+}
+
+/** Body of GET /db/consistency. */
+export type DatabaseConsistencyResponse = DatabaseConsistencyReport;
+
+/**
  * Messages sent from the renderer, over the /terminal WebSocket, to the
  * agent. A real PTY session (see apps/desktop-agent/src/terminalWs.ts) is
  * raw byte pass-through, not request/response commands: "input" carries
