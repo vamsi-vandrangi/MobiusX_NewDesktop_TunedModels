@@ -25,6 +25,15 @@ import type {
   ProposedEdit,
   VerifyResponse,
   BrowserValidationResponse,
+  SteeringListResponse,
+  SteeringWriteRequest,
+  HooksConfigResponse,
+  McpStatusResponse,
+  McpToolCallRequest,
+  McpToolCallResponse,
+  KnowledgeSourcesResponse,
+  KnowledgeIndexResponse,
+  KnowledgeSearchResponse,
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
@@ -40,6 +49,10 @@ import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.j
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
 import { buildSemanticIndex, searchSemanticIndex } from "./semanticOps.js";
 import { projectState } from "./state.js";
+import { deleteSteeringFile, listSteeringFiles, scaffoldDefaultSteering, writeSteeringFile } from "./steering.js";
+import { loadProjectHooks, runHooksForEvent } from "./hooks.js";
+import { callMcpTool, getMcpStatus } from "@mobiusx/mcp-client";
+import { addKnowledgeSource, buildKnowledgeIndex, listKnowledgeSources, removeKnowledgeSource, searchKnowledge } from "./knowledgeOps.js";
 
 export function buildRouter(): Router {
   const router = Router();
@@ -221,7 +234,24 @@ export function buildRouter(): Router {
         summary: `Applied ${appliedCount}/${results.length} proposed edit(s) in ${projectState.path}${skippedCount > 0 ? ` (${skippedCount} skipped)` : ""}`,
         detail: { projectPath: projectState.path, results },
       });
-      const body: ApplyEditsResponse = { results };
+
+      // Project Memory/Steering + Hooks (roadmap Phase 16, source
+      // requirement §25): a real "after-api-change" trigger point --
+      // fires only for rules whose pathPattern matches at least one path
+      // that was ACTUALLY applied just now (never a path that was merely
+      // proposed and skipped). hookResults is omitted entirely (not [])
+      // when this project has no hooks.json at all, so the response shape
+      // itself tells the caller whether hooks are even configured.
+      const appliedPaths = results.filter((r) => r.status === "applied").map((r) => r.path);
+      let hookResults: ApplyEditsResponse["hookResults"];
+      if (appliedPaths.length > 0) {
+        const { rules } = await loadProjectHooks(projectState.path);
+        if (rules.some((r) => r.event === "after-api-change")) {
+          hookResults = await runHooksForEvent(projectState.path, "after-api-change", { changedPaths: appliedPaths });
+        }
+      }
+
+      const body: ApplyEditsResponse = { results, ...(hookResults ? { hookResults } : {}) };
       res.json(body);
     } catch (err) {
       res.status(500).json({ error: "apply-edits failed", detail: (err as Error).message });
@@ -526,6 +556,200 @@ export function buildRouter(): Router {
       projectPolicyError: error,
     };
     res.json(body);
+  });
+
+  // Project Memory/Steering (roadmap Phase 16, source requirement §24/§25)
+  // -- see steering.ts's doc comment. Files are plain markdown the user
+  // (or an explicit save from here) authors under .mobiusx/steering/;
+  // nothing here is ever generated silently.
+  router.get("/steering", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const files = await listSteeringFiles(projectState.path);
+    const body: SteeringListResponse = { files, dir: join(projectState.path, ".mobiusx", "steering") };
+    res.json(body);
+  });
+
+  router.put("/steering", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const { name, content } = req.body as SteeringWriteRequest;
+    if (typeof name !== "string" || !/^[A-Za-z0-9_-]+$/.test(name) || typeof content !== "string") {
+      res.status(400).json({ error: "name (letters/numbers/hyphen/underscore only) and content (string) are required" });
+      return;
+    }
+    try {
+      const file = await writeSteeringFile(projectState.path, name, content);
+      res.json(file);
+    } catch (err) {
+      res.status(500).json({ error: "failed to write steering file", detail: (err as Error).message });
+    }
+  });
+
+  router.delete("/steering/:name", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      await deleteSteeringFile(projectState.path, req.params.name);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: "failed to delete steering file", detail: (err as Error).message });
+    }
+  });
+
+  router.post("/steering/scaffold", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const written = await scaffoldDefaultSteering(projectState.path);
+    res.json({ written });
+  });
+
+  // Event-driven hooks (roadmap Phase 16, source requirement §25's second
+  // half) -- see hooks.ts's doc comment. Read-only here (same convention
+  // as GET /policy above): .mobiusx/hooks.json is hand-authored, this just
+  // surfaces what's configured and any parse error honestly, plus a
+  // manual "run now" for the Settings panel to test a hook without
+  // needing a real apply-edits or git commit to trigger it.
+  router.get("/hooks", async (_req, res) => {
+    const { rules, path, error } = await loadProjectHooks(projectState.path);
+    const body: HooksConfigResponse = { rules, path, error };
+    res.json(body);
+  });
+
+  router.post("/hooks/run", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const event = req.body?.event;
+    if (event !== "before-commit" && event !== "after-api-change") {
+      res.status(400).json({ error: 'event must be "before-commit" or "after-api-change"' });
+      return;
+    }
+    try {
+      const results = await runHooksForEvent(projectState.path, event);
+      res.json({ results });
+    } catch (err) {
+      res.status(500).json({ error: "hook run failed", detail: (err as Error).message });
+    }
+  });
+
+  // Broader MCP tool support (source requirement §28) -- see
+  // @mobiusx/mcp-client's doc comment for .mobiusx/mcp.json's shape and
+  // the real stdio connection this establishes. GET connects to (or
+  // reuses a cached connection to) every enabled configured server and
+  // reports genuine per-server status -- never a fabricated "connected".
+  router.get("/mcp/status", async (_req, res) => {
+    try {
+      const servers = await getMcpStatus(projectState.path);
+      const body: McpStatusResponse = { servers };
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "mcp status failed", detail: (err as Error).message });
+    }
+  });
+
+  // Manual tool-call, for testing a configured server from the Settings
+  // panel without needing a full Build/Fix task to trigger it (the real
+  // task-time calling path is apps/cloud-agent-gateway's anthropicRunner.ts).
+  router.post("/mcp/tools/call", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const { tool, arguments: args } = req.body as McpToolCallRequest;
+    if (typeof tool !== "string" || !tool) {
+      res.status(400).json({ error: "tool is required" });
+      return;
+    }
+    try {
+      const result = await callMcpTool(projectState.path, tool, (args as Record<string, unknown>) ?? {});
+      void appendAuditEntry({
+        source: "desktop-agent",
+        category: "mcp-tool-call",
+        severity: result.isError ? "warning" : "info",
+        summary: `MCP tool call ${tool}: ${result.isError ? "error" : "ok"}`,
+        detail: { tool, isError: result.isError, projectPath: projectState.path },
+      });
+      const body: McpToolCallResponse = { tool, isError: result.isError, content: result.content };
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "mcp tool call failed", detail: (err as Error).message });
+    }
+  });
+
+  // Enterprise Knowledge / Global Intelligence local substitute (roadmap
+  // Phase 17, source requirement §29/§30) -- see knowledgeOps.ts's doc
+  // comment. Deliberately GLOBAL (no project needs to be open) -- sources
+  // are folders on the user's machine, indexed once, searchable from any
+  // project's AI Assistant panel.
+  router.get("/knowledge/sources", async (_req, res) => {
+    const sources = await listKnowledgeSources();
+    const body: KnowledgeSourcesResponse = { sources };
+    res.json(body);
+  });
+
+  router.post("/knowledge/sources", async (req, res) => {
+    const { label, path } = req.body as { label?: string; path?: string };
+    if (typeof path !== "string" || !path) {
+      res.status(400).json({ error: "path is required" });
+      return;
+    }
+    try {
+      const source = await addKnowledgeSource(typeof label === "string" ? label : "", resolvePath(path));
+      res.json(source);
+    } catch (err) {
+      res.status(400).json({ error: "failed to add knowledge source", detail: (err as Error).message });
+    }
+  });
+
+  router.delete("/knowledge/sources/:id", async (req, res) => {
+    await removeKnowledgeSource(req.params.id);
+    res.json({ ok: true });
+  });
+
+  router.post("/knowledge/index", async (req, res) => {
+    const sourceId = typeof req.body?.sourceId === "string" ? req.body.sourceId : undefined;
+    try {
+      const results = await buildKnowledgeIndex(sourceId);
+      for (const r of results) {
+        void appendAuditEntry({
+          source: "desktop-agent",
+          category: "knowledge-index",
+          severity: "info",
+          summary: `Indexed knowledge source ${r.sourceId}: ${r.filesIndexed}/${r.filesConsidered} file(s), ${r.chunksIndexed} chunk(s)`,
+          detail: { ...r },
+        });
+      }
+      const body: KnowledgeIndexResponse = { results };
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "knowledge index build failed", detail: (err as Error).message });
+    }
+  });
+
+  router.get("/knowledge/search", async (req, res) => {
+    const q = String(req.query.q ?? "");
+    const k = Math.min(Math.max(Number(req.query.k) || 5, 1), 20);
+    if (!q.trim()) {
+      res.json({ hits: [], durationMs: 0 });
+      return;
+    }
+    try {
+      const result = await searchKnowledge(q, k);
+      const body: KnowledgeSearchResponse = result;
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "knowledge search failed", detail: (err as Error).message });
+    }
   });
 
   // Approval Engine (PRD §34-35): the one real, working autonomy-level

@@ -187,6 +187,211 @@ export interface AppliedEditResult {
 
 export interface ApplyEditsResponse {
   results: AppliedEditResult[];
+  /** Present only when at least one "after-api-change" hook fired for this apply (see HookRule below) -- absent, not [], when no hooks were configured at all. */
+  hookResults?: HookRunResult[];
+}
+
+/**
+ * Project Memory/Steering + Hooks (roadmap Phase 16, source requirement
+ * §24/§25). A steering file is a plain markdown file under
+ * `.mobiusx/steering/` that the user (or the agent, on request) writes
+ * once -- real architecture/security/api-standards/testing conventions
+ * for THIS project -- and every subsequent AI Assistant request in any
+ * mode is grounded in it automatically (see ProjectContext.steeringContext
+ * in cloud.ts and promptShared.ts#steeringContextBlock). Never generated
+ * or guessed by this app; only ever written because the user (or an
+ * explicit agent-authored save) put it there.
+ */
+export interface SteeringFile {
+  /** Filename without the .mobiusx/steering/ prefix or .md extension, e.g. "architecture". */
+  name: string;
+  /** Absolute path on disk. */
+  path: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface SteeringListResponse {
+  files: SteeringFile[];
+  /** Absolute path to .mobiusx/steering/, or null if no project is open. */
+  dir: string | null;
+}
+
+export interface SteeringWriteRequest {
+  /** Safe filename stem -- letters, numbers, hyphen, underscore only, no extension/slashes. */
+  name: string;
+  content: string;
+}
+
+/**
+ * Event-driven hooks (roadmap Phase 16, source requirement §25's second
+ * half). A project opts in by hand-writing `.mobiusx/hooks.json` --
+ * same one-way-ratchet honesty as policy.ts's `.mobiusx/policy.json`
+ * (a malformed file is ignored in full, never partially applied, and the
+ * parse error is surfaced rather than swallowed). Two real trigger points
+ * exist today, both wired into machinery this codebase already runs
+ * rather than a new background scheduler:
+ *  - "after-api-change": evaluated right after POST /fs/apply-edits
+ *    writes real files to disk (see fsOps.ts#applyEdits) -- a rule whose
+ *    `pathPattern` regex matches at least one just-applied path's relPath
+ *    fires, e.g. regenerating an OpenAPI spec after a routes file changes.
+ *  - "before-commit": evaluated reactively in the embedded terminal (see
+ *    terminalWs.ts) the moment a submitted line matches `git commit` --
+ *    the same "reactive, not preventive" honesty policy.ts's own doc
+ *    comment already establishes for this PTY (a real interactive
+ *    terminal can't be transparently gated before the shell sees a
+ *    keystroke without breaking arrow-key history/tab completion). A
+ *    failing before-commit hook gets the same best-effort Ctrl+C
+ *    policy.ts uses for a flagged destructive command.
+ */
+export type HookEvent = "before-commit" | "after-api-change";
+
+export interface HookRule {
+  id: string;
+  event: HookEvent;
+  /** Full shell command line, run with the project root as cwd (e.g. "npm test", "npm run docs:openapi"). */
+  command: string;
+  description?: string;
+  /**
+   * Only meaningful for "after-api-change": a regex (source string, same
+   * survives-JSON convention as PolicyRule.pattern) tested against every
+   * relPath that POST /fs/apply-edits just actually applied. Absent means
+   * the rule fires on ANY applied edit, not scoped to API files.
+   */
+  pathPattern?: string;
+}
+
+export interface HooksConfigResponse {
+  rules: HookRule[];
+  /** Absolute path to the project's .mobiusx/hooks.json, or null if none is open/none exists. */
+  path: string | null;
+  /** Set when a hooks file exists but couldn't be used (malformed JSON, bad regex, wrong shape) -- the file is ignored entirely rather than partially applied, and this says why. */
+  error: string | null;
+}
+
+export interface HookRunResult {
+  ruleId: string;
+  event: HookEvent;
+  command: string;
+  status: "passed" | "failed";
+  exitCode: number | null;
+  output: string;
+  durationMs: number;
+}
+
+/**
+ * Broader MCP tool support (source requirement §28 -- folded into this
+ * build rather than a standalone roadmap phase, per
+ * docs/AI_ENGINEERING_PLATFORM_ROADMAP.md's own footnote). A project opts
+ * in by hand-writing `.mobiusx/mcp.json` -- same shape convention Claude
+ * Desktop/Claude Code use for MCP server config, so an existing config is
+ * often just copy-pasteable -- and each `enabled` server is spawned over
+ * stdio (the real Model Context Protocol, via @modelcontextprotocol/sdk)
+ * by @mobiusx/mcp-client, shared by both apps/desktop-agent (Settings UI:
+ * connect/list tools) and apps/cloud-agent-gateway (actually calling a
+ * tool mid-task -- see anthropicRunner.ts's tool-use loop).
+ */
+export interface McpServerConfig {
+  /** Unique key within .mobiusx/mcp.json -- also the namespace prefix for this server's tools (e.g. "filesystem__read_file"). */
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+}
+
+export interface McpConfigResponse {
+  servers: McpServerConfig[];
+  path: string | null;
+  error: string | null;
+}
+
+export interface McpToolInfo {
+  /** Namespaced as "<serverName>__<toolName>" -- what a model's tool-use call and POST /mcp/tools/call both use. */
+  name: string;
+  serverName: string;
+  toolName: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface McpServerStatus {
+  name: string;
+  connected: boolean;
+  error?: string;
+  tools: McpToolInfo[];
+}
+
+export interface McpStatusResponse {
+  servers: McpServerStatus[];
+}
+
+export interface McpToolCallRequest {
+  /** Namespaced "<serverName>__<toolName>". */
+  tool: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface McpToolCallResponse {
+  tool: string;
+  isError: boolean;
+  /** Flattened text content from the MCP tool result -- images/other content types are summarized, never dropped silently (see mcp-client's doc comment). */
+  content: string;
+}
+
+/**
+ * Enterprise Knowledge / Global Intelligence local substitute (roadmap
+ * Phase 17, source requirement §29/§30). MobiusX Cloud's real EK/GI
+ * backends don't exist to integrate against yet (see the roadmap's own
+ * "genuinely blocked" note) -- rather than fake a connection to a system
+ * that isn't there, this is a REAL, fully local knowledge base: the user
+ * adds one or more folders of their own docs (an internal wiki export,
+ * README collection, ADRs, coding standards -- anything markdown/text),
+ * this app indexes them (@mobiusx/semantic-index's embedding math, reused
+ * -- see knowledgeOps.ts), and relevant snippets are retrieved into
+ * generation prompts the same way relevantFiles already grounds Build
+ * mode in real code (see ProjectContext.knowledgeContext in cloud.ts).
+ * Deliberately GLOBAL (stored under ~/.mobiusx/knowledge/, not a single
+ * project's .mobiusx/) since real enterprise knowledge spans projects --
+ * the one real differentiator from Phase 2's per-project code index.
+ */
+export interface KnowledgeSource {
+  id: string;
+  label: string;
+  /** Absolute path to a folder on disk. */
+  path: string;
+  addedAt: string;
+}
+
+export interface KnowledgeSourcesResponse {
+  sources: KnowledgeSource[];
+}
+
+export interface KnowledgeIndexStats {
+  sourceId: string;
+  filesConsidered: number;
+  filesIndexed: number;
+  chunksIndexed: number;
+  totalChunksInStore: number;
+  durationMs: number;
+}
+
+export interface KnowledgeIndexResponse {
+  results: KnowledgeIndexStats[];
+}
+
+export interface KnowledgeSearchHit {
+  sourceId: string;
+  sourceLabel: string;
+  relPath: string;
+  heading: string | null;
+  snippet: string;
+  score: number;
+}
+
+export interface KnowledgeSearchResponse {
+  hits: KnowledgeSearchHit[];
+  durationMs: number;
 }
 
 /**
@@ -636,4 +841,13 @@ export type TerminalServerMessage =
    * keystroke has been HELD, not yet sent to the shell — the renderer
    * must send back "approve" or "reject" for it to be resolved.
    */
-  | { type: "policy"; matches: PolicyMatch[]; requiresApproval?: boolean };
+  | { type: "policy"; matches: PolicyMatch[]; requiresApproval?: boolean }
+  /**
+   * A completed terminal line matched `git commit` and this project has
+   * at least one enabled "before-commit" hook (see HookRule above). Sent
+   * AFTER the hook(s) already ran (this is reactive, same caveat as
+   * "policy" above) -- `blocked: true` means at least one hook failed and
+   * a best-effort Ctrl+C was already sent; `blocked: false` means every
+   * configured before-commit hook passed and the commit was left alone.
+   */
+  | { type: "hook"; event: HookEvent; results: HookRunResult[]; blocked: boolean };

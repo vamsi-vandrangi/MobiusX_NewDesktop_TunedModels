@@ -214,6 +214,29 @@ export interface ProjectContext {
    * follow. Absent for every other mode.
    */
   testingEvidence?: TestingEvidence;
+  /**
+   * Project Memory/Steering (roadmap Phase 16, source requirement §24/§25).
+   * The combined markdown content of every file under this project's
+   * `.mobiusx/steering/` directory (see SteeringFile in agent.ts), fetched
+   * by the desktop client for EVERY mode with a project open (not just
+   * build) -- steering is meant to be consulted automatically, the same
+   * way a real engineer reads a project's CONTRIBUTING.md/architecture
+   * notes before touching code regardless of what task they're doing.
+   * Absent when the project has no steering files at all.
+   */
+  steeringContext?: string;
+  /**
+   * Enterprise Knowledge / Global Intelligence local substitute (roadmap
+   * Phase 17, source requirement §29/§30 -- see KnowledgeSearchHit in
+   * agent.ts for what a hit actually is). Real snippets retrieved from the
+   * user's own configured knowledge sources (~/.mobiusx/knowledge-sources.json),
+   * relevant to this specific prompt -- the desktop client runs a real
+   * GET /knowledge/search against the current prompt text before creating
+   * a build/spec/architecture-mode task, the same way relevantFiles is
+   * populated from a real semantic search. Absent when no knowledge
+   * sources are configured, or none scored a match.
+   */
+  knowledgeContext?: { sourceLabel: string; relPath: string; snippet: string }[];
 }
 
 /**

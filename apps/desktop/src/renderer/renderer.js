@@ -13,6 +13,7 @@ function showView(name) {
   if (name === "tasks") loadTasksList();
   if (name === "settings") loadSettings();
   if (name === "artifacts") loadArtifacts();
+  if (name === "knowledge") loadKnowledgeView();
 }
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -509,6 +510,19 @@ function connectTerminal() {
         // Phase 5 command guard, "off" mode — reactive, best-effort (see
         // apps/desktop-agent/src/policy.ts): the command already ran.
         term.write(`\r\n\x1b[41m\x1b[97m[command guard] flagged & interrupted: ${labels}\x1b[0m\r\n`);
+      }
+    } else if (msg.type === "hook") {
+      // Event-driven hooks (roadmap Phase 16, source requirement §25):
+      // real before-commit results, reactive same as the command guard
+      // above (see terminalWs.ts#checkBeforeCommitHook).
+      const summary = msg.results.map((r) => `${r.status === "passed" ? "✓" : "✗"} ${r.ruleId}`).join("  ");
+      if (msg.blocked) {
+        term.write(`\r\n\x1b[41m\x1b[97m[before-commit hook] FAILED, commit interrupted: ${summary}\x1b[0m\r\n`);
+        for (const r of msg.results.filter((r) => r.status === "failed")) {
+          term.write(`\x1b[31m  ${r.ruleId} (${r.command}) exited ${r.exitCode}\x1b[0m\r\n`);
+        }
+      } else {
+        term.write(`\r\n\x1b[42m\x1b[30m[before-commit hook] passed: ${summary}\x1b[0m\r\n`);
       }
     }
   });
@@ -1029,6 +1043,47 @@ async function findRelevantFiles(query, mode) {
 }
 
 /**
+ * Project Memory/Steering (roadmap Phase 16, source requirement §24/§25):
+ * fetched for EVERY mode with a project open (unlike architectureEvidence/
+ * testingEvidence, which are mode-specific) -- see
+ * ProjectContext.steeringContext's doc comment in @mobiusx/protocol for
+ * why. Combines every non-empty .mobiusx/steering/*.md file's content
+ * into one string; returns undefined (never "") when there's nothing to
+ * add, so callers can spread it in with the same `...(x ? {x} : {})`
+ * convention already used for architectureEvidence/testingEvidence below.
+ */
+async function fetchSteeringContext() {
+  try {
+    const { files } = await api("/steering");
+    const nonEmpty = (files || []).filter((f) => f.content && f.content.trim().length > 0);
+    if (nonEmpty.length === 0) return undefined;
+    return nonEmpty.map((f) => `--- .mobiusx/steering/${f.name}.md ---\n${f.content.trim()}`).join("\n\n");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Enterprise Knowledge / Global Intelligence local substitute (roadmap
+ * Phase 17, source requirement §29/§30) -- see KnowledgeSearchHit's doc
+ * comment in @mobiusx/protocol. Runs a real search over the user's own
+ * configured knowledge sources against the CURRENT prompt text, the same
+ * way findRelevantFiles greps the project's code -- so a generation
+ * prompt is grounded in the user's own docs/standards when they've added
+ * any, and silently contributes nothing when they haven't (never a fake
+ * "no knowledge configured" placeholder inside the prompt itself).
+ */
+async function fetchKnowledgeContext(queryText) {
+  try {
+    const { hits } = await api(`/knowledge/search?q=${encodeURIComponent(queryText)}&k=5`);
+    if (!hits || hits.length === 0) return undefined;
+    return hits.map((h) => ({ sourceLabel: h.sourceLabel, relPath: h.relPath, snippet: h.snippet }));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Architecture mode (roadmap Phase 9) does NOT ground itself in semantic
  * search -- its real grounding is the pre-computed evidence bundle (GET
  * /architecture-evidence, fetched in submit() below), per
@@ -1295,10 +1350,25 @@ function buildEditsCard(edits, taskProjectPath, review) {
     applyBtn.disabled = true;
     applyBtn.textContent = "Applying…";
     try {
-      const { results } = await api("/fs/apply-edits", { method: "POST", body: JSON.stringify({ edits }) });
+      const { results, hookResults } = await api("/fs/apply-edits", { method: "POST", body: JSON.stringify({ edits }) });
       const appliedCount = results.filter((r) => r.status === "applied").length;
       resultEl.textContent = `Applied ${appliedCount}/${results.length}`;
       applyBtn.textContent = "Applied";
+      // Event-driven hooks (roadmap Phase 16, source requirement §25):
+      // "after-api-change" -- present only when this project had at least
+      // one such hook configured and it actually fired (see routes.ts's
+      // POST /fs/apply-edits).
+      if (hookResults && hookResults.length > 0) {
+        const hooksEl = document.createElement("div");
+        hooksEl.className = "edits-hook-results";
+        hooksEl.innerHTML = hookResults
+          .map(
+            (r) =>
+              `<div class="edits-hook-result ${r.status}">${r.status === "passed" ? "✓" : "✗"} <strong>${escapeHtml(r.ruleId)}</strong> — <code>${escapeHtml(r.command)}</code>${r.status === "failed" ? `<pre>${escapeHtml(r.output.slice(0, 800))}</pre>` : ""}</div>`,
+          )
+          .join("");
+        resultEl.after(hooksEl);
+      }
       results.forEach((r, i) => {
         const fileEl = list.children[i];
         if (!fileEl) return;
@@ -1514,13 +1584,20 @@ function buildEditsCard(edits, taskProjectPath, review) {
     try {
       const searchText = lastFailingSteps.map((s) => `${s.label}\n${s.output}`).join("\n\n").slice(0, 2000);
       const { hits: relevantFiles, storeSize: indexedChunkCount } = await findRelevantFiles(searchText || "build failure", "fix");
+      const steeringContext = await fetchSteeringContext();
       const prompt = `Diagnose and fix the failing verification step(s): ${lastFailingSteps.map((s) => s.label).join(", ")}.`;
       const { task } = await cloudApi("/tasks", {
         method: "POST",
         body: JSON.stringify({
           mode: "fix",
           prompt,
-          projectContext: { projectPath: currentProjectPath, relevantFiles, indexedChunkCount, failingVerification: lastFailingSteps },
+          projectContext: {
+            projectPath: currentProjectPath,
+            relevantFiles,
+            indexedChunkCount,
+            failingVerification: lastFailingSteps,
+            ...(steeringContext ? { steeringContext } : {}),
+          },
         }),
       });
       let detail = await cloudApi(`/tasks/${task.id}`);
@@ -1872,6 +1949,12 @@ function createAssistantPanel(container) {
     const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
     try {
       let relevantFiles, indexedChunkCount, architectureEvidence, testingEvidence;
+      // Project Memory/Steering (Phase 16) + Knowledge (Phase 17) --
+      // fetched for every mode with a project open, in parallel with each
+      // other (independent lookups, no reason to serialize them).
+      const [steeringContext, knowledgeContext] = taskProjectPath
+        ? await Promise.all([fetchSteeringContext(), fetchKnowledgeContext(text)])
+        : [undefined, undefined];
       if (mode === "architecture") {
         relevantFiles = await fetchArchitectureRelevantFiles();
         indexedChunkCount = undefined;
@@ -1909,7 +1992,15 @@ function createAssistantPanel(container) {
           mode,
           prompt: text,
           projectContext: taskProjectPath
-            ? { projectPath: taskProjectPath, relevantFiles, indexedChunkCount, ...(architectureEvidence ? { architectureEvidence } : {}), ...(testingEvidence ? { testingEvidence } : {}) }
+            ? {
+                projectPath: taskProjectPath,
+                relevantFiles,
+                indexedChunkCount,
+                ...(architectureEvidence ? { architectureEvidence } : {}),
+                ...(testingEvidence ? { testingEvidence } : {}),
+                ...(steeringContext ? { steeringContext } : {}),
+                ...(knowledgeContext ? { knowledgeContext } : {}),
+              }
             : undefined,
           model,
           history: historyTurns.slice(-MAX_HISTORY_TURNS),
@@ -2615,6 +2706,167 @@ async function loadPolicy() {
   }
 }
 
+// ---- Project Memory/Steering (roadmap Phase 16, source requirement §24/§25) ----
+async function loadSteering() {
+  const listEl = document.getElementById("steering-file-list");
+  const statusEl = document.getElementById("steering-status");
+  if (!currentProjectPath) {
+    listEl.innerHTML = "<div class='recent-empty'>Open a project to view/edit its steering files.</div>";
+    return;
+  }
+  try {
+    const { files } = await api("/steering");
+    if (files.length === 0) {
+      listEl.innerHTML = "<div class='recent-empty'>No steering files yet — click \"Create default templates\" or add one below.</div>";
+      return;
+    }
+    listEl.innerHTML = files
+      .map(
+        (f) => `
+      <div class="steering-file" data-name="${escapeHtml(f.name)}">
+        <div class="steering-file-head">
+          <span class="steering-file-name">.mobiusx/steering/${escapeHtml(f.name)}.md</span>
+        </div>
+        <textarea class="steering-file-textarea">${escapeHtml(f.content)}</textarea>
+        <div class="steering-file-actions">
+          <button class="refresh-btn steering-save-btn">Save</button>
+          <button class="refresh-btn steering-delete-btn">Delete</button>
+        </div>
+      </div>`,
+      )
+      .join("");
+    listEl.querySelectorAll(".steering-file").forEach((fileEl) => {
+      const name = fileEl.dataset.name;
+      fileEl.querySelector(".steering-save-btn").addEventListener("click", async () => {
+        const btn = fileEl.querySelector(".steering-save-btn");
+        btn.disabled = true;
+        btn.textContent = "Saving…";
+        try {
+          const content = fileEl.querySelector(".steering-file-textarea").value;
+          await api("/steering", { method: "PUT", body: JSON.stringify({ name, content }) });
+          btn.textContent = "Saved ✓";
+          setTimeout(() => {
+            btn.textContent = "Save";
+            btn.disabled = false;
+          }, 1500);
+        } catch (err) {
+          btn.textContent = `Failed: ${err.message}`;
+          btn.disabled = false;
+        }
+      });
+      fileEl.querySelector(".steering-delete-btn").addEventListener("click", async () => {
+        try {
+          await api(`/steering/${encodeURIComponent(name)}`, { method: "DELETE" });
+          loadSteering();
+        } catch (err) {
+          statusEl.textContent = `Delete failed: ${err.message}`;
+        }
+      });
+    });
+  } catch (err) {
+    listEl.innerHTML = `<div class="debug-empty">Failed to load steering files: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+document.getElementById("steering-refresh-btn")?.addEventListener("click", loadSteering);
+document.getElementById("steering-scaffold-btn")?.addEventListener("click", async () => {
+  if (!currentProjectPath) return;
+  const btn = document.getElementById("steering-scaffold-btn");
+  btn.disabled = true;
+  btn.textContent = "Creating…";
+  try {
+    await api("/steering/scaffold", { method: "POST" });
+    await loadSteering();
+  } catch (err) {
+    document.getElementById("steering-status").textContent = `Failed: ${err.message}`;
+  }
+  btn.disabled = false;
+  btn.textContent = "Create default templates";
+});
+document.getElementById("steering-new-btn")?.addEventListener("click", async () => {
+  if (!currentProjectPath) return;
+  const input = document.getElementById("steering-new-name");
+  const name = input.value.trim();
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    document.getElementById("steering-status").textContent = "Name must contain only letters, numbers, hyphens, and underscores.";
+    return;
+  }
+  try {
+    await api("/steering", { method: "PUT", body: JSON.stringify({ name, content: `# ${name}\n\n` }) });
+    input.value = "";
+    await loadSteering();
+  } catch (err) {
+    document.getElementById("steering-status").textContent = `Failed: ${err.message}`;
+  }
+});
+
+// ---- Hooks (roadmap Phase 16, source requirement §25, event-driven) ----
+async function loadHooks() {
+  const listEl = document.getElementById("hooks-rule-list");
+  const errorEl = document.getElementById("hooks-error");
+  try {
+    const { rules, error } = await api("/hooks");
+    if (error) {
+      errorEl.style.display = "";
+      errorEl.textContent = `⚠ ${error}`;
+    } else {
+      errorEl.style.display = "none";
+    }
+    if (rules.length === 0) {
+      listEl.innerHTML = "<div class='recent-empty'>No .mobiusx/hooks.json found for the open project (or none is open) — see the example above.</div>";
+      return;
+    }
+    listEl.innerHTML = rules
+      .map(
+        (r) => `
+      <div class="hooks-rule">
+        <span class="hooks-rule-id">${escapeHtml(r.id)}</span><span class="hooks-rule-event">${escapeHtml(r.event)}</span>
+        <code class="hooks-rule-cmd">${escapeHtml(r.command)}</code>
+        ${r.description ? `<span class="hooks-rule-desc">${escapeHtml(r.description)}</span>` : ""}
+      </div>`,
+      )
+      .join("");
+  } catch (err) {
+    listEl.innerHTML = `<div class="debug-empty">Failed to load hooks: ${escapeHtml(err.message)}</div>`;
+  }
+}
+document.getElementById("hooks-refresh-btn")?.addEventListener("click", loadHooks);
+
+// ---- MCP tool support (source requirement §28) ----
+async function loadMcpServers() {
+  const listEl = document.getElementById("mcp-server-list");
+  const errorEl = document.getElementById("mcp-error");
+  try {
+    const { servers, error } = await api("/mcp/status");
+    if (error) {
+      errorEl.style.display = "";
+      errorEl.textContent = `⚠ ${error}`;
+    } else {
+      errorEl.style.display = "none";
+    }
+    if (!servers || servers.length === 0) {
+      listEl.innerHTML = "<div class='recent-empty'>No .mobiusx/mcp.json found for the open project (or none is open) — see the example above.</div>";
+      return;
+    }
+    listEl.innerHTML = servers
+      .map(
+        (s) => `
+      <div class="mcp-server">
+        <div class="mcp-server-head">
+          <span class="mcp-server-name">${escapeHtml(s.name)}</span>
+          <span class="mcp-server-status ${s.connected ? "connected" : "error"}">${s.connected ? "connected" : "not connected"}</span>
+        </div>
+        ${s.error ? `<div class="scope-note-small">${escapeHtml(s.error)}</div>` : ""}
+        ${s.tools.length > 0 ? `<div class="mcp-server-tools">${s.tools.map((t) => escapeHtml(t.toolName)).join(", ")}</div>` : ""}
+      </div>`,
+      )
+      .join("");
+  } catch (err) {
+    listEl.innerHTML = `<div class="debug-empty">Failed to load MCP servers: ${escapeHtml(err.message)}</div>`;
+  }
+}
+document.getElementById("mcp-refresh-btn")?.addEventListener("click", loadMcpServers);
+
 async function loadAuditLog() {
   const el = document.getElementById("audit-log");
   el.innerHTML = "<div class='debug-empty'>Loading…</div>";
@@ -2818,6 +3070,9 @@ function renderSettingsRepositories() {
 
 function loadSettings() {
   loadPolicy();
+  loadSteering();
+  loadHooks();
+  loadMcpServers();
   loadAuditLog();
   loadTerminalApprovalSettings();
   loadDefaultModelSettings();
@@ -2826,3 +3081,118 @@ function loadSettings() {
 }
 
 document.getElementById("audit-refresh-btn").addEventListener("click", loadAuditLog);
+
+// ============================================================
+// Knowledge (roadmap Phase 17, source requirement §29/§30 local
+// substitute) — see knowledgeOps.ts's doc comment.
+// ============================================================
+async function loadKnowledgeSourceList() {
+  const listEl = document.getElementById("knowledge-source-list");
+  if (!listEl) return;
+  try {
+    const { sources } = await api("/knowledge/sources");
+    if (sources.length === 0) {
+      listEl.innerHTML = "<div class='recent-empty'>No knowledge sources added yet — add a folder of your own docs below.</div>";
+      return;
+    }
+    listEl.innerHTML = sources
+      .map(
+        (s) => `
+      <div class="knowledge-source" data-id="${escapeHtml(s.id)}">
+        <div>
+          <div>${escapeHtml(s.label)}</div>
+          <div class="knowledge-source-path">${escapeHtml(s.path)}</div>
+        </div>
+        <div class="steering-file-actions">
+          <button class="refresh-btn knowledge-build-btn">Build index</button>
+          <button class="refresh-btn knowledge-remove-btn">Remove</button>
+        </div>
+      </div>`,
+      )
+      .join("");
+    listEl.querySelectorAll(".knowledge-source").forEach((el) => {
+      const id = el.dataset.id;
+      el.querySelector(".knowledge-build-btn").addEventListener("click", async () => {
+        const btn = el.querySelector(".knowledge-build-btn");
+        btn.disabled = true;
+        btn.textContent = "Indexing…";
+        try {
+          const { results } = await api("/knowledge/index", { method: "POST", body: JSON.stringify({ sourceId: id }) });
+          const r = results[0];
+          btn.textContent = r ? `✓ ${r.chunksIndexed} chunks` : "Done";
+        } catch (err) {
+          btn.textContent = `Failed: ${err.message}`;
+        }
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.textContent = "Build index";
+        }, 2500);
+      });
+      el.querySelector(".knowledge-remove-btn").addEventListener("click", async () => {
+        try {
+          await api(`/knowledge/sources/${encodeURIComponent(id)}`, { method: "DELETE" });
+          loadKnowledgeSourceList();
+        } catch (err) {
+          document.getElementById("knowledge-sources-status").textContent = `Failed: ${err.message}`;
+        }
+      });
+    });
+  } catch (err) {
+    listEl.innerHTML = `<div class="debug-empty">Failed to load knowledge sources: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function loadKnowledgeView() {
+  loadKnowledgeSourceList();
+}
+
+document.getElementById("knowledge-sources-refresh-btn")?.addEventListener("click", loadKnowledgeSourceList);
+document.getElementById("knowledge-add-btn")?.addEventListener("click", async () => {
+  const pathInput = document.getElementById("knowledge-new-path");
+  const labelInput = document.getElementById("knowledge-new-label");
+  const path = pathInput.value.trim();
+  if (!path) return;
+  const statusEl = document.getElementById("knowledge-sources-status");
+  try {
+    await api("/knowledge/sources", { method: "POST", body: JSON.stringify({ path, label: labelInput.value.trim() }) });
+    pathInput.value = "";
+    labelInput.value = "";
+    statusEl.textContent = "";
+    await loadKnowledgeSourceList();
+  } catch (err) {
+    statusEl.textContent = `Failed to add: ${err.message}`;
+  }
+});
+
+async function runKnowledgeSearch() {
+  const input = document.getElementById("knowledge-search-input");
+  const resultsEl = document.getElementById("knowledge-search-results");
+  const query = input.value.trim();
+  if (!query) return;
+  resultsEl.innerHTML = "<div class='verify-pending'>Searching…</div>";
+  try {
+    const { hits } = await api(`/knowledge/search?q=${encodeURIComponent(query)}&k=10`);
+    if (hits.length === 0) {
+      resultsEl.innerHTML = "<div class='recent-empty'>No matches — make sure at least one source has been indexed above.</div>";
+      return;
+    }
+    resultsEl.innerHTML = hits
+      .map(
+        (h) => `
+      <div class="knowledge-hit">
+        <div class="knowledge-hit-head">
+          <span>${escapeHtml(h.sourceLabel)} — ${escapeHtml(h.relPath)}${h.heading ? ` § ${escapeHtml(h.heading)}` : ""}</span>
+          <span>score ${h.score.toFixed(3)}</span>
+        </div>
+        <div class="knowledge-hit-snippet">${escapeHtml(h.snippet)}</div>
+      </div>`,
+      )
+      .join("");
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="debug-empty">Search failed: ${escapeHtml(err.message)}</div>`;
+  }
+}
+document.getElementById("knowledge-search-btn")?.addEventListener("click", runKnowledgeSearch);
+document.getElementById("knowledge-search-input")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runKnowledgeSearch();
+});

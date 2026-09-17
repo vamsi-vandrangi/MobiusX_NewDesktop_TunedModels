@@ -35,7 +35,7 @@ export interface EffectivePolicyResponse {
   projectPolicyError: string | null;
 }
 
-export type AuditCategory = "terminal-command-guard" | "secret-redaction" | "applied-edits" | "verification" | "project-created" | "preview-started" | "browser-validation";
+export type AuditCategory = "terminal-command-guard" | "secret-redaction" | "applied-edits" | "verification" | "project-created" | "preview-started" | "browser-validation" | "hook-run" | "mcp-tool-call" | "knowledge-index";
 export type AuditSeverity = "info" | "warning";
 
 export interface AuditEntry {

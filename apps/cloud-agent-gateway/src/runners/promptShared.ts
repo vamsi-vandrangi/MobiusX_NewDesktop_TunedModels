@@ -139,15 +139,38 @@ export function parseBuildResponse(
   return { prose, edits, droppedCount };
 }
 
+/**
+ * Project Memory/Steering (roadmap Phase 16, source requirement §24/§25):
+ * every mode's prompt is grounded in this project's own
+ * .mobiusx/steering/*.md conventions when any exist -- see
+ * ProjectContext.steeringContext's doc comment in @mobiusx/protocol for
+ * why this is intentionally NOT scoped to one mode (build/fix/etc.) the
+ * way architectureEvidence/testingEvidence are: a real engineer consults
+ * a project's own conventions regardless of what task they're doing.
+ * Prepended, not appended, so it reads as standing context the specific
+ * mode instructions below then apply.
+ */
+function steeringContextBlock(input: RunnerInput): string {
+  const steering = input.projectContext?.steeringContext;
+  if (!steering) return "";
+  return `This project has its own recorded engineering conventions (.mobiusx/steering/) — follow them wherever they apply to this request, and never contradict them without saying so explicitly in your response:
+${steering}
+
+---
+
+`;
+}
+
 export function systemPromptFor(input: RunnerInput): string {
+  const steering = steeringContextBlock(input);
   if (input.mode === "ask") {
     return (
-      "You are the MobiusX Desktop AI Assistant, answering a developer's question." + relevantFilesContext(input, false)
+      steering + "You are the MobiusX Desktop AI Assistant, answering a developer's question." + relevantFilesContext(input, false)
     );
   }
   if (input.mode === "plan") {
     return (
-      "You are the MobiusX Desktop AI Assistant. Draft a concrete, numbered implementation plan — do not write full code." +
+      steering + "You are the MobiusX Desktop AI Assistant. Draft a concrete, numbered implementation plan — do not write full code." +
       relevantFilesContext(input, false)
     );
   }
@@ -161,7 +184,7 @@ export function systemPromptFor(input: RunnerInput): string {
     // UI can render a real checklist instead of parsing prose. The
     // markdown doc remains the human-facing artifact; the JSON is never
     // meant to be read standalone.
-    return [
+    return steering + [
       "You are the MobiusX Desktop AI Assistant in SPEC mode — a Requirements Engineering assistant (not a coder in this mode).",
       "Given the user's natural-language request, write a structured requirements specification as a single markdown document with EXACTLY these sections, in this order: '## Overview', '## Functional Requirements' (numbered), '## Non-Functional Requirements' (numbered), '## Constraints & Assumptions', '## Risks', '## Acceptance Criteria'.",
       "EVERY requirement in '## Functional Requirements' and '## Non-Functional Requirements' must be prefixed with a stable id in the form 'REQ-001', 'REQ-002', ... — numbered continuously across both sections in the order they appear (do not restart numbering for non-functional requirements). Example line: '1. **REQ-001** — The system shall let a user reset their password via emailed link.'",
@@ -197,7 +220,7 @@ export function systemPromptFor(input: RunnerInput): string {
             .join("\n\n")}`
         : "\n\nNo specific failing-step evidence was attached to this task -- diagnose from the project context below as best you can, and say so plainly in your summary.";
 
-    return [
+    return steering + [
       "You are the MobiusX Desktop AI Assistant in FIX mode (Autonomous Build/Test/Fix Loop, roadmap Phase 6) -- diagnosing and repairing a REAL verification failure, not responding to a free-form feature request.",
       "Your job is to propose the MINIMAL set of file edits that fix the failing step(s) below. Do not refactor, rename, reformat, or \"improve\" anything unrelated to the failure -- a fix that changes more than it needs to makes the next verification pass harder to trust, not easier.",
       "If the evidence below is insufficient to diagnose a real fix (e.g. the output doesn't point at a specific file or line), say so plainly in your prose summary and propose your best-supported hypothesis rather than guessing silently.",
@@ -234,7 +257,7 @@ export function systemPromptFor(input: RunnerInput): string {
     const dbFullContentPaths = (input.projectContext?.relevantFiles ?? [])
       .filter((f) => f.content !== undefined)
       .map((f) => f.relPath);
-    return [
+    return steering + [
       "You are the MobiusX Desktop AI Assistant in DATABASE mode (Database Engineering, roadmap Phase 8) -- proposing a schema, its forward migration, and ORM model changes as ONE coherent set, not scattered files inside a generic build request.",
       "First, inspect the files shown to you below (if any) for an EXISTING database/ORM convention already used in this project -- an ORM's model classes (e.g. SQLModel/SQLAlchemy/Prisma/Sequelize/TypeORM/Mongoose), an existing schema file, or a migrations directory. If you find one, follow that exact convention and file layout. If you find none, default to plain SQL DDL for PostgreSQL under \"db/schema.sql\" and a matching forward migration under \"db/migrations/<NNN>_<slug>.sql\" (zero-padded 3-digit NNN, incrementing from the highest existing migration number you were shown, or 001 if none) -- and say so explicitly in your prose summary (e.g. \"No existing ORM or schema convention was found, so this assumes plain PostgreSQL.\"). Never silently switch technology away from what the project already evidently uses.",
       "Every table you add or change in the schema/migration MUST have a corresponding entry in the ORM model file when this project uses an ORM -- never update one layer and leave the other stale. State the entities and their relationships in one to two prose sentences (a brief domain model) before the file list, so the schema's intent is reviewable on its own, not just its SQL.",
@@ -280,7 +303,7 @@ export function systemPromptFor(input: RunnerInput): string {
     const architectureFullContentPaths = (input.projectContext?.relevantFiles ?? [])
       .filter((f) => f.content !== undefined)
       .map((f) => f.relPath);
-    return [
+    return steering + [
       "You are the MobiusX Desktop AI Assistant in ARCHITECTURE mode (Architecture Generation, roadmap Phase 9) -- producing a High-Level Design doc and a Low-Level Design doc, each with real Mermaid diagrams grounded strictly in the evidence bundle below, not generic or invented architecture.",
       "",
       "THE #1 RULE, non-negotiable: every box, arrow, table, route, and external system you draw MUST trace back to a specific field in the JSON evidence bundle below. Do not add a generic \"Load Balancer\", \"Cache\", \"Message Queue\", \"Auth Service\", or any other component that isn't actually evidenced -- these are exactly the kind of boilerplate-textbook boxes a beta tester flagged as \"very basic level\" and low quality. If the evidence bundle doesn't show it, it doesn't go in the diagram.",
@@ -338,7 +361,7 @@ export function systemPromptFor(input: RunnerInput): string {
     const testingFullContentPaths = (input.projectContext?.relevantFiles ?? [])
       .filter((f) => f.content !== undefined)
       .map((f) => f.relPath);
-    return [
+    return steering + [
       "You are the MobiusX Desktop AI Assistant in TESTING mode (Testing Engine, roadmap Phase 10) -- writing real, runnable test file(s) for the code shown to you below.",
       "",
       "THE #1 RULE, non-negotiable: only write tests against functions, classes, routes, or exports that ACTUALLY APPEAR in the file content shown to you below -- never invent a function, parameter, or return shape you weren't shown. If you can't see what a piece of code does, test its actually-visible behavior, don't guess at intent beyond that.",
@@ -375,7 +398,7 @@ export function systemPromptFor(input: RunnerInput): string {
     .filter((f) => f.content !== undefined)
     .map((f) => f.relPath);
 
-  return [
+  return steering + [
     "You are the MobiusX Desktop AI Assistant in BUILD mode.",
     // Reinforced Sept 2026 after real evidence (openai/gpt-oss-120b via
     // Groq, asked to build a multi-file Next.js + FastAPI + SQLite app):

@@ -726,3 +726,50 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .mermaid-rendered svg { max-width: 100%; height: auto; }
 .mermaid-error { margin: 12px 0; padding: 12px; background: #241616; border: 1px solid #4a2424; border-radius: 8px; }
 .mermaid-error-msg { color: #e08f8f; font-size: 12px; margin-bottom: 6px; }
+
+/* ---- Event-driven hooks (roadmap Phase 16, source requirement §25) ---- */
+.edits-hook-results { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.edits-hook-result { font-size: 11px; padding: 4px 8px; border-radius: 4px; background: #0e0f12; border: 1px solid #232429; }
+.edits-hook-result.passed { color: #6fcf73; }
+.edits-hook-result.failed { color: #e08f8f; }
+.edits-hook-result pre { margin: 4px 0 0; white-space: pre-wrap; font-family: "SF Mono", Menlo, monospace; font-size: 10.5px; color: #b6b7bb; }
+.hooks-rule-list { display: flex; flex-direction: column; gap: 6px; }
+.hooks-rule { padding: 8px; background: #0e0f12; border: 1px solid #232429; border-radius: 6px; font-size: 11.5px; }
+.hooks-rule-id { font-weight: 600; color: #cfd0d4; }
+.hooks-rule-event { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 3px; background: #1c2a3a; color: #7cb8e0; font-size: 10px; }
+.hooks-rule-cmd { display: block; margin-top: 4px; font-family: "SF Mono", Menlo, monospace; color: #9a9ba1; }
+.hooks-rule-desc { display: block; margin-top: 2px; color: #6d6e75; }
+
+/* ---- Project Memory/Steering (roadmap Phase 16, source requirement §24/§25) ---- */
+.steering-file-list { display: flex; flex-direction: column; gap: 10px; }
+.steering-file { padding: 10px; background: #0e0f12; border: 1px solid #232429; border-radius: 6px; }
+.steering-file-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.steering-file-name { font-weight: 600; color: #cfd0d4; font-size: 12px; }
+.steering-file textarea {
+  width: 100%; min-height: 100px; resize: vertical; box-sizing: border-box; padding: 8px;
+  background: #0b0c0d; border: 1px solid #2a2b31; border-radius: 4px; color: #cfd0d4;
+  font-family: "SF Mono", Menlo, monospace; font-size: 11.5px;
+}
+.steering-file-actions { display: flex; gap: 6px; margin-top: 6px; }
+.steering-new-row { display: flex; gap: 6px; margin-top: 10px; }
+.steering-new-row input { flex: 0 0 220px; }
+
+/* ---- MCP tool support (source requirement §28) ---- */
+.mcp-server-list { display: flex; flex-direction: column; gap: 8px; }
+.mcp-server { padding: 8px; background: #0e0f12; border: 1px solid #232429; border-radius: 6px; font-size: 11.5px; }
+.mcp-server-head { display: flex; align-items: center; gap: 8px; }
+.mcp-server-name { font-weight: 600; color: #cfd0d4; }
+.mcp-server-status { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+.mcp-server-status.connected { background: #163a1e; color: #6fcf73; }
+.mcp-server-status.error { background: #3a1616; color: #e08f8f; }
+.mcp-server-tools { margin-top: 6px; color: #9a9ba1; font-size: 10.5px; }
+
+/* ---- Knowledge (roadmap Phase 17, source requirement §29/§30 local substitute) ---- */
+.knowledge-source-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.knowledge-source { display: flex; align-items: center; justify-content: space-between; padding: 8px; background: #0e0f12; border: 1px solid #232429; border-radius: 6px; font-size: 11.5px; }
+.knowledge-source-path { color: #6d6e75; font-size: 10.5px; margin-top: 2px; }
+.knowledge-search-row { display: flex; gap: 6px; margin: 12px 0; }
+.knowledge-search-row input { flex: 1; }
+.knowledge-hit { padding: 8px; margin-bottom: 8px; background: #0e0f12; border: 1px solid #232429; border-radius: 6px; font-size: 11.5px; }
+.knowledge-hit-head { display: flex; justify-content: space-between; color: #7cb8e0; font-size: 10.5px; margin-bottom: 4px; }
+.knowledge-hit-snippet { white-space: pre-wrap; font-family: "SF Mono", Menlo, monospace; font-size: 10.5px; color: #b6b7bb; }

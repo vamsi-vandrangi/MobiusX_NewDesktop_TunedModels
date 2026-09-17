@@ -9,6 +9,7 @@ import { projectState } from "./state.js";
 import { LineTracker } from "./lineTracker.js";
 import { BUILTIN_POLICY, evaluateLine, loadProjectPolicy } from "./policy.js";
 import { getSettings } from "./settings.js";
+import { loadProjectHooks, runHooksForEvent } from "./hooks.js";
 
 /**
  * Real interactive PTY (node-pty), replacing Phase 1's command-exec
@@ -95,11 +96,38 @@ export function attachTerminalServer(server: import("node:http").Server, token: 
     // won't retroactively apply — matches how cwd is also fixed at spawn time).
     const { rules: projectRules } = await loadProjectPolicy(projectState.path);
     const policyRules = [...BUILTIN_POLICY, ...projectRules];
+    const { rules: hookRules } = await loadProjectHooks(projectState.path);
+    const hasBeforeCommitHooks = hookRules.some((r) => r.event === "before-commit");
+    const commitLinePattern = /^\s*git\s+commit\b/;
 
     ptyProcess.onData((data) => send(ws, { type: "output", data }));
     ptyProcess.onExit(({ exitCode, signal }) => {
       send(ws, { type: "exit", code: exitCode, signal });
     });
+
+    /**
+     * Event-driven hooks (roadmap Phase 16, source requirement §25):
+     * "before-commit" trigger. Necessarily reactive, same honesty caveat
+     * policy.ts's own doc comment already establishes for this real PTY —
+     * the line has already been forwarded to the shell by the time this
+     * runs (see both call sites below), so this can only catch a
+     * still-running/slow-starting `git commit` with a best-effort Ctrl+C,
+     * never truly prevent one that completes instantly. Fires for BOTH
+     * terminalApprovalMode values identically — hooks are a quality gate,
+     * not the destructive-command safety policy.ts's guarded hold exists
+     * for, so it deliberately isn't entangled with pendingApproval.
+     */
+    async function checkBeforeCommitHook(line: string): Promise<void> {
+      if (!hasBeforeCommitHooks || !projectState.path || !commitLinePattern.test(line)) return;
+      const results = await runHooksForEvent(projectState.path, "before-commit");
+      if (results.length === 0) return;
+      const blocked = results.some((r) => r.status === "failed");
+      send(ws, { type: "hook", event: "before-commit", results, blocked });
+      if (blocked) {
+        // Best-effort interrupt, same mechanism as a flagged policy line.
+        ptyProcess.write("\x03");
+      }
+    }
 
     ws.on("message", (raw) => {
       let msg: TerminalClientMessage;
@@ -144,6 +172,10 @@ export function attachTerminalServer(server: import("node:http").Server, token: 
           }
 
           ptyProcess.write(msg.data);
+          for (const line of completed) {
+            const trimmed = line.trim();
+            if (trimmed) void checkBeforeCommitHook(trimmed);
+          }
           return;
         }
 
@@ -155,6 +187,8 @@ export function attachTerminalServer(server: import("node:http").Server, token: 
         for (const line of tracker.feed(msg.data)) {
           const trimmed = line.trim();
           if (!trimmed) continue;
+          void checkBeforeCommitHook(trimmed);
+
           const matches = evaluateLine(trimmed, policyRules);
           if (matches.length === 0) continue;
 

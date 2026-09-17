@@ -205,14 +205,47 @@
             </div>
           </div>
         </section>
-        <section class="view placeholder-view" id="view-knowledge" hidden>
+        <section class="view" id="view-knowledge" hidden>
           <h2>Knowledge</h2>
-          <div class="placeholder-card">
-            <div class="placeholder-card-icon">◈</div>
-            <div class="placeholder-card-body">
-              <div class="placeholder-card-title">Not built yet <span class="status-text">(Phase 4)</span></div>
-              <p>Enterprise Knowledge stays primarily on MobiusX Web (see <code>docs/ARCHITECTURE.md</code> §2) — this is a read-only pass-through, not yet built.</p>
+          <p class="scope-note">
+            Roadmap Phase 17 (source §29/§30 — Enterprise Knowledge / Global Intelligence). MobiusX
+            Cloud's real EK/GI backends don't exist yet to integrate against (see
+            <code>docs/AI_ENGINEERING_PLATFORM_ROADMAP.md</code>'s own "genuinely blocked" note on this
+            phase) — rather than fake a connection to a system that isn't there, this is a REAL, fully
+            local knowledge base: point it at your own folders of docs (an internal wiki export, ADRs,
+            coding standards, READMEs — markdown/text), it indexes them on this machine, and relevant
+            snippets are retrieved into Build/Spec/Architecture-mode generation prompts automatically
+            (see <code>ProjectContext.knowledgeContext</code>) the same way relevant code already grounds
+            Build mode. Deliberately global, not scoped to one project — real org knowledge spans projects.
+          </p>
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3>Knowledge Sources</h3>
+              <button id="knowledge-sources-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
             </div>
+            <div id="knowledge-source-list" class="knowledge-source-list"></div>
+            <div class="steering-new-row">
+              <input id="knowledge-new-path" type="text" placeholder="Absolute folder path (e.g. /Users/you/docs/wiki-export)" style="flex:1;" />
+              <input id="knowledge-new-label" type="text" placeholder="Label (optional)" style="flex:0 0 160px;" />
+              <button id="knowledge-add-btn" class="refresh-btn">Add source</button>
+            </div>
+            <span id="knowledge-sources-status" class="terminal-approval-mode-status"></span>
+          </div>
+
+          <div class="settings-section">
+            <h3>Search</h3>
+            <p class="scope-note-small">
+              Real lexical/hashing similarity search (the same embedding technique
+              <code>@mobiusx/semantic-index</code> uses for code — see its doc comment) over whatever
+              sources above have been indexed. Not neural semantic search; it finds chunks sharing real
+              keywords/identifiers, not paraphrases.
+            </p>
+            <div class="knowledge-search-row">
+              <input id="knowledge-search-input" type="text" placeholder="Search your indexed knowledge…" />
+              <button id="knowledge-search-btn" class="refresh-btn">Search</button>
+            </div>
+            <div id="knowledge-search-results"></div>
           </div>
         </section>
         <section class="view placeholder-view" id="view-agents" hidden>
@@ -419,6 +452,65 @@
               <h3>Local Agent Permissions <span class="status-text">(terminal command guard — best-effort, reactive)</span></h3>
               <p id="policy-project-note" class="scope-note-small"></p>
               <div id="policy-rules" class="policy-rules"></div>
+            </div>
+
+            <div class="settings-section">
+              <div class="settings-section-head">
+                <h3>Project Steering <span class="status-text">(roadmap Phase 16 — §24/§25)</span></h3>
+                <button id="steering-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+              </div>
+              <p class="scope-note-small">
+                Real engineering conventions for the CURRENTLY OPEN project — architecture, security,
+                API standards, testing — written once under <code>.mobiusx/steering/</code> and consulted
+                automatically by every AI Assistant request (Ask/Plan/Build/Spec/Fix/Database/Architecture/Testing
+                alike), not just one mode. Nothing here is ever generated silently — a file only has content
+                because you wrote it.
+              </p>
+              <div id="steering-file-list" class="steering-file-list"></div>
+              <div class="steering-file-actions">
+                <button id="steering-scaffold-btn" class="refresh-btn">Create default templates</button>
+              </div>
+              <div class="steering-new-row">
+                <input id="steering-new-name" type="text" placeholder="new-file-name (e.g. deployment)" />
+                <button id="steering-new-btn" class="refresh-btn">Add file</button>
+              </div>
+              <span id="steering-status" class="terminal-approval-mode-status"></span>
+            </div>
+
+            <div class="settings-section">
+              <div class="settings-section-head">
+                <h3>Hooks <span class="status-text">(roadmap Phase 16 — §25, event-driven)</span></h3>
+                <button id="hooks-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+              </div>
+              <p class="scope-note-small">
+                Hand-authored in <code>.mobiusx/hooks.json</code> at the project root (same one-way-ratchet
+                honesty as the Local Agent Permissions section above — a malformed file is ignored in full,
+                never partially applied). Two real trigger points: <strong>after-api-change</strong> fires
+                right after Apply writes files whose path matches a rule's <code>pathPattern</code>;
+                <strong>before-commit</strong> fires reactively in the embedded terminal the moment you submit
+                a <code>git commit</code> line — same best-effort, not-a-hard-gate caveat the command guard
+                above already has for this real PTY. Example file:
+                <code>{"hooks":[{"id":"tests-before-commit","event":"before-commit","command":"npm test"}]}</code>
+              </p>
+              <p id="hooks-error" class="scope-note-small" style="display:none; color:#e08f8f;"></p>
+              <div id="hooks-rule-list" class="hooks-rule-list"></div>
+            </div>
+
+            <div class="settings-section">
+              <div class="settings-section-head">
+                <h3>MCP Tools <span class="status-text">(source §28 — Model Context Protocol)</span></h3>
+                <button id="mcp-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+              </div>
+              <p class="scope-note-small">
+                Real MCP servers (the same protocol Claude Desktop/Claude Code use), hand-configured in
+                <code>.mobiusx/mcp.json</code> at the project root and spawned over stdio. When at least one
+                server is connected, its tools are offered to Build/Fix-mode tasks (Anthropic runner only —
+                see <code>apps/cloud-agent-gateway/README.md</code> for the free-model runners' current gap)
+                and the model can call them mid-task. Example file:
+                <code>{"mcpServers":{"filesystem":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","."]}}}</code>
+              </p>
+              <p id="mcp-error" class="scope-note-small" style="display:none; color:#e08f8f;"></p>
+              <div id="mcp-server-list" class="mcp-server-list"></div>
             </div>
 
             <div class="settings-section">
