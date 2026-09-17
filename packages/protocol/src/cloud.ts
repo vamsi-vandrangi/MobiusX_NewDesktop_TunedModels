@@ -12,6 +12,8 @@
  * less churn once that integration is scoped) — see docs/ARCHITECTURE.md §12.
  */
 
+import type { ArchitectureEvidence } from "./agent.js";
+
 /**
  * "spec" (PRD §8, Requirements Engineering) reuses the exact same
  * propose-edits/review/apply pipeline "build" uses — a generated spec is
@@ -44,7 +46,25 @@
  * evidence-based Database Consistency Check (GET /db/consistency, see
  * apps/desktop-agent/src/dbOps.ts) rather than trusted on the model's word.
  */
-export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database";
+/**
+ * "architecture" (roadmap Phase 9, source requirement §7 -- Architecture
+ * Generation) also reuses the same propose-edits/review/apply pipeline as
+ * "build", proposing exactly two files -- docs/architecture/HLD.md and
+ * docs/architecture/LLD.md -- containing Mermaid diagrams (system context,
+ * container, component, sequence, ER, deployment) plus grounding prose.
+ * The one real difference from every other mode: its prompt is NOT built
+ * from the user's free-form request plus a snippet/full-content file list
+ * the way build/fix/spec/database are. It is built from a dedicated,
+ * pre-computed evidence bundle (GET /architecture-evidence, see
+ * apps/desktop-agent/src/architectureContext.ts) -- real detected tech
+ * stack, real schema/ORM relationships, real HTTP routes, real third-party
+ * integrations, real CORS-derived frontend<->backend links. This exists
+ * because a beta tester reported generated diagrams as "very basic level,"
+ * and the direct cause of a basic diagram is a model that was never given
+ * anything but a one-line request to draw from -- see
+ * docs/phase-notes/phase-9-architecture-generation.md.
+ */
+export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database" | "architecture";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -163,6 +183,13 @@ export interface ProjectContext {
    * all for a brand-new project rather than guess which case it's in.
    */
   indexedChunkCount?: number;
+  /**
+   * Present only for an "architecture"-mode task (see AgentMode's doc
+   * comment above) -- the real, pre-computed evidence bundle
+   * (GET /architecture-evidence) that mode's prompt is grounded in.
+   * Absent for every other mode.
+   */
+  architectureEvidence?: ArchitectureEvidence;
 }
 
 /**

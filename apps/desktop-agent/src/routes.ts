@@ -19,6 +19,7 @@ import type {
   ProjectCompletionResponse,
   ProjectContextResponse,
   DatabaseConsistencyResponse,
+  ArchitectureEvidenceResponse,
   ProposedEdit,
   VerifyResponse,
 } from "@mobiusx/protocol";
@@ -28,6 +29,7 @@ import { verifyProject } from "./verify.js";
 import { computeCompletionReport } from "./completion.js";
 import { detectProjectContext } from "./projectContext.js";
 import { checkDatabaseConsistency } from "./dbOps.js";
+import { gatherArchitectureEvidence } from "./architectureContext.js";
 import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
@@ -298,6 +300,25 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "database consistency check failed", detail: (err as Error).message });
+    }
+  });
+
+  // Architecture Generation (roadmap Phase 9, source requirement §7): the
+  // grounding evidence bundle Architecture mode's prompt is built from --
+  // exposed as its own route (not just baked silently into the prompt) so
+  // the Artifacts view can show the user exactly what real facts a
+  // generated diagram is standing on, the same transparency Project
+  // Context and Database Consistency already give for their own domains.
+  router.get("/architecture-evidence", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: ArchitectureEvidenceResponse = await gatherArchitectureEvidence(projectState.path);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "architecture evidence gathering failed", detail: (err as Error).message });
     }
   });
 

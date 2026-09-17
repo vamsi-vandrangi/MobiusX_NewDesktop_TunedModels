@@ -16,7 +16,7 @@ import type { RunnerInput } from "./types.js";
 export const EDITS_MARKER = "===MOBIUSX_EDITS===";
 
 /** Modes whose response is buffered and parsed for a structured ProposedEdit[] block, rather than streamed live token-by-token. */
-export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database"]);
+export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture"]);
 
 /**
  * Splits a build-mode response into its human-readable prose and its
@@ -254,6 +254,68 @@ export function systemPromptFor(input: RunnerInput): string {
     ].join("\n");
   }
 
+  if (input.mode === "architecture") {
+    // Architecture Generation (roadmap Phase 9, source requirement §7).
+    //
+    // Direct trigger: a beta tester reported generated architecture
+    // diagrams were "very basic level." The root cause diagnosed here is
+    // the same one Database mode hit in Phase 8 -- a model asked to draw
+    // an architecture diagram from a one-line prompt and no real project
+    // facts has nothing to draw but generic "Frontend -> Backend ->
+    // Database" boxes, because that's the only information it has. A
+    // better-worded prompt cannot fix a missing-facts problem. So this
+    // mode's grounding is fundamentally different from every other mode:
+    // instead of semantic-search snippets (relevantFiles), it is handed a
+    // single pre-computed, evidence-cited bundle -- architectureEvidence,
+    // gathered by apps/desktop-agent/src/architectureContext.ts from the
+    // project's REAL detected tech stack, schema/ORM relationships, HTTP
+    // routes, and external integrations -- and instructed to render that
+    // bundle faithfully rather than invent around gaps in it. Where the
+    // evidence is genuinely empty (no external integrations detected, no
+    // infra/deployment files found), the instructions below require an
+    // honest prose note in the generated doc instead of a fabricated box,
+    // mirroring the "unknown"/"not_configured" honesty pattern already
+    // used by projectContext.ts and dbOps.ts.
+    const evidence = input.projectContext?.architectureEvidence;
+    const architectureFullContentPaths = (input.projectContext?.relevantFiles ?? [])
+      .filter((f) => f.content !== undefined)
+      .map((f) => f.relPath);
+    return [
+      "You are the MobiusX Desktop AI Assistant in ARCHITECTURE mode (Architecture Generation, roadmap Phase 9) -- producing a High-Level Design doc and a Low-Level Design doc, each with real Mermaid diagrams grounded strictly in the evidence bundle below, not generic or invented architecture.",
+      "",
+      "THE #1 RULE, non-negotiable: every box, arrow, table, route, and external system you draw MUST trace back to a specific field in the JSON evidence bundle below. Do not add a generic \"Load Balancer\", \"Cache\", \"Message Queue\", \"Auth Service\", or any other component that isn't actually evidenced -- these are exactly the kind of boilerplate-textbook boxes a beta tester flagged as \"very basic level\" and low quality. If the evidence bundle doesn't show it, it doesn't go in the diagram.",
+      "",
+      evidence
+        ? architectureEvidenceContext(evidence)
+        : "No pre-computed architecture evidence was available for this project (this should not normally happen -- treat it as a signal to produce only the most minimal, honestly-labeled diagrams, explicitly noting in prose that evidence gathering did not run).",
+      "",
+      "DIAGRAM REQUIREMENTS -- use Mermaid's plain flowchart/erDiagram/sequenceDiagram syntax (flowchart TD with labeled subgraphs for System Context/Container/Component levels), NOT the experimental C4Context/C4Container syntax, which renders unreliably in this app's Mermaid version:",
+      "",
+      "In docs/architecture/HLD.md:",
+      '1. "System Context" diagram (```mermaid flowchart TD```): the system as one box, a "User" actor, and one box per entry in externalIntegrations (label each edge with that integration\'s evidenced purpose, e.g. its name). If externalIntegrations is empty, draw only the User -> System edge and add a one-sentence honest note: "No external third-party integrations were detected in this project\'s dependencies."',
+      '2. "Container" diagram (```mermaid flowchart TD```): one box per entry in projectContext.components (using each component\'s real name/category/location), plus a box for the database if database.schemaTables or database.ormEntities is non-empty. Draw an edge between frontend and backend components labeled with the real protocol/origin from frontendBackendLinks when present (e.g. "HTTPS, CORS: http://localhost:3000"); if frontendBackendLinks is empty, label the edge "HTTP (origin not detected)" rather than inventing a specific one.',
+      "3. A short prose paragraph identifying the real detected tech stack (frameworks/languages from projectContext.components) and stating plainly any part of the standard stack (auth, caching, deployment/infra) that was NOT detected, rather than omitting it silently.",
+      "",
+      "In docs/architecture/LLD.md:",
+      '1. "Component" diagram (```mermaid flowchart TD```): break the backend component down into groups of its real routes from the routes array, grouped by common path prefix (e.g. all "/products*" routes as one component). Do not invent internal modules/services beyond what the routes evidence supports.',
+      '2. "Sequence" diagram (```mermaid sequenceDiagram```): pick ONE real, representative route from the routes array (prefer a POST/PUT if any exist) and trace an actual request through User -> Frontend -> Backend -> Database (only include the Database participant if this route\'s handler plausibly touches persisted data, i.e. the project has database evidence at all). Use the route\'s real method and path as the message label. If routes is empty, skip this diagram and say explicitly in prose: "No HTTP routes were detected, so no request sequence could be traced."',
+      '3. "ER" diagram (```mermaid erDiagram```): built strictly from database.relationships (for the FK-derived edges, labeled with each relationship\'s real `via` column pair) and database.schemaTables / database.ormEntities for the entities themselves. If both are empty, skip this diagram and state plainly: "No database schema or ORM entities were detected in this project."',
+      '4. "Deployment" diagram: only include this diagram if the evidence bundle shows concrete infrastructure/deployment facts (it currently does not gather any -- this phase\'s evidence bundle has no infra signal). Since no deployment evidence is gathered yet, DO NOT draw a Deployment diagram -- instead write one honest sentence: "Deployment/infrastructure evidence is not yet gathered by this tool, so no Deployment diagram is included rather than guessing at hosting details."',
+      "",
+      "CRITICAL OUTPUT FORMAT -- follow this exactly:",
+      "1. First write a brief prose summary (2-4 sentences) of the real system this documents, referencing the actual detected stack -- not a generic description that could apply to any project.",
+      `2. Then, on its own line by itself, output exactly ${EDITS_MARKER}`,
+      '3. Then exactly ONE fenced json code block containing BOTH files (docs/architecture/HLD.md and docs/architecture/LLD.md), as entries in a single "edits" array, in this exact shape:',
+      '{"edits": [{"path": "docs/architecture/HLD.md", "action": "modify" | "create", "content": "COMPLETE new file content"}, {"path": "docs/architecture/LLD.md", "action": "modify" | "create", "content": "COMPLETE new file content"}]}',
+      '"content" must be the entire new file content (including its Mermaid code fences as literal ```mermaid blocks inside the markdown), never a diff or partial snippet.',
+      "When a file's content spans multiple lines, each line break must be encoded as exactly ONE JSON escape sequence: \\n. Do NOT double it to \\\\n.",
+      architectureFullContentPaths.length > 0
+        ? `Only use action "modify" for one of these exact paths, which you were shown in full below: ${architectureFullContentPaths.join(", ")}. Do not use "modify" for any other path.`
+        : 'You were not shown the full content of an existing docs/architecture/HLD.md or docs/architecture/LLD.md, so use action "create" for both -- this most likely means neither file exists yet in this project.',
+      relevantFilesContext(input, true),
+    ].join("\n");
+  }
+
   const fullContentPaths = (input.projectContext?.relevantFiles ?? [])
     .filter((f) => f.content !== undefined)
     .map((f) => f.relPath);
@@ -305,6 +367,25 @@ export function systemPromptFor(input: RunnerInput): string {
     'Only use action "create" for a path you are confident does not already exist in this project.',
     `Omit the ${EDITS_MARKER} marker and JSON block ONLY if you genuinely cannot propose any concrete file — e.g. the request is too ambiguous to act on. If you CAN write real file contents (as in most "build/add/create X" requests), you MUST use the format above — writing the same content as prose or markdown code fences instead is not an acceptable substitute, since only the json "edits" array actually gets applied to the user's project.`,
     relevantFilesContext(input, true),
+  ].join("\n");
+}
+
+/**
+ * Embeds the pre-computed architecture evidence bundle (gathered by
+ * apps/desktop-agent/src/architectureContext.ts, GET /architecture-evidence)
+ * as a structured JSON block in the prompt -- this IS architecture mode's
+ * grounding mechanism, in place of relevantFilesContext's semantic-search
+ * snippets. Deliberately dumps the real fields the diagram instructions
+ * above reference by name (components, schemaTables, ormEntities,
+ * relationships, routes, externalIntegrations, frontendBackendLinks) so
+ * the model can quote them directly rather than paraphrase from prose.
+ */
+function architectureEvidenceContext(evidence: NonNullable<RunnerInput["projectContext"]>["architectureEvidence"]): string {
+  return [
+    "REAL PROJECT EVIDENCE (architecture-evidence bundle, gathered directly from this project's own files -- treat every field below as ground truth, not a suggestion):",
+    "```json",
+    JSON.stringify(evidence, null, 2),
+    "```",
   ].join("\n");
 }
 

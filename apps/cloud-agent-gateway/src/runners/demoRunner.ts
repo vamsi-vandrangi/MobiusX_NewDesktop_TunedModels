@@ -25,8 +25,16 @@ export const demoRunner: AgentRunner = {
       }
 
       emit({ type: "output", delta: renderOutput(input) });
-      if (input.mode === "build" || input.mode === "fix" || input.mode === "database") {
-        emit({ type: "edits", edits: input.mode === "database" ? demoDatabaseEdits(input) : [demoEdit(input)] });
+      if (input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture") {
+        emit({
+          type: "edits",
+          edits:
+            input.mode === "database"
+              ? demoDatabaseEdits(input)
+              : input.mode === "architecture"
+                ? demoArchitectureEdits(input)
+                : [demoEdit(input)],
+        });
         // Second-pass Reviewer agent (PRD §11/§46) — scripted here, same as everything else in this runner.
         emit({
           type: "review",
@@ -69,6 +77,7 @@ function stepsFor(mode: RunnerInput["mode"]): string[] {
   if (mode === "spec") return ["Reading request", "Identifying requirements", "Drafting specification"];
   if (mode === "fix") return ["Reading verification failure", "Reviewing project context", "Drafting fix"];
   if (mode === "database") return ["Reading request", "Checking for an existing DB/ORM convention", "Drafting schema, migration, and model changes"];
+  if (mode === "architecture") return ["Reading architecture evidence bundle", "Mapping real components, routes, and schema", "Drafting HLD.md and LLD.md with Mermaid diagrams"];
   return ["Reading request", "Reviewing project context", "Drafting proposed changes"];
 }
 
@@ -96,6 +105,9 @@ function renderOutput(input: RunnerInput): string {
   }
   if (input.mode === "database") {
     return `${banner}Database Engineering for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "database" mode (roadmap Phase 8) proposes a schema, its forward migration, and ORM model changes as one coherent set, the same way "build" mode proposes code edits: only desktop-agent ever writes them, and only once you review and click Apply. Below is a clearly-labeled DEMO schema/migration/model set so you can exercise that flow, and GET /db/consistency, without a real model configured. A real model would generate an actual schema grounded in your request and this project's existing DB/ORM convention instead.${context}`;
+  }
+  if (input.mode === "architecture") {
+    return `${banner}Architecture Generation for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "architecture" mode (roadmap Phase 9) proposes docs/architecture/HLD.md and docs/architecture/LLD.md as one coherent set, the same way "build" mode proposes code edits: only desktop-agent ever writes them, and only once you review and click Apply. A real model is handed a pre-computed, evidence-cited bundle (GET /architecture-evidence: real components, schema/ORM relationships, HTTP routes, external integrations) and instructed to render it faithfully rather than invent generic boxes. Below is a clearly-labeled DEMO HLD/LLD pair so you can exercise that flow without a real model configured.${context}`;
   }
   return `${banner}Proposed-changes summary for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "build" mode proposes full-file-content edits (below) that only desktop-agent ever writes to disk, and only once you review and click Apply (see docs/ARCHITECTURE.md §8's approval step). Below is a clearly-labeled DEMO edit so you can exercise that full propose → review → apply flow without a real model configured. A real model (see README) would propose an edit addressing your actual prompt instead.${context}`;
 }
@@ -190,6 +202,94 @@ Safe to delete. Configure a real model (see apps/cloud-agent-gateway/README.md) 
  * task would propose, so "Proposed changes -- 2 files" isn't misleading
  * even in demo mode.
  */
+/**
+ * Same idea as demoDatabaseEdits above, but for "architecture" mode
+ * (roadmap Phase 9, Architecture Generation): a clearly-labeled placeholder
+ * HLD/LLD pair with real Mermaid fences, so the Artifacts view's Mermaid
+ * rendering (see renderer.js) and the whole propose -> review -> apply flow
+ * is exercisable without a model configured. Two files, like a real
+ * architecture task would propose, so "Proposed changes -- 2 files" is not
+ * misleading even in demo mode.
+ */
+function demoArchitectureEdits(input: RunnerInput): { path: string; action: "create"; content: string }[] {
+  return [
+    {
+      path: "docs/architecture/HLD.md",
+      action: "create",
+      content: `# High-Level Design (DEMO -- not a real architecture analysis)
+
+Created by the cloud-agent-gateway's **demo runner**, not a real model. No
+ANTHROPIC_API_KEY is configured, so nothing below reflects this project's
+actual detected tech stack, routes, or integrations -- it exists only to
+exercise MobiusX.ai WDC's Architecture Generation flow (roadmap Phase 9)
+end-to-end, including Mermaid rendering in the Artifacts view.
+
+Original prompt: "${input.prompt}"
+
+## System Context
+
+` + "```mermaid" + `
+flowchart TD
+    User([User]) --> System[This System -- DEMO PLACEHOLDER]
+` + "```" + `
+
+(A real model would draw one box per entry in this project's real detected
+externalIntegrations here, or state plainly that none were detected.)
+
+## Container
+
+` + "```mermaid" + `
+flowchart TD
+    Frontend[Frontend -- DEMO PLACEHOLDER] -->|HTTP| Backend[Backend -- DEMO PLACEHOLDER]
+    Backend --> DB[(Database -- DEMO PLACEHOLDER)]
+` + "```" + `
+
+Safe to delete. Configure a real model (see apps/cloud-agent-gateway/README.md) to get actual evidence-grounded diagrams instead of this placeholder.
+`,
+    },
+    {
+      path: "docs/architecture/LLD.md",
+      action: "create",
+      content: `# Low-Level Design (DEMO -- not a real architecture analysis)
+
+Created by the cloud-agent-gateway's **demo runner**, not a real model.
+Original prompt: "${input.prompt}"
+
+## Component
+
+` + "```mermaid" + `
+flowchart TD
+    Routes["/example -- DEMO PLACEHOLDER"]
+` + "```" + `
+
+## Sequence
+
+` + "```mermaid" + `
+sequenceDiagram
+    participant U as User
+    participant F as Frontend
+    participant B as Backend
+    U->>F: DEMO PLACEHOLDER request
+    F->>B: DEMO PLACEHOLDER
+` + "```" + `
+
+## ER
+
+(A real model would draw this strictly from this project's real detected
+database schema/ORM relationships, or state plainly that none were found.
+No demo ER diagram is included, to avoid implying a fake schema is real.)
+
+## Deployment
+
+Deployment/infrastructure evidence is not yet gathered by this tool, so no
+Deployment diagram is included here even in demo mode.
+
+Safe to delete. Configure a real model to get actual evidence-grounded diagrams instead of this placeholder.
+`,
+    },
+  ];
+}
+
 function demoDatabaseEdits(input: RunnerInput): { path: string; action: "create"; content: string }[] {
   return [
     {

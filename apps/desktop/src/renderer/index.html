@@ -287,9 +287,10 @@
 
           <div id="debug-results" class="debug-results"></div>
         </section>
-        <section class="view placeholder-view" id="view-artifacts" hidden>
+        <section class="view" id="view-artifacts" hidden>
           <h2>Artifacts</h2>
-          <p>Generated artifacts (specs, diagrams, docs) from agent tasks — depends on Phase 3 Cloud Agents.</p>
+          <p>Generated architecture docs (roadmap Phase 9) for the open project — use Architecture mode in the AI Assistant to generate or refresh them.</p>
+          <div id="artifacts-body"></div>
         </section>
         <section class="view" id="view-settings" hidden>
           <h2>Settings</h2>
@@ -475,6 +476,8 @@
   <script src="../../../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../../../node_modules/diff/dist/diff.min.js"></script>
+  <script src="../../../../node_modules/marked/lib/marked.umd.js"></script>
+  <script src="../../../../node_modules/mermaid/dist/mermaid.min.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

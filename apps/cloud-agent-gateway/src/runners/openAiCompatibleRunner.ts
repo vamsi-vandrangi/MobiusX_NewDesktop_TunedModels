@@ -199,7 +199,7 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
                 delta: `\n\n(${droppedCount} proposed edit(s) omitted: the model tried to "modify" a file it wasn't shown in full, or its edits JSON didn't parse — see apps/cloud-agent-gateway/src/runners/promptShared.ts#parseBuildResponse.)`,
               });
             }
-            if ((input.mode === "build" || input.mode === "fix" || input.mode === "database") && edits.length > 0) {
+            if ((input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture") && edits.length > 0) {
               emit({
                 type: "output",
                 delta: `\n\n(Note: ${config.provider} doesn't run the second-pass Reviewer agent yet — that's currently Anthropic-only. Review these edits carefully yourself before applying. See apps/cloud-agent-gateway/README.md's "Known gaps".)`,

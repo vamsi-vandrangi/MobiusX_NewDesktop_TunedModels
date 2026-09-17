@@ -12,6 +12,7 @@ function showView(name) {
   if (name === "changes") loadGit();
   if (name === "tasks") loadTasksList();
   if (name === "settings") loadSettings();
+  if (name === "artifacts") loadArtifacts();
 }
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -840,6 +841,106 @@ async function loadGit() {
 }
 
 // ============================================================
+// Artifacts view (roadmap Phase 9, Architecture Generation) -- renders
+// docs/architecture/HLD.md and LLD.md with live Mermaid diagrams. Reuses
+// the app's existing no-bundler pattern (see index.html's <script> tags,
+// same approach as @xterm/xterm): mermaid and marked are loaded as plain
+// global-scope <script> tags, not bundled.
+// ============================================================
+if (window.mermaid) {
+  // "dark" matches this app's own dark theme (see styles.css) -- the
+  // default Mermaid theme renders near-invisible text on this background.
+  mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
+}
+if (window.marked) {
+  // Intercept ```mermaid fences specifically; every other language falls
+  // through to marked's normal fenced-code-block rendering (returning
+  // false is marked's documented way to say "use the default renderer").
+  // The diagram source is stashed in a data attribute (URI-encoded, since
+  // it can itself contain quotes/newlines) rather than rendered inline
+  // here, because mermaid.render() is async and marked's renderer hooks
+  // are not -- actual rendering happens in renderMarkdownWithMermaid below,
+  // once the container is in the DOM.
+  marked.use({
+    renderer: {
+      code({ text, lang }) {
+        if ((lang || "").trim().toLowerCase() === "mermaid") {
+          return `<div class="mermaid-pending" data-src="${encodeURIComponent(text)}">Rendering diagram…</div>`;
+        }
+        return false;
+      },
+    },
+  });
+}
+
+/** Parses markdown into `container`, then renders every ```mermaid fence it contained as an actual SVG diagram (async, since mermaid.render() is). A diagram that fails to parse shows the error plus its raw source rather than silently disappearing -- this is exactly the kind of thing Phase 9's own evidence-grounding is meant to prevent, so a failure here should be visible, not swallowed. */
+async function renderMarkdownWithMermaid(container, markdownText) {
+  if (!window.marked) {
+    container.textContent = markdownText;
+    return;
+  }
+  container.innerHTML = marked.parse(markdownText);
+  if (!window.mermaid) return;
+  const pending = [...container.querySelectorAll(".mermaid-pending")];
+  for (const el of pending) {
+    const src = decodeURIComponent(el.dataset.src);
+    const id = "mmd-" + Math.random().toString(36).slice(2, 10);
+    try {
+      const { svg } = await mermaid.render(id, src);
+      el.innerHTML = svg;
+      el.classList.remove("mermaid-pending");
+      el.classList.add("mermaid-rendered");
+    } catch (err) {
+      el.classList.remove("mermaid-pending");
+      el.classList.add("mermaid-error");
+      el.innerHTML = `<div class="mermaid-error-msg">Mermaid render failed: ${escapeHtml(err.message)}</div><pre>${escapeHtml(src)}</pre>`;
+    }
+  }
+}
+
+/** Loads docs/architecture/HLD.md and LLD.md for the open project (if either exists) and renders them with live Mermaid diagrams. Fixed, well-known paths -- see fetchArchitectureRelevantFiles's doc comment for why this deliberately isn't a search. */
+async function loadArtifacts() {
+  const body = document.getElementById("artifacts-body");
+  if (!body) return;
+  if (!currentProjectPath) {
+    body.innerHTML = "<div class='recent-empty'>Open a project to see its generated architecture docs.</div>";
+    return;
+  }
+  body.innerHTML = "<div class='recent-empty'>Loading…</div>";
+  const files = [
+    { path: "docs/architecture/HLD.md", label: "High-Level Design" },
+    { path: "docs/architecture/LLD.md", label: "Low-Level Design" },
+  ];
+  const sections = [];
+  for (const f of files) {
+    try {
+      const { content } = await api(`/fs/read?path=${encodeURIComponent(f.path)}`);
+      sections.push({ ...f, content });
+    } catch {
+      // Doesn't exist yet for this project -- not an error, just not generated.
+    }
+  }
+  if (sections.length === 0) {
+    body.innerHTML =
+      "<div class='recent-empty'>No architecture docs yet for this project. Switch to Architecture mode in the AI Assistant and ask it to generate one (e.g. \"Generate the architecture docs for this project\").</div>";
+    return;
+  }
+  body.innerHTML = "";
+  for (const s of sections) {
+    const wrap = document.createElement("div");
+    wrap.className = "artifact-doc";
+    const h3 = document.createElement("h3");
+    h3.textContent = `${s.label} — ${s.path}`;
+    wrap.appendChild(h3);
+    const content = document.createElement("div");
+    content.className = "artifact-doc-content";
+    wrap.appendChild(content);
+    body.appendChild(wrap);
+    await renderMarkdownWithMermaid(content, s.content);
+  }
+}
+
+// ============================================================
 // Cloud Agent Gateway client (Phase 3) — a LOCAL REFERENCE implementation,
 // not MobiusX's real production Cloud. See apps/cloud-agent-gateway/README.md
 // and docs/ARCHITECTURE.md §12.
@@ -925,6 +1026,35 @@ async function findRelevantFiles(query, mode) {
   } catch {
     return { hits: [], storeSize: undefined };
   }
+}
+
+/**
+ * Architecture mode (roadmap Phase 9) does NOT ground itself in semantic
+ * search -- its real grounding is the pre-computed evidence bundle (GET
+ * /architecture-evidence, fetched in submit() below), per
+ * promptShared.ts's "architecture" branch. This function has one narrow
+ * job instead: if docs/architecture/HLD.md and/or LLD.md already exist,
+ * fetch their FULL current content so the model can correctly propose
+ * "modify" rather than "create" against a file that's already there --
+ * the same "CREATE on an existing file gets silently skipped by Apply"
+ * failure mode Database mode hit in Phase 8 (see phase-8 phase notes).
+ * Fixed, well-known paths fetched directly via /fs/read -- deliberately
+ * NOT dependent on semantic search top-k, since these two paths are known
+ * in advance for every project, not something a query needs to find.
+ */
+async function fetchArchitectureRelevantFiles() {
+  const paths = ["docs/architecture/HLD.md", "docs/architecture/LLD.md"];
+  const hits = [];
+  for (const relPath of paths) {
+    try {
+      const file = await api(`/fs/read?path=${encodeURIComponent(relPath)}`);
+      hits.push({ relPath, content: file.content });
+    } catch {
+      // Doesn't exist yet in this project -- fine, action "create" is the
+      // correct proposal for it; nothing to fetch.
+    }
+  }
+  return hits;
 }
 
 /**
@@ -1448,6 +1578,7 @@ function createAssistantPanel(container) {
         <button class="mode-btn" data-mode="build" title="The only mode that writes real files — proposes edits you review and click Apply before anything touches disk">Build</button>
         <button class="mode-btn" data-mode="spec" title="Requirements Engineering — generates a structured spec file for review, doesn't write code">Spec</button>
         <button class="mode-btn" data-mode="database" title="Database Engineering — proposes a schema, migration, and ORM model changes as one set; writes real files like Build">Database</button>
+        <button class="mode-btn" data-mode="architecture" title="Architecture Generation — proposes docs/architecture/HLD.md and LLD.md with evidence-grounded Mermaid diagrams; writes real files like Build">Architecture</button>
       </div>
       <select class="model-select" title="Which AI model handles this task — overrides the Settings default for this task only"></select>
     </div>
@@ -1616,10 +1747,10 @@ function createAssistantPanel(container) {
     // real friction, not a hypothetical: a user submitted a Build request
     // with no project open, got a full proposed-edits response, and had no
     // way to tell anything was wrong until Apply silently did nothing.
-    if ((mode === "build" || mode === "spec" || mode === "database") && !currentProjectPath) {
+    if ((mode === "build" || mode === "spec" || mode === "database" || mode === "architecture") && !currentProjectPath) {
       addMsg(text, "user");
       input.value = "";
-      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : "Database";
+      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : mode === "database" ? "Database" : "Architecture";
       addMsg(
         `${modeLabel} mode writes real files, so it needs a project open first — click "New Project…" or "Open Project…" at the top, then send this again.`,
         "system",
@@ -1633,7 +1764,21 @@ function createAssistantPanel(container) {
     const stream = addStreamingMsg();
     const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
     try {
-      const { hits: relevantFiles, storeSize: indexedChunkCount } = await findRelevantFiles(text, mode);
+      let relevantFiles, indexedChunkCount, architectureEvidence;
+      if (mode === "architecture") {
+        relevantFiles = await fetchArchitectureRelevantFiles();
+        indexedChunkCount = undefined;
+        try {
+          architectureEvidence = await api("/architecture-evidence");
+        } catch {
+          // Honest fallback -- promptShared.ts's "architecture" branch
+          // explicitly handles an absent bundle rather than assuming it's
+          // always present.
+          architectureEvidence = undefined;
+        }
+      } else {
+        ({ hits: relevantFiles, storeSize: indexedChunkCount } = await findRelevantFiles(text, mode));
+      }
       // "" (Auto) means: omit `model` entirely and let the gateway's
       // resolveRunner() choose (Settings default, else best configured
       // provider, else demo) — see populateModelSelect above.
@@ -1643,7 +1788,9 @@ function createAssistantPanel(container) {
         body: JSON.stringify({
           mode,
           prompt: text,
-          projectContext: taskProjectPath ? { projectPath: taskProjectPath, relevantFiles, indexedChunkCount } : undefined,
+          projectContext: taskProjectPath
+            ? { projectPath: taskProjectPath, relevantFiles, indexedChunkCount, ...(architectureEvidence ? { architectureEvidence } : {}) }
+            : undefined,
           model,
           history: historyTurns.slice(-MAX_HISTORY_TURNS),
         }),

@@ -697,3 +697,19 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .review-banner.approve .review-banner-head { color: #8fd47c; }
 .review-banner.concerns .review-banner-head { color: #e0b96f; }
 .review-banner-summary { margin-top: 4px; font-size: 11.5px; color: #b8b9be; line-height: 1.5; }
+
+/* ---- Artifacts (roadmap Phase 9, Architecture Generation) ---- */
+#view-artifacts { padding: 20px 24px; overflow: auto; }
+.artifact-doc { margin-top: 20px; border: 1px solid #232429; border-radius: 8px; padding: 16px 18px; background: #131417; }
+.artifact-doc h3 { margin: 0 0 12px; font-size: 13px; color: #9a9ba1; font-family: monospace; }
+.artifact-doc-content { font-size: 13px; line-height: 1.6; color: #d4d5d9; }
+.artifact-doc-content h1, .artifact-doc-content h2, .artifact-doc-content h3 { color: #fff; margin: 18px 0 8px; }
+.artifact-doc-content h1:first-child, .artifact-doc-content h2:first-child { margin-top: 0; }
+.artifact-doc-content p { margin: 8px 0; }
+.artifact-doc-content code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+.artifact-doc-content pre { background: #1c1d21; padding: 10px 12px; border-radius: 6px; overflow: auto; }
+.mermaid-pending { padding: 12px; color: #6d6e75; font-size: 12px; font-style: italic; }
+.mermaid-rendered { margin: 12px 0; padding: 12px; background: #0e0f12; border: 1px solid #232429; border-radius: 8px; overflow: auto; text-align: center; }
+.mermaid-rendered svg { max-width: 100%; height: auto; }
+.mermaid-error { margin: 12px 0; padding: 12px; background: #241616; border: 1px solid #4a2424; border-radius: 8px; }
+.mermaid-error-msg { color: #e08f8f; font-size: 12px; margin-bottom: 6px; }

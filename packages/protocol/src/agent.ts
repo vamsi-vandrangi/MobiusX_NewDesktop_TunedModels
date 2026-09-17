@@ -400,6 +400,27 @@ export interface DatabaseConsistencyMismatch {
 }
 
 /**
+ * One real foreign-key relationship found on either side of the
+ * schema/ORM boundary (roadmap Phase 9, source requirement §7: the ER
+ * diagram must draw real relationships, never invented ones). `from`/`to`
+ * are table names exactly as declared at the source — this is a literal
+ * transcription of a `REFERENCES table(col)` / `foreign_key="table.col"`
+ * value, not a resolved/validated edge (see dbOps.ts's Phase 8 phase-notes
+ * for why FK-target validation is intentionally out of scope here: a
+ * relationship can point at a table name that doesn't actually exist, and
+ * this type still records it faithfully rather than silently dropping or
+ * "fixing" it).
+ */
+export interface DatabaseRelationship {
+  from: string;
+  to: string;
+  /** e.g. "product_id -> id" — the real column pair, as declared. */
+  via: string;
+  source: string;
+  line: number;
+}
+
+/**
  * Database Engineering (roadmap Phase 8, source requirement §8): a real,
  * computed cross-check between a project's schema/migration source(s) and
  * its ORM model file(s) — the "domain-model -> ER -> schema -> ORM ->
@@ -419,11 +440,67 @@ export interface DatabaseConsistencyReport {
   schemaTables: DatabaseSchemaTable[];
   ormEntities: DatabaseOrmEntity[];
   mismatches: DatabaseConsistencyMismatch[];
+  /** Real FK relationships found on the schema side and/or the ORM side, deduplicated by (from, via, to). Empty when none were found — never fabricated for a diagram's sake. */
+  relationships: DatabaseRelationship[];
   overall: "consistent" | "mismatches_found" | "unknown";
 }
 
 /** Body of GET /db/consistency. */
 export type DatabaseConsistencyResponse = DatabaseConsistencyReport;
+
+/**
+ * Architecture Generation (roadmap Phase 9, source requirement §7): one
+ * real HTTP route/handler found in the project's own backend or API-route
+ * code -- never an invented endpoint. `method` is the real HTTP verb
+ * ("GET"/"POST"/...), or "HANDLER" when a file-based route (e.g. a
+ * Next.js Pages Router API file) was found but the verb couldn't be
+ * determined without executing it -- reported honestly rather than
+ * guessed. Feeds the Sequence and Component diagrams: a diagram may only
+ * show a request flow that traces back to one of these.
+ */
+export interface DetectedRoute {
+  method: string;
+  path: string;
+  source: string;
+  line: number;
+}
+
+/**
+ * One real third-party service SDK/dependency found in the project
+ * (Stripe, Twilio, Redis, OpenAI, ...) -- feeds the System Context
+ * diagram's external systems. A project with none detected gets an empty
+ * array, never an invented "External API" placeholder box.
+ */
+export interface DetectedExternalIntegration {
+  name: string;
+  evidence: string;
+}
+
+/**
+ * The full evidence bundle Architecture mode's prompt is grounded in --
+ * assembled once per generation request from Phase 7's project-context
+ * detection, Phase 8's database consistency check, plus two new,
+ * equally evidence-only detectors (routes, external integrations). This
+ * is the mechanism behind Phase 9's core design goal: the model's job is
+ * to faithfully render this evidence as Mermaid diagrams and prose, not
+ * to invent architecture from a one-line prompt -- see
+ * docs/phase-notes/phase-9-architecture-generation.md for why "basic,
+ * generic diagrams" is a grounding problem, not a prompting-style
+ * problem, and how this bundle addresses it directly.
+ */
+export interface ArchitectureEvidence {
+  projectPath: string;
+  generatedAt: string;
+  projectContext: ProjectContextReport;
+  database: DatabaseConsistencyReport;
+  routes: DetectedRoute[];
+  externalIntegrations: DetectedExternalIntegration[];
+  /** Real CORS allow_origins / dev-server URLs found linking a detected frontend to a detected backend, e.g. "http://localhost:3000" -- used to label the real protocol/port on a Container diagram edge instead of a generic unlabeled arrow. Empty when none found. */
+  frontendBackendLinks: string[];
+}
+
+/** Body of GET /architecture-evidence. */
+export type ArchitectureEvidenceResponse = ArchitectureEvidence;
 
 /**
  * Messages sent from the renderer, over the /terminal WebSocket, to the

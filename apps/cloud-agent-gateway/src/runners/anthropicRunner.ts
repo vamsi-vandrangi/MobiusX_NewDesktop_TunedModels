@@ -113,7 +113,7 @@ export const anthropicRunner: AgentRunner = {
           // A distinct model call with a critic persona, run automatically
           // so the user sees a review alongside the diff, not something
           // they have to separately request.
-          if ((input.mode === "build" || input.mode === "fix" || input.mode === "database") && edits.length > 0) {
+          if ((input.mode === "build" || input.mode === "fix" || input.mode === "database" || input.mode === "architecture") && edits.length > 0) {
             await reviewEdits(apiKey, model, input, edits, emit);
           }
         }
