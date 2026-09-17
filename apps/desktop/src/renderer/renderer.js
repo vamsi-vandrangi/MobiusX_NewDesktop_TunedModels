@@ -2279,6 +2279,86 @@ debugQueryInput.addEventListener("keydown", (e) => {
 });
 
 // ============================================================
+// Error Intelligence + Debugger v2 (roadmap Phase 13, source requirement
+// §19/§20) — extends the Debug view above with full-stack tracing +
+// root-cause classification over Phase 12's real browser-validation
+// evidence. See apps/desktop-agent/src/errorIntelligence.ts's doc comment.
+// ============================================================
+const CATEGORY_LABELS = {
+  "frontend-runtime-error": "Frontend runtime error",
+  "backend-unreachable": "Backend unreachable",
+  "route-not-implemented": "Route not implemented",
+  "backend-error-db-layer": "Backend error — database layer",
+  "backend-error-logic": "Backend error — logic",
+  "client-error": "Client error (4xx)",
+  unclassified: "Unclassified",
+};
+const LAYER_ORDER = ["browser", "frontend", "api", "backend", "database"];
+
+async function runErrorIntelligence() {
+  const btn = document.getElementById("error-intel-run-btn");
+  const resultsEl = document.getElementById("error-intel-results");
+  if (!currentProjectPath) {
+    resultsEl.innerHTML = "<div class='debug-empty'>Open a project first.</div>";
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Tracing…";
+  resultsEl.innerHTML = "<div class='debug-empty'>Driving a real browser against the running preview and correlating evidence…</div>";
+  try {
+    const result = await api("/debug/error-intelligence", { method: "POST" });
+    if (result.overall === "no-preview-running") {
+      resultsEl.innerHTML = `<div class="verify-none">${escapeHtml(result.previewUnavailableReason || "No preview is running yet.")}</div>`;
+    } else if (result.overall === "no-errors-observed") {
+      resultsEl.innerHTML = `<div class="verify-summary passed">✓ No errors observed at ${escapeHtml(result.previewUrl || "")} — nothing to trace.</div>`;
+    } else {
+      resultsEl.innerHTML = `<div class="verify-summary failed">✗ ${result.traces.length} traceable error(s) found at ${escapeHtml(result.previewUrl || "")}</div><div class="error-trace-list"></div>`;
+      const listEl = resultsEl.querySelector(".error-trace-list");
+      for (const trace of result.traces) {
+        const card = document.createElement("div");
+        card.className = "error-trace-card";
+        const sortedEvidence = [...trace.evidence].sort((a, b) => LAYER_ORDER.indexOf(a.layer) - LAYER_ORDER.indexOf(b.layer));
+        card.innerHTML = `
+          <div class="error-trace-head">
+            <span class="error-trace-category ${escapeHtml(trace.category)}">${escapeHtml(CATEGORY_LABELS[trace.category] || trace.category)}</span>
+            <span class="error-trace-confidence ${escapeHtml(trace.confidence)}">${escapeHtml(trace.confidence)} confidence</span>
+            <span class="error-trace-url">${escapeHtml(trace.url)}</span>
+          </div>
+          <p class="error-trace-reasoning">${escapeHtml(trace.reasoning)}</p>
+          <div class="error-trace-chain"></div>
+        `;
+        const chainEl = card.querySelector(".error-trace-chain");
+        for (const ev of sortedEvidence) {
+          const evEl = document.createElement("div");
+          evEl.className = "error-trace-evidence";
+          evEl.innerHTML = `
+            <div class="error-trace-evidence-head">
+              <span class="error-trace-layer-badge ${escapeHtml(ev.layer)}">${escapeHtml(ev.layer)}</span>
+              <span class="error-trace-evidence-label">${escapeHtml(ev.label)}</span>
+              ${ev.source ? `<span class="error-trace-evidence-source">${escapeHtml(ev.source)}${ev.line ? `:${ev.line}` : ""}</span>` : ""}
+            </div>
+            <pre class="error-trace-evidence-detail">${escapeHtml(ev.detail)}</pre>
+          `;
+          if (ev.source) {
+            evEl.querySelector(".error-trace-evidence-source").addEventListener("click", () => {
+              openFile(ev.source);
+              showView("workspace");
+            });
+          }
+          chainEl.appendChild(evEl);
+        }
+        listEl.appendChild(card);
+      }
+    }
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="verify-none">Error intelligence failed to run: ${escapeHtml(err.message)}</div>`;
+  }
+  btn.disabled = false;
+  btn.textContent = "Run full-stack trace again";
+}
+document.getElementById("error-intel-run-btn").addEventListener("click", runErrorIntelligence);
+
+// ============================================================
 // Project Completion Contract (roadmap Phase 6, source requirement §31):
 // GET /completion returns a real, computed report of what's actually
 // verifiable about the open project right now -- see

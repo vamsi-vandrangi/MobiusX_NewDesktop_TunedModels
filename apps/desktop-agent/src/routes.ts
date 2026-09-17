@@ -34,6 +34,7 @@ import type {
   KnowledgeSourcesResponse,
   KnowledgeIndexResponse,
   KnowledgeSearchResponse,
+  ErrorIntelligenceReport,
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
@@ -53,6 +54,7 @@ import { deleteSteeringFile, listSteeringFiles, scaffoldDefaultSteering, writeSt
 import { loadProjectHooks, runHooksForEvent } from "./hooks.js";
 import { callMcpTool, getMcpStatus } from "@mobiusx/mcp-client";
 import { addKnowledgeSource, buildKnowledgeIndex, listKnowledgeSources, removeKnowledgeSource, searchKnowledge } from "./knowledgeOps.js";
+import { runErrorIntelligence } from "./errorIntelligence.js";
 
 export function buildRouter(): Router {
   const router = Router();
@@ -442,6 +444,41 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "browser validation failed", detail: (err as Error).message });
+    }
+  });
+
+  // Error Intelligence + Debugger v2 (roadmap Phase 13, source requirement
+  // §19/§20): extends the Phase 2 static Debug view into full-stack
+  // tracing + root-cause classification -- see errorIntelligence.ts's doc
+  // comment. Reuses runBrowserValidation (so it honestly reports
+  // "no-preview-running" the same way /browser-validate does) plus
+  // gatherArchitectureEvidence's real routes/database evidence to
+  // correlate against, never inventing a trace path that isn't backed by
+  // an actual matched route, ORM entity, or captured backend log line.
+  router.post("/debug/error-intelligence", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: ErrorIntelligenceReport = await runErrorIntelligence(projectState.path);
+      if (result.overall !== "no-preview-running") {
+        void appendAuditEntry({
+          source: "desktop-agent",
+          category: "error-intelligence",
+          severity: result.overall === "errors-found" ? "warning" : "info",
+          summary: `Error intelligence: ${result.overall} (${result.traces.length} trace(s)) in ${projectState.path}`,
+          detail: {
+            projectPath: projectState.path,
+            previewUrl: result.previewUrl,
+            overall: result.overall,
+            traces: result.traces.map((t) => ({ stepLabel: t.stepLabel, url: t.url, category: t.category, confidence: t.confidence })),
+          },
+        });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "error intelligence failed", detail: (err as Error).message });
     }
   });
 

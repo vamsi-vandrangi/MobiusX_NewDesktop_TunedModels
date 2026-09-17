@@ -769,6 +769,87 @@ export interface ArchitectureEvidence {
 export type ArchitectureEvidenceResponse = ArchitectureEvidence;
 
 /**
+ * Error Intelligence + Debugger v2 (roadmap Phase 13, source requirement
+ * §19/§20): one real fact in a browser-observed failure's trace chain,
+ * ordered browser -> frontend -> api -> backend -> database. Every field
+ * here cites something that was actually observed or actually found in
+ * this project's own files -- never a guess about what "probably"
+ * happened. `source`/`line` are present only when the evidence is a real
+ * file location (a matched DetectedRoute, an ORM entity, a regex-
+ * extracted frontend stack-trace hint that was verified to exist on
+ * disk); a raw captured error string (console text, a network status
+ * line, a preview log excerpt) has neither.
+ */
+export interface TraceEvidence {
+  layer: "browser" | "frontend" | "api" | "backend" | "database";
+  label: string;
+  detail: string;
+  source?: string;
+  line?: number;
+}
+
+/**
+ * A small, fixed set of root-cause buckets -- every one of them is
+ * reachable only by a specific, cited combination of real evidence (see
+ * errorIntelligence.ts's classifyStep doc comment for exactly which).
+ * "unclassified" is a legitimate, honest outcome, not a bug: it means
+ * real evidence was captured but didn't match any of the other
+ * categories' required evidence combination -- reported as such rather
+ * than force-fit into the nearest-sounding bucket.
+ */
+export type RootCauseCategory =
+  | "frontend-runtime-error"
+  | "backend-unreachable"
+  | "route-not-implemented"
+  | "backend-error-db-layer"
+  | "backend-error-logic"
+  | "client-error"
+  | "unclassified";
+
+/**
+ * One browser-observed failure (from a single BrowserValidationStep),
+ * traced as far down the real stack as actual evidence allows and
+ * classified into a RootCauseCategory. `reasoning` is generated
+ * deterministically from the fields already present in `evidence` --
+ * never a separate model call -- so every sentence in it can be checked
+ * against a concrete evidence entry, the same "evidence over invention"
+ * discipline as ArchitectureEvidence and DatabaseConsistencyReport.
+ */
+export interface ErrorTrace {
+  id: string;
+  stepLabel: string;
+  url: string;
+  category: RootCauseCategory;
+  confidence: "high" | "medium" | "low";
+  evidence: TraceEvidence[];
+  reasoning: string;
+}
+
+/**
+ * Body of POST /debug/error-intelligence. Extends Phase 2's static Debug
+ * view (semantic search + git history) into the full-stack tracing +
+ * root-cause classification the roadmap's Phase 13 entry asks for, built
+ * entirely from evidence two earlier phases already produce: Phase 12's
+ * runBrowserValidation (the browser-layer symptoms) and Phase 9's
+ * gatherArchitectureEvidence (the real routes + database evidence to
+ * trace those symptoms down into). No new runtime instrumentation is
+ * injected into the user's project -- this correlates evidence that
+ * already exists rather than adding request tracing to arbitrary
+ * generated FastAPI/Express/Next.js backends, which this desktop app has
+ * no mechanism to do (previewOps.ts only spawns those processes as
+ * opaque child processes).
+ */
+export interface ErrorIntelligenceReport {
+  projectPath: string;
+  generatedAt: string;
+  previewUrl: string | null;
+  /** Mirrors BrowserValidationResponse.overall's "no-preview-running" case honestly -- tracing requires the same running preview browser validation itself requires. */
+  overall: "no-preview-running" | "no-errors-observed" | "errors-found";
+  previewUnavailableReason?: string;
+  traces: ErrorTrace[];
+}
+
+/**
  * Testing Engine (roadmap Phase 10, source requirement §15): a real
  * existing test file this project already has -- gathered so Testing
  * mode's prompt can show the model a REAL example of this project's own

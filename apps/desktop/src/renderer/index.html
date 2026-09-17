@@ -333,6 +333,18 @@
           </div>
 
           <div id="debug-results" class="debug-results"></div>
+
+          <div class="debug-error-intelligence">
+            <h3>Error Intelligence (roadmap Phase 13 — full-stack tracing + root-cause classification)</h3>
+            <p class="scope-note">
+              Traces each real failure Browser Validation (Phase 12) observes down through this project's
+              own detected backend routes (Phase 9) and database entities (Phase 8), plus the running
+              backend preview's own captured process output — never a fabricated trace. Requires a preview
+              to be running (Workspace → Start Preview).
+            </p>
+            <button id="error-intel-run-btn" class="refresh-btn">Run full-stack trace</button>
+            <div id="error-intel-results" class="error-intel-results"></div>
+          </div>
         </section>
         <section class="view" id="view-artifacts" hidden>
           <h2>Artifacts</h2>
