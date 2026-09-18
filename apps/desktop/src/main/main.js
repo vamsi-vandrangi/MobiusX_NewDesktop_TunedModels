@@ -1,9 +1,26 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, session } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 
-const APPS_DIR = path.join(__dirname, "..", "..", "..");
+// In dev (`electron .` from this repo), the two sibling services
+// (desktop-agent, cloud-agent-gateway) and their @mobiusx/* dependencies
+// live on disk at ../../../<service> relative to this file (apps/desktop/
+// src/main -> apps), exactly where npm workspaces put them.
+//
+// A packaged app has no such monorepo tree -- electron-builder's
+// extraResources config (see apps/desktop/package.json's "build" block)
+// copies a self-contained bundle assembled by
+// apps/desktop/scripts/prepare-resources.js into resources/apps and
+// resources/node_modules instead, sitting next to the app's own asar
+// (process.resourcesPath). app.isPackaged is the one reliable signal for
+// which layout applies; both branches resolve to a directory that directly
+// contains desktop-agent/ and cloud-agent-gateway/ subfolders, which is all
+// startService() below actually needs.
+const APPS_DIR = app.isPackaged
+  ? path.join(process.resourcesPath, "apps")
+  : path.join(__dirname, "..", "..", "..");
 const START_TIMEOUT_MS = 15000;
 
 // package.json's "name" is the npm-scoped "@mobiusx/desktop-shell" — Electron
@@ -262,6 +279,38 @@ ipcMain.handle("shell:openInBrowser", async (_event, projectPath, relativePath) 
   return error ? { ok: false, error } : { ok: true };
 });
 
+// Auto-update (electron-updater), wired to the same GitHub Releases the
+// packaging config publishes to (see apps/desktop/package.json's
+// build.publish). A no-op in dev: app.isPackaged is false for `electron .`,
+// and autoUpdater.checkForUpdates() would otherwise just fail trying to
+// read the app-update.yml that only exists inside a packaged build's
+// resources/. Deliberately silent/log-only on the "no update" and "checking"
+// paths -- only update-downloaded is worth interrupting the user for.
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("error", (err) => console.error("[autoUpdater]", err));
+  autoUpdater.on("checking-for-update", () => console.log("[autoUpdater] checking for update"));
+  autoUpdater.on("update-available", (info) => console.log("[autoUpdater] update available:", info.version));
+  autoUpdater.on("update-not-available", () => console.log("[autoUpdater] up to date"));
+  autoUpdater.on("update-downloaded", (info) => {
+    dialog
+      .showMessageBox(mainWindow, {
+        type: "info",
+        buttons: ["Restart now", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+        message: `MobiusX.ai ${info.version} has been downloaded.`,
+        detail: "Restart the app to finish installing this update. You can also keep working -- it installs automatically the next time you quit.",
+      })
+      .then((result) => {
+        if (result.response === 0) autoUpdater.quitAndInstall();
+      });
+  });
+  autoUpdater.checkForUpdates().catch((err) => console.error("[autoUpdater] check failed", err));
+}
+
 app.whenReady().then(() => {
   // Voice input (AI Assistant add-on): the renderer's mic button uses
   // getUserMedia({ audio: true }) to record a prompt, then POSTs it to
@@ -275,7 +324,7 @@ app.whenReady().then(() => {
     callback(permission === "media");
   });
   setDockIcon();
-  createWindow();
+  createWindow().then(() => setupAutoUpdater());
 });
 
 // See the requestSingleInstanceLock() call above — a second launch quits

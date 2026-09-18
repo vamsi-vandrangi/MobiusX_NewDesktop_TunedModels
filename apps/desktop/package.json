@@ -7,16 +7,85 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "postinstall": "node scripts/brand-electron-mac.js"
+    "postinstall": "node scripts/brand-electron-mac.js",
+    "build:services": "npm run build --workspaces --if-present --prefix ../..",
+    "prepare:resources": "node scripts/prepare-resources.js",
+    "pack:mac": "npm run build:services && npm run prepare:resources && electron-builder --mac --publish=never",
+    "pack:win": "npm run build:services && npm run prepare:resources && electron-builder --win --publish=never",
+    "pack": "npm run build:services && npm run prepare:resources && electron-builder --mac --win --publish=never",
+    "release": "npm run build:services && npm run prepare:resources && electron-builder --mac --win --publish=always"
   },
   "devDependencies": {
-    "electron": "^33.2.1"
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "diff": "^7.0.0",
+    "electron-updater": "^6.8.9",
     "marked": "^18.0.13",
     "mermaid": "^12.0.0"
+  },
+  "build": {
+    "appId": "ai.mobiusx.desktop",
+    "productName": "MobiusX.ai",
+    "copyright": "Copyright © CadenceX Technologies",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "!resources-staging",
+      "!scripts/prepare-resources.js"
+    ],
+    "extraResources": [
+      {
+        "from": "resources-staging/apps",
+        "to": "apps"
+      },
+      {
+        "from": "resources-staging/node_modules",
+        "to": "node_modules"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "assets/electron.icns",
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "MobiusX.ai ${version}"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "vamsi-vandrangi",
+        "repo": "MobiusX_WDC"
+      }
+    ],
+    "electronVersion": "33.4.11",
+    "npmRebuild": false
   }
 }
