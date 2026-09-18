@@ -39,6 +39,9 @@ import type {
   CheckpointListResponse,
   CheckpointRestoreResponse,
   DashboardResponse,
+  AuthEvidenceResponse,
+  SecurityScanResponse,
+  EnvFileGenerateResponse,
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { createCheckpoint, deleteCheckpoint, listCheckpoints, restoreCheckpoint } from "./checkpoints.js";
@@ -52,6 +55,9 @@ import { checkDatabaseConsistency } from "./dbOps.js";
 import { gatherArchitectureEvidence } from "./architectureContext.js";
 import { gatherTestingEvidence } from "./testingContext.js";
 import { gatherDevopsEvidence } from "./devopsContext.js";
+import { gatherAuthEvidence } from "./authContext.js";
+import { runSecurityScan } from "./securityScan.js";
+import { detectReferencedEnvVars, generateEnvExample } from "./envFileOps.js";
 import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
 import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
@@ -469,6 +475,103 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "devops evidence gathering failed", detail: (err as Error).message });
+    }
+  });
+
+  // Auth/RBAC Engineering (roadmap Phase 19, source requirement §12): the
+  // grounding evidence bundle Auth mode's prompt is built from -- see
+  // authContext.ts's doc comment for exactly what's gathered. Same
+  // transparency precedent as /architecture-evidence, /testing-evidence,
+  // /devops-evidence.
+  router.get("/auth-evidence", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: AuthEvidenceResponse = await gatherAuthEvidence(projectState.path);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "auth evidence gathering failed", detail: (err as Error).message });
+    }
+  });
+
+  // Security Scanning Engine (roadmap Phase 20, source requirement §15):
+  // an on-demand pattern scan + dependency audit over the WHOLE project
+  // (not just content about to be written, unlike packages/secret-scan's
+  // other call sites) -- see securityScan.ts's doc comment. POST (not GET)
+  // because it can take real time (npm/pip-audit network calls) and has a
+  // real side effect: a "security-scan" audit-log entry, which
+  // completion.ts's security_scan_clean criterion reads back as a cache --
+  // same pattern POST /browser-validate already established for
+  // e2e_tests_pass.
+  router.post("/security-scan", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: SecurityScanResponse = await runSecurityScan(projectState.path);
+      const findingCount = result.patternFindings.length;
+      const vulnCount = result.dependencyAudits.reduce((sum, a) => sum + (a.vulnerabilityCount ?? 0), 0);
+      const summaryParts = [`${findingCount} pattern finding(s) across ${result.filesScanned} file(s)`];
+      if (result.dependencyAudits.length > 0) summaryParts.push(`${vulnCount} dependency vulnerabilit${vulnCount === 1 ? "y" : "ies"} (${result.dependencyAudits.map((a) => a.summary).join("; ")})`);
+      void appendAuditEntry({
+        source: "desktop-agent",
+        category: "security-scan",
+        severity: findingCount + vulnCount === 0 ? "info" : "warning",
+        summary: `Security scan: ${summaryParts.join(", ")} in ${projectState.path}`,
+        detail: {
+          projectPath: projectState.path,
+          findingCount: findingCount + vulnCount,
+          patternFindingCount: findingCount,
+          vulnerabilityCount: vulnCount,
+        },
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "security scan failed", detail: (err as Error).message });
+    }
+  });
+
+  // Config/env-file generation (roadmap Phase 23, source requirement §13):
+  // GET surfaces the real detected env-var references (read-only,
+  // transparency precedent same as the other evidence routes); POST
+  // actually writes/updates .env.example -- see envFileOps.ts's doc
+  // comment for why this is a mechanical, evidence-only addition rather
+  // than a model-generated proposal through the edits pipeline.
+  router.get("/env-vars", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const references = await detectReferencedEnvVars(projectState.path);
+      res.json({ projectPath: projectState.path, references });
+    } catch (err) {
+      res.status(500).json({ error: "env var detection failed", detail: (err as Error).message });
+    }
+  });
+
+  router.post("/env-file/generate", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: EnvFileGenerateResponse = await generateEnvExample(projectState.path);
+      if (result.wroteFile) {
+        void appendAuditEntry({
+          source: "desktop-agent",
+          category: "applied-edits",
+          severity: "info",
+          summary: `Generated .env.example: added ${result.addedKeys.length} key(s) (${result.addedKeys.join(", ")}) in ${projectState.path}`,
+          detail: { projectPath: projectState.path, addedKeys: result.addedKeys },
+        });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "env file generation failed", detail: (err as Error).message });
     }
   });
 
@@ -916,7 +1019,14 @@ export function buildRouter(): Router {
     // a real AgentMode; each value must be null (clear that mode's rule) or
     // a well-formed {provider, model} pair, exactly like defaultModel above.
     if (patch.modelRouting !== undefined) {
-      const KNOWN_MODES: AgentMode[] = ["ask", "plan", "build", "spec", "fix", "database", "architecture", "testing"];
+      const KNOWN_MODES: AgentMode[] = ["ask", "plan", "build", "spec", "fix", "database", "architecture", "testing", "devops", "auth"];
+      // ^ "devops" was missing from this list until Phase 19-23's own
+      // grep-every-mode-enumeration-site audit caught it (see
+      // docs/AI_ENGINEERING_PLATFORM_ROADMAP.md's Phase 19-23 phase-notes
+      // "honest gap" section) -- PATCH /settings modelRouting.devops would
+      // have failed with "unknown mode" ever since Phase 14 shipped. Not a
+      // regression introduced here; a pre-existing bug this pass found and
+      // fixed while wiring in "auth".
       const routing = patch.modelRouting as Record<string, unknown>;
       for (const [mode, selection] of Object.entries(routing)) {
         if (!KNOWN_MODES.includes(mode as AgentMode)) {

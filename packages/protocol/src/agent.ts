@@ -1051,6 +1051,105 @@ export interface DevopsEvidence {
 /** Body of GET /devops-evidence. */
 export type DevopsEvidenceResponse = DevopsEvidence;
 
+/** One of this project's own existing auth-related source files, full content -- e.g. a middleware/guard file, a login/token route, an auth config module. Found by filename/path convention (see authContext.ts), never guessed. */
+export interface ExistingAuthFileSample {
+  relPath: string;
+  content: string;
+}
+
+/**
+ * The evidence bundle Auth mode's prompt (roadmap Phase 19, source
+ * requirement §12 -- RBAC/OAuth2/JWT authentication and authorization
+ * engineering) is grounded in -- gathered by
+ * apps/desktop-agent/src/authContext.ts.
+ *
+ * Same root-cause diagnosis every generation mode before it already made
+ * (Database/Phase 8, Architecture/Phase 9, Testing/Phase 10, DevOps/Phase
+ * 14): a model asked to add authentication with zero real facts about
+ * this project's actual backend framework and whatever auth libraries (if
+ * any) are already a declared dependency has nothing to go on but
+ * generic, often-wrong boilerplate (a Flask-shaped answer for a FastAPI
+ * project, a second competing JWT library installed alongside one already
+ * there). `authComponents` reuses Phase 7's OWN "auth" category detection
+ * (packages/protocol's ProjectContextCategory -- NextAuth/Passport/
+ * jsonwebtoken on the JS side, python-jose/PyJWT/Authlib/Flask-Login on
+ * the Python side) verbatim, never re-guessed here -- empty when nothing
+ * is declared, which the prompt is instructed to treat as "add a
+ * dependency + implementation from scratch," not "assume one exists."
+ * `backendComponents` are this project's real detected backend location(s)
+ * (Phase 7) so generated middleware/routes land in the right directory.
+ * `existingAuthFiles` are up to a small handful of this project's own
+ * real files matched by auth-shaped filename/path convention (see
+ * authContext.ts), full content, so the model extends/matches an existing
+ * implementation instead of introducing a second, competing one.
+ */
+export interface AuthEvidence {
+  projectPath: string;
+  generatedAt: string;
+  authComponents: DetectedComponent[];
+  backendComponents: DetectedComponent[];
+  existingAuthFiles: ExistingAuthFileSample[];
+}
+
+/** Body of GET /auth-evidence. */
+export type AuthEvidenceResponse = AuthEvidence;
+
+/**
+ * Security Scanning Engine (roadmap Phase 20, source requirement §15) --
+ * see apps/desktop-agent/src/securityScan.ts's doc comment for exactly
+ * what is and isn't checked. Not a claim of comprehensive SAST/dependency
+ * coverage -- a bounded, honestly-scoped pattern scan plus best-effort
+ * dependency audits.
+ */
+export interface SecurityFinding {
+  ruleId: string;
+  description: string;
+  severity: "high" | "medium";
+  relPath: string;
+}
+
+export interface DependencyAuditResult {
+  ecosystem: "npm" | "pip";
+  location: string;
+  /** false when the audit genuinely could not run (tool not installed, no lockfile) -- never conflated with "ran and found nothing." */
+  available: boolean;
+  vulnerabilityCount: number | null;
+  summary: string;
+}
+
+export interface SecurityScanReport {
+  projectPath: string;
+  generatedAt: string;
+  filesScanned: number;
+  patternFindings: SecurityFinding[];
+  dependencyAudits: DependencyAuditResult[];
+}
+
+/** Body of POST /security-scan. */
+export type SecurityScanResponse = SecurityScanReport;
+
+/**
+ * Config/env-file generation (roadmap Phase 23, source requirement §13)
+ * -- see apps/desktop-agent/src/envFileOps.ts's doc comment. Each
+ * reference is a REAL environment-variable read found in this project's
+ * own source (never an invented one).
+ */
+export interface EnvVarReference {
+  name: string;
+  relPath: string;
+}
+
+export interface EnvFileGenerateResponse {
+  projectPath: string;
+  /** Every real env-var reference detected in this project's source, regardless of whether it was already in .env.example. */
+  references: EnvVarReference[];
+  /** Keys newly added to .env.example by this call -- empty when the file already covered everything detected. */
+  addedKeys: string[];
+  envExamplePath: string;
+  /** false when nothing needed adding -- the file was not touched. */
+  wroteFile: boolean;
+}
+
 /**
  * Messages sent from the renderer, over the /terminal WebSocket, to the
  * agent. A real PTY session (see apps/desktop-agent/src/terminalWs.ts) is

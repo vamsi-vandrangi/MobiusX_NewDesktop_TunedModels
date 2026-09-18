@@ -12,7 +12,7 @@
  * less churn once that integration is scoped) — see docs/ARCHITECTURE.md §12.
  */
 
-import type { ArchitectureEvidence, DevopsEvidence, TestingEvidence } from "./agent.js";
+import type { ArchitectureEvidence, AuthEvidence, DevopsEvidence, TestingEvidence } from "./agent.js";
 
 /**
  * "spec" (PRD §8, Requirements Engineering) reuses the exact same
@@ -99,7 +99,7 @@ import type { ArchitectureEvidence, DevopsEvidence, TestingEvidence } from "./ag
  * apps/cloud-agent-gateway/src/runners/personas.ts#PERSONAS.devops),
  * which this mode is the first to actually make reachable.
  */
-export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database" | "architecture" | "testing" | "devops";
+export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database" | "architecture" | "testing" | "devops" | "auth";
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -240,6 +240,12 @@ export interface ProjectContext {
    * other mode.
    */
   devopsEvidence?: DevopsEvidence;
+  /**
+   * Present only for an "auth"-mode task (see AgentMode's doc comment
+   * above) -- the real, pre-computed evidence bundle (GET /auth-evidence)
+   * that mode's prompt is grounded in. Absent for every other mode.
+   */
+  authEvidence?: AuthEvidence;
   /**
    * Project Memory/Steering (roadmap Phase 16, source requirement §24/§25).
    * The combined markdown content of every file under this project's
@@ -401,7 +407,7 @@ export type ReviewVerdict = "approve" | "concerns";
  * direct 1:1 mapping, and AgentMode's own doc comment for what that mode
  * actually generates.
  */
-export type AgentPersona = "architecture" | "database" | "backend" | "frontend" | "api" | "testing" | "devops" | "documentation" | "debugger";
+export type AgentPersona = "architecture" | "database" | "backend" | "frontend" | "api" | "testing" | "devops" | "documentation" | "debugger" | "auth";
 
 export interface EditReview {
   verdict: ReviewVerdict;

@@ -16,7 +16,7 @@ import type { RunnerInput } from "./types.js";
 export const EDITS_MARKER = "===MOBIUSX_EDITS===";
 
 /** Modes whose response is buffered and parsed for a structured ProposedEdit[] block, rather than streamed live token-by-token. */
-export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture", "testing", "devops"]);
+export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture", "testing", "devops", "auth"]);
 
 /**
  * Splits a build-mode response into its human-readable prose and its
@@ -475,6 +475,66 @@ export function systemPromptFor(input: RunnerInput): string {
     ].join("\n");
   }
 
+  if (input.mode === "auth") {
+    // Auth/RBAC Engineering (roadmap Phase 19, source requirement §12 --
+    // "authentication and authorization engineering: RBAC, OAuth2, JWT
+    // generation and verification"). Same root-cause diagnosis every
+    // generation mode before it already made: a model asked to add
+    // authentication with zero real facts about this project's actual
+    // backend framework and whatever auth machinery already exists has
+    // nothing to go on but generic, often-wrong boilerplate -- or worse,
+    // a SECOND competing auth implementation alongside one that already
+    // works. Grounded in a dedicated evidence bundle (GET /auth-evidence,
+    // see apps/desktop-agent/src/authContext.ts) -- this project's real
+    // detected auth library (if any), its real detected backend
+    // location(s), and up to a few of its own real auth-shaped files
+    // (shown in full so the model extends what's there instead of
+    // introducing a rival implementation).
+    const authEvidence = input.projectContext?.authEvidence;
+    const authFullContentPaths = (input.projectContext?.relevantFiles ?? [])
+      .filter((f) => f.content !== undefined)
+      .map((f) => f.relPath);
+    const hasBackend = (authEvidence?.backendComponents.length ?? 0) > 0;
+    return steering + [
+      "You are the MobiusX Desktop AI Assistant in AUTH mode (Auth/RBAC Engineering, roadmap Phase 19) -- adding or extending JWT-based authentication and role-based authorization for this project's real detected backend, grounded strictly in the evidence bundle below.",
+      "",
+      "THE #1 RULE, non-negotiable: every middleware, route, and dependency you propose MUST trace back to this project's REAL detected backend framework and location shown in the evidence bundle below. Never invent a backend, framework, or file location the evidence doesn't actually show.",
+      "",
+      authEvidence
+        ? authEvidenceContext(authEvidence)
+        : "No pre-computed Auth evidence bundle was available for this project (this should not normally happen) -- treat it as a signal to propose only the most minimal, honestly-labeled change, explicitly noting in prose that evidence gathering did not run.",
+      "",
+      "SECURITY RULES (the Auth Agent reviewer below will check these specifically):",
+      "1. NEVER store a password in plaintext or with a fast general-purpose hash (MD5/SHA-1/plain SHA-256) -- use a real password-hashing function (bcrypt/argon2/scrypt/PBKDF2, matching whatever this project's ecosystem makes conventional: passlib[bcrypt] for Python, bcrypt/argon2 npm packages for Node).",
+      "2. Every JWT/session token MUST be actually verified (signature AND expiry) on every protected route -- never merely decoded/parsed and trusted. Sign with a secret/key read from an environment variable, never hardcoded.",
+      "3. Distinguish AUTHENTICATION (is this a valid logged-in user at all) from AUTHORIZATION (does THIS user's role/ownership permit THIS specific action or resource) -- a route that checks only the former on data scoped to a specific user or role is incomplete; propose the ownership/role check too.",
+      "4. Never bake a secret, signing key, or credential into source -- reference it only via an environment variable, documented with a `.env.example` entry (never a real `.env` committed).",
+      "",
+      "WHAT TO GENERATE:",
+      hasBackend
+        ? authEvidence!.existingAuthFiles.length > 0
+          ? `This project already has real auth-shaped file(s), shown in full above (${authEvidence!.existingAuthFiles.map((f) => f.relPath).join(", ")}) -- EXTEND that existing implementation to satisfy this request. Propose "modify" only for those exact paths, or "create" for a genuinely new file (e.g. a new protected route) that plugs into the SAME existing convention (same token library, same secret-loading approach). Do not introduce a second, competing auth library or pattern alongside what's already there.`
+          : authEvidence!.authComponents.length > 0
+            ? `An auth dependency is already declared (${authEvidence!.authComponents.map((c) => c.name).join(", ")}) but no real implementation file was found -- propose a fresh implementation using THAT already-declared library (never a different one), wired into the real detected backend at ${authEvidence!.backendComponents.map((c) => c.location).join(", ")}.`
+            : `No auth dependency is currently declared for this project's real detected backend at ${authEvidence!.backendComponents.map((c) => c.location).join(", ")}. Propose adding an idiomatic JWT library for that backend's real detected framework/language (e.g. python-jose or PyJWT for a Python/FastAPI backend, jsonwebtoken for a Node/Express backend) plus the middleware/dependency implementing it -- state explicitly in prose which library you're adding and why it fits this project's real detected stack.`
+        : "No backend component was detected in the evidence above. Do not invent one to add authentication to -- say so plainly in your prose summary and propose nothing (omit the edits block entirely).",
+      "",
+      "CRITICAL OUTPUT FORMAT -- follow this exactly:",
+      "1. First write a brief prose summary (3-6 sentences): what auth mechanism you're adding or extending, which real files you're changing, and how authorization (not just authentication) is enforced.",
+      `2. Then, on its own line by itself, output exactly ${EDITS_MARKER}`,
+      '3. Then exactly ONE fenced json code block containing every file being created or changed, as entries in a single "edits" array, in this exact shape:',
+      '{"edits": [{"path": "relative/path", "action": "modify" | "create", "content": "COMPLETE new file content"}]}',
+      '"content" must be the entire new file content, never a diff or partial snippet.',
+      "When a file's content spans multiple lines, each line break must be encoded as exactly ONE JSON escape sequence: \\n. Do NOT double it to \\\\n.",
+      authFullContentPaths.length > 0
+        ? `Only use action "modify" for one of these exact paths, which you were shown in full below: ${authFullContentPaths.join(", ")}. Do not use "modify" for any other path.`
+        : 'You were not shown the full content of any existing file, so use action "create" for every file you propose.',
+      'Only use action "create" for a path you are confident does not already exist in this project.',
+      `Omit the ${EDITS_MARKER} marker and JSON block entirely if no backend component was detected at all (per the rule above) -- there is nothing real to add authentication to.`,
+      relevantFilesContext(input, true),
+    ].join("\n");
+  }
+
   const fullContentPaths = (input.projectContext?.relevantFiles ?? [])
     .filter((f) => f.content !== undefined)
     .map((f) => f.relPath);
@@ -574,6 +634,22 @@ function testingEvidenceContext(evidence: NonNullable<RunnerInput["projectContex
 function devopsEvidenceContext(evidence: NonNullable<RunnerInput["projectContext"]>["devopsEvidence"]): string {
   return [
     "REAL DEVOPS EVIDENCE (devops-evidence bundle -- gathered directly from this project's own detected components, existing infra files, and real verification commands, treat every field below as ground truth, not a suggestion):",
+    "```json",
+    JSON.stringify(evidence, null, 2),
+    "```",
+  ].join("\n");
+}
+
+/**
+ * Auth/RBAC Engineering (roadmap Phase 19). Same
+ * dump-the-real-bundle-as-JSON approach as devopsEvidenceContext/
+ * testingEvidenceContext above -- the model quotes the real detected auth
+ * library (or its real absence), real backend location, and real existing
+ * auth file content directly rather than paraphrasing from prose.
+ */
+function authEvidenceContext(evidence: NonNullable<RunnerInput["projectContext"]>["authEvidence"]): string {
+  return [
+    "REAL AUTH EVIDENCE (auth-evidence bundle -- gathered directly from this project's own detected dependencies, detected backend location(s), and any existing auth-shaped file, treat every field below as ground truth, not a suggestion):",
     "```json",
     JSON.stringify(evidence, null, 2),
     "```",

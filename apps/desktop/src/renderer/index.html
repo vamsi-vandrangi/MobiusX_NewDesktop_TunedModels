@@ -349,6 +349,51 @@
             <div id="devops-evidence-results"></div>
           </div>
 
+          <!-- Auth/RBAC Engineering (roadmap Phase 19, source requirement §12):
+               the same evidence bundle Auth mode's prompt is grounded in (see
+               apps/desktop-agent/src/authContext.ts) -- this project's real
+               detected auth library (if any), its real detected backend
+               location(s), and any existing auth-shaped file, so you can see
+               exactly what the model would be shown before asking it to add
+               or extend authentication. -->
+          <div id="auth-evidence-panel" class="panel">
+            <div id="auth-evidence-header">
+              <h3>Auth Evidence</h3>
+              <button id="auth-evidence-check-btn" class="edits-verify-btn">Check auth evidence</button>
+            </div>
+            <div id="auth-evidence-results"></div>
+          </div>
+
+          <!-- Security Scanning Engine (roadmap Phase 20, source requirement
+               §15): an on-demand pattern scan (secret-shaped strings +
+               eval/exec, shell=True, pickle.loads, unsafe yaml.load,
+               dangerouslySetInnerHTML, naive SQL string-building) plus a
+               best-effort npm/pip dependency audit -- see
+               apps/desktop-agent/src/securityScan.ts's doc comment. Result
+               is cached to the audit log, which completion.ts's
+               security_scan_clean criterion reads back. -->
+          <div id="security-scan-panel" class="panel">
+            <div id="security-scan-header">
+              <h3>Security Scan</h3>
+              <button id="security-scan-run-btn" class="edits-verify-btn">Run security scan</button>
+            </div>
+            <div id="security-scan-results"></div>
+          </div>
+
+          <!-- Config/env-file generation (roadmap Phase 23, source requirement
+               §13): real environment-variable references found in this
+               project's own source (see apps/desktop-agent/src/envFileOps.ts),
+               plus a one-click action to add any missing keys to
+               .env.example -- never overwrites an existing line. -->
+          <div id="env-vars-panel" class="panel">
+            <div id="env-vars-header">
+              <h3>Environment Variables</h3>
+              <button id="env-vars-check-btn" class="edits-verify-btn">Check env vars</button>
+              <button id="env-file-generate-btn" class="edits-verify-btn">Update .env.example</button>
+            </div>
+            <div id="env-vars-results"></div>
+          </div>
+
           <div id="tasks-layout">
             <div id="tasks-list" class="panel"></div>
             <div id="task-detail" class="panel">
@@ -589,6 +634,35 @@
               <div class="terminal-approval-mode-footer">
                 <span id="terminal-approval-mode-status" class="terminal-approval-mode-status"></span>
                 <button id="terminal-reconnect-btn" class="refresh-btn">Reconnect Terminal</button>
+              </div>
+            </div>
+
+            <!-- Autonomous Build/Test/Fix Loop -- "auto" mode (roadmap Phase 22,
+                 source requirement §16): AgentSettings.fixLoopMode has accepted
+                 "auto" since Phase 6 but nothing read it until now (see
+                 apps/desktop/src/renderer/renderer.js's autoChainFix). -->
+            <div class="settings-section">
+              <h3>Autonomous Fix Loop <span class="status-text">(autonomy level)</span></h3>
+              <p class="scope-note-small">
+                "Manual" (default) — each Diagnose &amp; Fix cycle's proposed edits still require an
+                explicit Apply click, same as any other task. "Auto" — after you click Diagnose &amp; Fix
+                the first time, the desktop shell applies that fix, re-runs verification, and (if still
+                failing) diagnoses again automatically, up to 3 attempts, then stops and reports an
+                honest "still failing" result rather than looping forever. Takes effect on your very
+                next Diagnose &amp; Fix click — no reconnect needed.
+              </p>
+              <div class="terminal-approval-mode-options">
+                <label class="terminal-approval-mode-option">
+                  <input type="radio" name="fix-loop-mode" value="manual" />
+                  Manual — Apply each cycle yourself
+                </label>
+                <label class="terminal-approval-mode-option">
+                  <input type="radio" name="fix-loop-mode" value="auto" />
+                  Auto — chain up to 3 cycles automatically
+                </label>
+              </div>
+              <div class="terminal-approval-mode-footer">
+                <span id="fix-loop-mode-status" class="terminal-approval-mode-status"></span>
               </div>
             </div>
 

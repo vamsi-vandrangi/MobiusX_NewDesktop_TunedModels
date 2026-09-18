@@ -3,18 +3,26 @@ import { join } from "node:path";
 import type { ProjectCompletionCriterion, ProjectCompletionReport } from "@mobiusx/protocol";
 import { verifyProject } from "./verify.js";
 import { getPreviewStatus } from "./previewOps.js";
+import { detectProjectContext } from "./projectContext.js";
+import { hasWiredAuthImplementation } from "./authContext.js";
+import { readAuditLog } from "@mobiusx/audit-log";
 
 /**
  * Project Completion Contract (roadmap Phase 6, source requirement §31): a
  * real, computed report of what's actually verifiable about the open
  * project right now -- never a claim that code was generated, always
- * evidence that it works. Deliberately narrow for v1: only criteria this
- * codebase can actually measure today (verify.ts's build/lint/typecheck/
- * test, live preview status, git-initialized, README present) get a real
- * pass/fail; everything the wider source requirement asks for that isn't
- * built yet (auth verification, e2e, a security scan, deployment) is
- * reported as "not_configured" with a note on which future roadmap phase
- * adds it -- never faked as "pass" just because nothing checks it yet. See
+ * evidence that it works. Only criteria this codebase can actually
+ * measure get a real pass/fail; anything that genuinely can't be checked
+ * yet is reported as "not_configured", never faked as "pass". As of
+ * Phases 19-21, that now includes auth_verified (real heuristic
+ * detection, see authContext.ts's hasWiredAuthImplementation) and
+ * e2e_tests_pass / security_scan_clean (both real, but CACHED from their
+ * own on-demand audit-log entries rather than run inline here -- see the
+ * comments at each criterion below for why). deployment_verified remains
+ * honestly not_configured: DevOps mode (Phase 14) can propose
+ * Docker/Compose/CI files, but actually deploying and verifying a live
+ * deployment needs a real target environment this codebase has no access
+ * to, and is not itemized as a future roadmap phase for that reason. See
  * docs/AI_ENGINEERING_PLATFORM_ROADMAP.md's Phase 6 entry for the honesty
  * principle this follows.
  *
@@ -83,40 +91,94 @@ export async function computeCompletionReport(projectRoot: string, isGitRepo: bo
   // honestly as not_configured rather than silently omitted (so the
   // contract's shape already matches what later roadmap phases will fill
   // in) or, worse, faked as passing.
-  criteria.push(
-    {
+  // auth_verified (roadmap Phase 19, source §12): reuses Phase 7's own
+  // "auth" category detection to decide whether there is anything to
+  // check at all, then authContext.ts's hasWiredAuthImplementation (a
+  // filename-convention match PLUS a real token-verification-call match,
+  // e.g. jwt.decode/getServerSession/verify_password -- not just a
+  // declared dependency) to decide pass vs. fail. Deliberately narrow,
+  // same "only what's actually measurable" bar as verify.ts's own
+  // criteria: this is a heuristic presence/wiring check, not a security
+  // audit -- it can say "real auth code exists and calls a verification
+  // function" but never "this auth implementation is secure."
+  const projectContextForAuth = await detectProjectContext(projectRoot);
+  const authDetected = projectContextForAuth.components.some((c) => c.category === "auth");
+  if (!authDetected) {
+    criteria.push({
       id: "auth_verified",
       label: "Authentication / authorization verified",
       status: "not_configured",
-      detail: "Auth engineering (RBAC/OAuth2/JWT generation + verification) not yet implemented — see roadmap Phase 8+.",
-    },
-    {
+      detail: "No auth library or framework detected in this project (Phase 7's own tech-stack detection) — nothing to verify yet. Run Auth mode to add JWT/RBAC authentication.",
+    });
+  } else {
+    const wired = await hasWiredAuthImplementation(projectRoot);
+    criteria.push({
+      id: "auth_verified",
+      label: "Authentication / authorization verified",
+      status: wired ? "pass" : "fail",
+      detail: wired
+        ? "An auth dependency is declared and a real token-verification call was found in this project's own code (heuristic check — presence of working auth code, not a security audit)."
+        : "An auth dependency is declared, but no real token-verification call (e.g. jwt.decode, getServerSession, verify_password) was found in this project's files — it looks installed but not actually wired up. Run Auth mode to implement it.",
+    });
+  }
+
+  // e2e_tests_pass (roadmap Phase 21): Phase 12's browser validation is
+  // still on-demand (this criterion never triggers a headless-browser run
+  // itself -- GET /completion stays a fast status read) but its OWN
+  // "browser-validation" audit-log entries (written by POST
+  // /browser-validate every time it actually runs, see routes.ts) are now
+  // read back here as a real cache. Reuses the existing audit-log
+  // infrastructure (Phase 5) rather than inventing a second persistence
+  // mechanism -- the same "reuse an existing signal" discipline the Home
+  // dashboard's own activity feed (Phase 18) already applies to this same
+  // log. not_configured only means "never run in this audit log's
+  // retained window," never "not available."
+  const auditEntries = await readAuditLog(500);
+  const lastBrowserValidation = auditEntries
+    .filter((e) => e.category === "browser-validation" && (e.detail as { projectPath?: string } | undefined)?.projectPath === projectRoot)
+    .at(-1);
+  if (!lastBrowserValidation) {
+    criteria.push({
       id: "e2e_tests_pass",
       label: "End-to-end (browser) tests passing",
       status: "not_configured",
-      // Phase 12 shipped a real headless-browser validator
-      // (browserOps.ts's runBrowserValidation, POST /browser-validate) --
-      // this criterion stays honestly "not_configured" because that check
-      // is on-demand and requires an already-running preview; there is no
-      // cached last-run result this report could report a real pass/fail
-      // from without re-running it itself (which would change GET
-      // /completion from a fast status read into one that launches a
-      // headless browser on every call). Run it from the AI Assistant /
-      // Verify panel to get a real result.
-      detail: "Browser/Application Validation (Phase 12) exists but is on-demand and needs a running preview — run it from the Verify panel; it isn't cached here.",
-    },
-    {
+      detail: "Browser/Application Validation (Phase 12) hasn't been run yet for this project this session — run it from the Verify panel to get a real, cached result here.",
+    });
+  } else {
+    const overall = (lastBrowserValidation.detail as { overall?: string } | undefined)?.overall;
+    criteria.push({
+      id: "e2e_tests_pass",
+      label: "End-to-end (browser) tests passing",
+      status: overall === "passed" ? "pass" : "fail",
+      detail: `Last Browser/Application Validation run (${lastBrowserValidation.timestamp}): ${lastBrowserValidation.summary} — run it again from the Verify panel for a fresh result; this reflects the last cached run, not necessarily the current state of the code.`,
+    });
+  }
+
+  // security_scan_clean (roadmap Phase 20): same caching-via-audit-log
+  // pattern as e2e_tests_pass above -- Security Scanning (securityScan.ts)
+  // is on-demand (pattern scan across every source file + npm/pip-audit,
+  // up to tens of seconds) so GET /completion stays a fast status read
+  // rather than triggering a full scan every call. not_configured only
+  // means "never run in this audit log's retained window."
+  const lastSecurityScan = auditEntries.filter((e) => e.category === "security-scan" && (e.detail as { projectPath?: string } | undefined)?.projectPath === projectRoot).at(-1);
+  if (!lastSecurityScan) {
+    criteria.push({
       id: "security_scan_clean",
       label: "Security scan clean",
       status: "not_configured",
-      // Still genuinely true as of Phase 15: packages/secret-scan only
-      // flag-scans content an AI is about to WRITE (fsOps.ts#applyEdits),
-      // never the project's already-existing files. No roadmap phase
-      // number is assigned to a real project-wide SAST / dependency scan
-      // yet (Phase 14 turned out to be DevOps/Infrastructure Generation,
-      // not a security scanner -- the old text here guessed wrong).
-      detail: "Only outbound/inbound secret-shaped-text flagging exists today (packages/secret-scan), and only on content about to be written — a real project-wide SAST / dependency-vulnerability scan is not yet implemented or roadmapped.",
-    },
+      detail: "Security Scanning (pattern scan + dependency audit, Phase 20) hasn't been run yet for this project this session — run it from the Verify panel to get a real, cached result here.",
+    });
+  } else {
+    const findingCount = (lastSecurityScan.detail as { findingCount?: number } | undefined)?.findingCount ?? 0;
+    criteria.push({
+      id: "security_scan_clean",
+      label: "Security scan clean",
+      status: findingCount === 0 ? "pass" : "fail",
+      detail: `Last Security Scan run (${lastSecurityScan.timestamp}): ${lastSecurityScan.summary} — a bounded pattern scan plus best-effort npm/pip dependency audit, not a comprehensive SAST guarantee; run it again from the Verify panel for a fresh result.`,
+    });
+  }
+
+  criteria.push(
     {
       id: "deployment_verified",
       label: "Deployment verified",

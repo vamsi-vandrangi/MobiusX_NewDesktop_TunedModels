@@ -1319,6 +1319,7 @@ const PERSONA_LABELS = {
   api: "API Agent",
   testing: "Testing Agent",
   devops: "DevOps Agent",
+  auth: "Auth Agent",
   documentation: "Documentation Agent",
   debugger: "Debugger Agent",
 };
@@ -1378,6 +1379,91 @@ async function refreshAfterApply(appliedRelPaths) {
  * these files somewhere the user didn't intend, so a mismatch disables
  * Apply with an explicit explanation instead of guessing.
  */
+// Autonomous Build/Test/Fix Loop -- "auto" autonomy mode (roadmap Phase 22,
+// source requirement §16, filling in the gap Phase 6's own phase-notes
+// doc explicitly left open: "an 'auto' fix-loop mode that chains Apply ->
+// Verify -> Diagnose cycles without a click each time"). AgentSettings.
+// fixLoopMode has accepted "auto" as a valid value since Phase 6 (see its
+// doc comment in packages/protocol/src/agent.ts) but nothing ever read it
+// -- PATCH /settings would happily store it, and it would do NOTHING.
+//
+// Deliberately additive, not a rewrite of the existing "manual" flow: the
+// FIRST Diagnose & Fix click is always the user's own (unchanged from
+// before this phase); what "auto" adds is everything AFTER that -- once a
+// fix task's edits appear, this code drives the SAME Apply/Run
+// verification/Diagnose & Fix buttons that a manual user would click,
+// via real DOM clicks + polling for each button's own already-existing
+// "done" signal (its text content leaving its "…ing" state -- e.g.
+// "Applying…" settling to "Applied" or back to "Apply"), so a manual user
+// and the auto loop are indistinguishable to the rest of this file: same
+// API calls, same rendered evidence, same buildEditsCard structure at
+// every recursion level. Capped at MAX_AUTO_FIX_ITERATIONS so a
+// genuinely unfixable failure reports an honest "still failing after N
+// attempts" instead of looping forever.
+const MAX_AUTO_FIX_ITERATIONS = 3;
+
+function waitForButtonSettled(btn, busyText) {
+  return new Promise((resolve) => {
+    const check = () => {
+      if (!btn || btn.textContent !== busyText) {
+        resolve();
+        return;
+      }
+      setTimeout(check, 150);
+    };
+    check();
+  });
+}
+
+function appendAutoFixBanner(container, text, kind) {
+  const el = document.createElement("div");
+  el.className = `verify-summary ${kind === "success" ? "passed" : "failed"}`;
+  el.textContent = text;
+  container.appendChild(el);
+}
+
+/**
+ * Drives one more auto-chained cycle starting from a fix task's just-
+ * appended edits-card (`card`) -- auto-Apply it, auto-Run verification,
+ * and if still failing and under the iteration cap, auto-click ITS
+ * Diagnose & Fix button and recurse into whatever nested card THAT
+ * produces. `depth` is 1 for the cycle right after the user's own first
+ * (manual) Diagnose & Fix click -- that first click and its resulting
+ * card are attempt 1; this function only ever handles attempt 2+.
+ */
+async function autoChainFix(card, depth) {
+  const verifyResultsEl = card.parentElement; // the outer card's .verify-results this nested card was appended into
+  if (depth > MAX_AUTO_FIX_ITERATIONS) {
+    appendAutoFixBanner(verifyResultsEl, `Auto fix loop stopped after ${MAX_AUTO_FIX_ITERATIONS} attempt(s) — still failing. Continue manually with Diagnose & Fix above, or review the output.`, "stopped");
+    return;
+  }
+  const applyBtn = card.querySelector(".edits-apply-btn");
+  if (!applyBtn || applyBtn.disabled) return; // can't auto-apply (e.g. project mismatch) -- stop here, leave it for manual review
+  applyBtn.click();
+  await waitForButtonSettled(applyBtn, "Applying…");
+  if (applyBtn.textContent !== "Applied") return; // apply failed outright -- resultEl already shows why, stop the chain
+  const verifyBtn = card.querySelector(".edits-verify-btn");
+  if (!verifyBtn || verifyBtn.hidden) return;
+  verifyBtn.click();
+  await waitForButtonSettled(verifyBtn, "Verifying…");
+  const diagnoseBtn = card.querySelector(".edits-diagnose-btn");
+  const cardVerifyResultsEl = card.querySelector(".verify-results");
+  if (!diagnoseBtn || diagnoseBtn.hidden) {
+    appendAutoFixBanner(cardVerifyResultsEl, `✓ Auto fix loop succeeded after ${depth} attempt(s).`, "success");
+    return;
+  }
+  if (depth >= MAX_AUTO_FIX_ITERATIONS) {
+    appendAutoFixBanner(cardVerifyResultsEl, `Auto fix loop stopped after ${depth} attempt(s) — still failing. Continue manually with Diagnose & Fix above, or review the output.`, "stopped");
+    return;
+  }
+  const beforeCount = cardVerifyResultsEl.children.length;
+  diagnoseBtn.click();
+  await waitForButtonSettled(diagnoseBtn, "Diagnosing…");
+  const newCard = [...cardVerifyResultsEl.children].slice(beforeCount).find((el) => el.classList?.contains("edits-card"));
+  if (!newCard) return; // no concrete fix proposed this cycle -- the "No concrete fix was proposed" message is already shown, chain ends honestly
+  await autoChainFix(newCard, depth + 1);
+}
+
 function buildEditsCard(edits, taskProjectPath, review) {
   const projectMismatch = Boolean(taskProjectPath) && taskProjectPath !== currentProjectPath;
 
@@ -1777,7 +1863,20 @@ function buildEditsCard(edits, taskProjectPath, review) {
       prefix.textContent = `[runner: ${detail.runner}${detail.model ? " / " + detail.model : ""}]${detail.modelNote ? ` — ${detail.modelNote}` : ""}`;
       verifyResultsEl.appendChild(prefix);
       if (detail.edits && detail.edits.length > 0) {
-        verifyResultsEl.appendChild(buildEditsCard(detail.edits, detail.projectPath, detail.review));
+        const nestedCard = buildEditsCard(detail.edits, detail.projectPath, detail.review);
+        verifyResultsEl.appendChild(nestedCard);
+        // "auto" autonomy mode (roadmap Phase 22): fetched fresh on every
+        // Diagnose & Fix click (never cached) so a mid-session Settings
+        // change takes effect on the very next cycle, same as
+        // terminalApprovalMode's own "next connection" semantics.
+        try {
+          const settings = await api("/settings");
+          if (settings.fixLoopMode === "auto") {
+            void autoChainFix(nestedCard, 1);
+          }
+        } catch {
+          // Settings fetch failed -- fall back to manual behavior (no auto-chain) rather than blocking this cycle's own result.
+        }
       } else {
         const none = document.createElement("div");
         none.className = "verify-none";
@@ -1917,6 +2016,7 @@ function createAssistantPanel(container) {
         <button class="mode-btn" data-mode="architecture" title="Architecture Generation — proposes docs/architecture/HLD.md and LLD.md with evidence-grounded Mermaid diagrams; writes real files like Build">Architecture</button>
         <button class="mode-btn" data-mode="testing" title="Testing Engine — writes real test file(s) for the code shown, grounded in this project's real detected test framework; writes real files like Build">Testing</button>
         <button class="mode-btn" data-mode="devops" title="DevOps/Infrastructure Generation — proposes Dockerfile(s), docker-compose.yml, and a CI pipeline grounded in this project's real detected services and build/test commands; writes real files like Build">DevOps</button>
+        <button class="mode-btn" data-mode="auth" title="Auth/RBAC Engineering — adds or extends JWT authentication and role-based authorization, grounded in this project's real detected backend and any existing auth code; writes real files like Build">Auth</button>
       </div>
       <select class="model-select" title="Which AI model handles this task — overrides the Settings default for this task only"></select>
     </div>
@@ -2085,10 +2185,10 @@ function createAssistantPanel(container) {
     // real friction, not a hypothetical: a user submitted a Build request
     // with no project open, got a full proposed-edits response, and had no
     // way to tell anything was wrong until Apply silently did nothing.
-    if ((mode === "build" || mode === "spec" || mode === "database" || mode === "architecture" || mode === "testing" || mode === "devops") && !currentProjectPath) {
+    if ((mode === "build" || mode === "spec" || mode === "database" || mode === "architecture" || mode === "testing" || mode === "devops" || mode === "auth") && !currentProjectPath) {
       addMsg(text, "user");
       input.value = "";
-      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : mode === "database" ? "Database" : mode === "architecture" ? "Architecture" : mode === "testing" ? "Testing" : "DevOps";
+      const modeLabel = mode === "build" ? "Build" : mode === "spec" ? "Spec" : mode === "database" ? "Database" : mode === "architecture" ? "Architecture" : mode === "testing" ? "Testing" : mode === "devops" ? "DevOps" : "Auth";
       addMsg(
         `${modeLabel} mode writes real files, so it needs a project open first — click "New Project…" or "Open Project…" at the top, then send this again.`,
         "system",
@@ -2102,7 +2202,7 @@ function createAssistantPanel(container) {
     const stream = addStreamingMsg();
     const taskProjectPath = currentProjectPath; // captured now — the task's context is grounded in whatever project is open at submit time, not whatever's open when a later event arrives
     try {
-      let relevantFiles, indexedChunkCount, architectureEvidence, testingEvidence, devopsEvidence;
+      let relevantFiles, indexedChunkCount, architectureEvidence, testingEvidence, devopsEvidence, authEvidence;
       // Project Memory/Steering (Phase 16) + Knowledge (Phase 17) --
       // fetched for every mode with a project open, in parallel with each
       // other (independent lookups, no reason to serialize them).
@@ -2135,6 +2235,22 @@ function createAssistantPanel(container) {
           relevantFiles = (devopsEvidence.existingInfraFiles ?? []).map((f) => ({ relPath: f.relPath, snippet: f.content.slice(0, 200), content: f.content }));
         } catch {
           devopsEvidence = undefined;
+          relevantFiles = [];
+        }
+      } else if (mode === "auth") {
+        // Auth mode (roadmap Phase 19) doesn't ground itself in semantic
+        // search either -- its real grounding is the pre-computed evidence
+        // bundle below, per promptShared.ts's "auth" branch. Its own
+        // existingAuthFiles ALREADY carries full content for any
+        // auth-shaped file this project already has (see authContext.ts),
+        // so relevantFiles is built directly from that bundle -- same
+        // pattern DevOps mode's fetch above already established.
+        indexedChunkCount = undefined;
+        try {
+          authEvidence = await api("/auth-evidence");
+          relevantFiles = (authEvidence.existingAuthFiles ?? []).map((f) => ({ relPath: f.relPath, snippet: f.content.slice(0, 200), content: f.content }));
+        } catch {
+          authEvidence = undefined;
           relevantFiles = [];
         }
       } else {
@@ -2170,6 +2286,7 @@ function createAssistantPanel(container) {
                 ...(architectureEvidence ? { architectureEvidence } : {}),
                 ...(testingEvidence ? { testingEvidence } : {}),
                 ...(devopsEvidence ? { devopsEvidence } : {}),
+                ...(authEvidence ? { authEvidence } : {}),
                 ...(steeringContext ? { steeringContext } : {}),
                 ...(knowledgeContext ? { knowledgeContext } : {}),
               }
@@ -2724,6 +2841,153 @@ devopsEvidenceCheckBtn?.addEventListener("click", async () => {
 });
 
 // ============================================================
+// Auth/RBAC Engineering (roadmap Phase 19, source requirement §12):
+// GET /auth-evidence surfaces the exact evidence bundle Auth mode's
+// prompt is grounded in (apps/desktop-agent/src/authContext.ts) -- this
+// project's real detected auth library (if any), its real detected
+// backend location(s), and any existing auth-shaped file found. Same
+// transparency precedent as Testing Evidence and DevOps Evidence above.
+// ============================================================
+const authEvidenceCheckBtn = document.getElementById("auth-evidence-check-btn");
+const authEvidenceResultsEl = document.getElementById("auth-evidence-results");
+
+function renderAuthEvidenceReport(evidence) {
+  const authRows = evidence.authComponents.length
+    ? evidence.authComponents.map((c) => `${escapeHtml(c.name)} <span class="context-row-loc">(${escapeHtml(c.location)}/ — ${escapeHtml(c.evidence)})</span>`).join(", ")
+    : "None detected";
+  const backendRows = evidence.backendComponents.length
+    ? evidence.backendComponents.map((c) => `${escapeHtml(c.name)} <span class="context-row-loc">(${escapeHtml(c.location)}/)</span>`).join(", ")
+    : "None detected";
+  const fileList = evidence.existingAuthFiles.length
+    ? evidence.existingAuthFiles.map((f) => escapeHtml(f.relPath)).join(", ")
+    : "None found";
+  authEvidenceResultsEl.innerHTML = `
+    <div class="completion-summary ${evidence.authComponents.length ? "consistent" : "unknown"}">${evidence.authComponents.length ? `${evidence.authComponents.length} auth dependenc${evidence.authComponents.length === 1 ? "y" : "ies"} detected` : "No auth dependency detected"}</div>
+    <div class="context-rows" style="margin-top:8px;">
+      <div class="context-row"><span class="context-row-label">Auth dependenc(ies)</span><span class="context-row-value">${authRows}</span></div>
+      <div class="context-row"><span class="context-row-label">Backend component(s)</span><span class="context-row-value">${backendRows}</span></div>
+      <div class="context-row"><span class="context-row-label">Existing auth-shaped file(s) found</span><span class="context-row-value">${fileList}</span></div>
+    </div>
+    <div class="completion-meta">Generated ${new Date(evidence.generatedAt).toLocaleString()}</div>
+  `;
+}
+
+authEvidenceCheckBtn?.addEventListener("click", async () => {
+  authEvidenceCheckBtn.disabled = true;
+  authEvidenceCheckBtn.textContent = "Checking…";
+  authEvidenceResultsEl.innerHTML = `<div class="verify-pending">Scanning for auth dependencies, backend components, and existing auth files…</div>`;
+  try {
+    const evidence = await api("/auth-evidence");
+    renderAuthEvidenceReport(evidence);
+  } catch (err) {
+    authEvidenceResultsEl.innerHTML = `<div class="verify-none">Auth evidence check failed: ${escapeHtml(err.message)}</div>`;
+  }
+  authEvidenceCheckBtn.disabled = false;
+  authEvidenceCheckBtn.textContent = "Check auth evidence";
+});
+
+// ============================================================
+// Security Scanning Engine (roadmap Phase 20, source requirement §15):
+// POST /security-scan runs a real, bounded pattern scan (reusing
+// packages/secret-scan's own detector, plus a small set of additional
+// high-signal patterns -- see apps/desktop-agent/src/securityScan.ts)
+// across the whole project, plus a best-effort npm/pip dependency audit.
+// Unlike the evidence panels above this has a real side effect (a
+// "security-scan" audit-log entry) that completion.ts's
+// security_scan_clean criterion reads back as a cache -- same POST
+// pattern "Run browser validation" already established for e2e_tests_pass.
+// ============================================================
+const securityScanRunBtn = document.getElementById("security-scan-run-btn");
+const securityScanResultsEl = document.getElementById("security-scan-results");
+
+function renderSecurityScanReport(report) {
+  const totalVulns = report.dependencyAudits.reduce((sum, a) => sum + (a.vulnerabilityCount ?? 0), 0);
+  const clean = report.patternFindings.length === 0 && totalVulns === 0;
+  const findingRows = report.patternFindings.length
+    ? report.patternFindings.map((f) => `<div class="audit-entry ${f.severity === "high" ? "warning" : "info"}"><div class="audit-entry-head"><span class="audit-entry-category">${escapeHtml(f.severity)}</span></div><div class="audit-entry-summary">${escapeHtml(f.description)} — <code>${escapeHtml(f.relPath)}</code></div></div>`).join("")
+    : `<div class="recent-empty">No pattern findings.</div>`;
+  const auditRows = report.dependencyAudits.length
+    ? report.dependencyAudits.map((a) => `<div class="context-row"><span class="context-row-label">${escapeHtml(a.ecosystem)} (${escapeHtml(a.location)}/)</span><span class="context-row-value">${escapeHtml(a.summary)}</span></div>`).join("")
+    : `<div class="context-row"><span class="context-row-value">No JS/Python dependency manifest detected to audit.</span></div>`;
+  securityScanResultsEl.innerHTML = `
+    <div class="completion-summary ${clean ? "consistent" : "unknown"}">${clean ? "Clean — no pattern findings or known dependency vulnerabilities" : `${report.patternFindings.length} pattern finding(s), ${totalVulns} dependency vulnerabilit${totalVulns === 1 ? "y" : "ies"}`}</div>
+    <div style="margin-top:8px;">${findingRows}</div>
+    <div class="context-rows" style="margin-top:8px;">${auditRows}</div>
+    <div class="completion-meta">Scanned ${report.filesScanned} file(s) — generated ${new Date(report.generatedAt).toLocaleString()}. Bounded pattern scan, not a comprehensive SAST guarantee.</div>
+  `;
+}
+
+securityScanRunBtn?.addEventListener("click", async () => {
+  securityScanRunBtn.disabled = true;
+  securityScanRunBtn.textContent = "Scanning…";
+  securityScanResultsEl.innerHTML = `<div class="verify-pending">Scanning source files for risky patterns and auditing dependencies (this can take up to a minute)…</div>`;
+  try {
+    const report = await api("/security-scan", { method: "POST" });
+    renderSecurityScanReport(report);
+  } catch (err) {
+    securityScanResultsEl.innerHTML = `<div class="verify-none">Security scan failed: ${escapeHtml(err.message)}</div>`;
+  }
+  securityScanRunBtn.disabled = false;
+  securityScanRunBtn.textContent = "Run security scan again";
+});
+
+// ============================================================
+// Config/env-file generation (roadmap Phase 23, source requirement §13):
+// GET /env-vars surfaces every real environment-variable reference found
+// in this project's own source (apps/desktop-agent/src/envFileOps.ts);
+// POST /env-file/generate adds any missing ones to .env.example as
+// placeholder lines, never touching an already-set value.
+// ============================================================
+const envVarsCheckBtn = document.getElementById("env-vars-check-btn");
+const envFileGenerateBtn = document.getElementById("env-file-generate-btn");
+const envVarsResultsEl = document.getElementById("env-vars-results");
+
+function renderEnvVarsList(references) {
+  envVarsResultsEl.innerHTML = references.length
+    ? `
+      <div class="completion-summary consistent">${references.length} real environment variable reference${references.length === 1 ? "" : "s"} detected</div>
+      <div class="context-rows" style="margin-top:8px;">
+        ${references.map((r) => `<div class="context-row"><span class="context-row-label">${escapeHtml(r.name)}</span><span class="context-row-value">${escapeHtml(r.relPath)}</span></div>`).join("")}
+      </div>
+    `
+    : `<div class="recent-empty">No process.env / os.environ / os.getenv references found in this project's source.</div>`;
+}
+
+envVarsCheckBtn?.addEventListener("click", async () => {
+  envVarsCheckBtn.disabled = true;
+  envVarsCheckBtn.textContent = "Checking…";
+  envVarsResultsEl.innerHTML = `<div class="verify-pending">Scanning source files for real environment-variable references…</div>`;
+  try {
+    const { references } = await api("/env-vars");
+    renderEnvVarsList(references);
+  } catch (err) {
+    envVarsResultsEl.innerHTML = `<div class="verify-none">Env var check failed: ${escapeHtml(err.message)}</div>`;
+  }
+  envVarsCheckBtn.disabled = false;
+  envVarsCheckBtn.textContent = "Check env vars";
+});
+
+envFileGenerateBtn?.addEventListener("click", async () => {
+  envFileGenerateBtn.disabled = true;
+  envFileGenerateBtn.textContent = "Updating…";
+  envVarsResultsEl.innerHTML = `<div class="verify-pending">Scanning and updating .env.example…</div>`;
+  try {
+    const result = await api("/env-file/generate", { method: "POST" });
+    renderEnvVarsList(result.references);
+    const banner = document.createElement("div");
+    banner.className = `verify-summary ${result.wroteFile ? "passed" : "failed"}`;
+    banner.textContent = result.wroteFile
+      ? `Added ${result.addedKeys.length} key(s) to .env.example: ${result.addedKeys.join(", ")}`
+      : ".env.example already covers every real reference detected — nothing to add.";
+    envVarsResultsEl.prepend(banner);
+  } catch (err) {
+    envVarsResultsEl.innerHTML = `<div class="verify-none">.env.example update failed: ${escapeHtml(err.message)}</div>`;
+  }
+  envFileGenerateBtn.disabled = false;
+  envFileGenerateBtn.textContent = "Update .env.example";
+});
+
+// ============================================================
 // Tasks view — list + detail, backed by the Cloud Agent Gateway.
 // ============================================================
 let activeTaskId = null;
@@ -3245,6 +3509,7 @@ const MODEL_ROUTING_MODES = [
   { mode: "architecture", label: "Architecture" },
   { mode: "testing", label: "Testing" },
   { mode: "devops", label: "DevOps" },
+  { mode: "auth", label: "Auth" },
 ];
 const modelRoutingRowsEl = document.getElementById("model-routing-rows");
 const modelRoutingStatusEl = document.getElementById("model-routing-status");
@@ -3337,6 +3602,38 @@ document.getElementById("terminal-reconnect-btn").addEventListener("click", () =
   terminalApprovalModeStatusEl.textContent = "Reconnected.";
 });
 
+// ---- Autonomous Build/Test/Fix Loop -- "auto" mode (roadmap Phase 22) ----
+const fixLoopModeStatusEl = document.getElementById("fix-loop-mode-status");
+const fixLoopModeInputs = document.querySelectorAll('input[name="fix-loop-mode"]');
+
+async function loadFixLoopModeSettings() {
+  try {
+    const settings = await api("/settings");
+    const current = settings.fixLoopMode ?? "manual"; // absent in storage means "manual" (Phase 6's own doc comment) -- never leave every radio unchecked
+    fixLoopModeInputs.forEach((input) => {
+      input.checked = input.value === current;
+    });
+    fixLoopModeStatusEl.textContent = "";
+  } catch (err) {
+    fixLoopModeStatusEl.textContent = `Failed to load: ${err.message}`;
+  }
+}
+
+fixLoopModeInputs.forEach((input) => {
+  input.addEventListener("change", async (e) => {
+    if (!e.target.checked) return;
+    const mode = e.target.value;
+    fixLoopModeStatusEl.textContent = "Saving…";
+    try {
+      await api("/settings", { method: "PUT", body: JSON.stringify({ fixLoopMode: mode }) });
+      fixLoopModeStatusEl.textContent = "Saved — applies to your next Diagnose & Fix click.";
+    } catch (err) {
+      fixLoopModeStatusEl.textContent = `Failed to save: ${err.message}`;
+      await loadFixLoopModeSettings(); // revert the radio to whatever's actually persisted
+    }
+  });
+});
+
 // Settings' two sub-tabs (Workspace Settings / Application Settings) — a
 // purely visual split matching the mockup's structure; both tabs' contents
 // still live in the same view-settings section and share its scroll.
@@ -3377,6 +3674,7 @@ function loadSettings() {
   loadMcpServers();
   loadAuditLog();
   loadTerminalApprovalSettings();
+  loadFixLoopModeSettings();
   loadDefaultModelSettings();
   loadModelRoutingSettings();
   renderSettingsRepositories();

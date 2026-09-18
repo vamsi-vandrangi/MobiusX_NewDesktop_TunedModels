@@ -111,6 +111,7 @@ export const anthropicRunner: AgentRunner = {
             input.mode === "architecture" ||
             input.mode === "testing" ||
             input.mode === "devops" ||
+            input.mode === "auth" ||
             input.mode === "spec") &&
           edits.length > 0
         ) {

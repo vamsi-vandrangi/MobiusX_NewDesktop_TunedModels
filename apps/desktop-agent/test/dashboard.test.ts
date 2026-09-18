@@ -10,17 +10,26 @@ async function tempProject(): Promise<string> {
   return mkdtemp(join(tmpdir(), "mobiusx-dashboard-test-"));
 }
 
-test("gatherDashboard reports an empty artifact list for a project with nothing generated yet, and reuses the real completion report", async () => {
+test("gatherDashboard reports only real side-effect artifacts for a project with nothing generated yet, and reuses the real completion report", async () => {
   const dir = await tempProject();
   const dash = await gatherDashboard(dir, false);
 
   assert.equal(dash.projectPath, dir);
   // computeCompletionReport itself writes .mobiusx/PROJECT_COMPLETION.json as a real
   // side effect (see completion.ts) -- gatherDashboard calls it BEFORE checking candidate
-  // artifacts, so that file genuinely exists by the time the artifact scan runs. The
-  // only honest expectation for a project with nothing else generated is that ONE entry.
-  assert.equal(dash.artifacts.length, 1);
-  assert.equal(dash.artifacts[0].path, ".mobiusx/PROJECT_COMPLETION.json");
+  // artifacts, so that file genuinely exists by the time the artifact scan runs. As of
+  // roadmap Phase 19 (Auth/RBAC Engineering), computeCompletionReport ALSO calls
+  // detectProjectContext directly (to decide auth_verified) -- the SAME function every
+  // other evidence-gathering module (testingContext.ts, devopsContext.ts,
+  // architectureContext.ts) already calls, with the SAME pre-existing best-effort
+  // side-effect writes to .mobiusx/PROJECT_CONTEXT.md + project-context.json (see
+  // projectContext.ts). Nothing new was introduced here except one more real caller of
+  // an already-established pattern -- the honest expectation for a project with nothing
+  // ELSE generated is these two real artifacts, not one -- project-context.json
+  // is also written but isn't in dashboard.ts's own candidate-path list (only
+  // its .md sibling is), so it correctly doesn't show up as an artifact here.
+  const paths = dash.artifacts.map((a) => a.path).sort();
+  assert.deepEqual(paths, [".mobiusx/PROJECT_COMPLETION.json", ".mobiusx/PROJECT_CONTEXT.md"].sort());
   // completion is the exact same shape computeCompletionReport itself returns --
   // not a re-derived summary -- so it must carry the same honest not_configured criteria.
   assert.ok(dash.completion.criteria.some((c) => c.id === "security_scan_clean" && c.status === "not_configured"));

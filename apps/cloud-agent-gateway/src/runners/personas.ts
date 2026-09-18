@@ -86,6 +86,14 @@ export const PERSONAS: Record<AgentPersona, { label: string; focus: string[] }> 
       "No overly-broad permissions (a container running as root without needing to, a CI token with more scope than the job needs).",
     ],
   },
+  auth: {
+    label: "Auth Agent",
+    focus: [
+      "Are passwords/secrets ever compared with a non-constant-time equality check, or hashed with a fast general-purpose hash (MD5/SHA-1/plain SHA-256) instead of a real password-hashing function (bcrypt/argon2/scrypt/PBKDF2) -- flag either as a real risk, not a style nit.",
+      "Is a JWT or session token actually verified (signature + expiry) on every protected route, not just decoded/parsed and trusted -- decoding without verifying is a real, previously-observed vulnerability class.",
+      "Is an authorization check (does THIS user own/have a role permitting THIS resource) present and distinct from authentication (is this a valid logged-in user at all) -- flag any route that checks the latter but not the former on data scoped to a specific user or role.",
+    ],
+  },
   documentation: {
     label: "Documentation Agent",
     focus: [
@@ -127,6 +135,7 @@ export function classifyPersona(mode: AgentMode, edits: ProposedEdit[]): AgentPe
   if (mode === "architecture") return "architecture";
   if (mode === "testing") return "testing";
   if (mode === "devops") return "devops";
+  if (mode === "auth") return "auth";
   if (mode === "fix") return "debugger";
   if (mode === "spec") return "documentation";
   // "build" (and any future structured-edits mode not listed above):

@@ -38,6 +38,13 @@ export const demoRunner: AgentRunner = {
       else if (input.mode === "database") edits = demoDatabaseEdits(input);
       else if (input.mode === "architecture") edits = demoArchitectureEdits(input);
       else if (input.mode === "testing") edits = demoTestingEdits(input);
+      // "devops" was defined (demoDevopsEdits, below) but never actually
+      // wired into this chain -- dead code since Phase 14 shipped, found
+      // during the same Phase 19-23 mode-enumeration audit that caught
+      // routes.ts's KNOWN_MODES gap. A demo-runner devops task has
+      // produced generic "build mode" prose with zero edits ever since.
+      else if (input.mode === "devops") edits = demoDevopsEdits(input);
+      else if (input.mode === "auth") edits = demoAuthEdits(input);
       else if (input.mode === "spec") edits = [demoSpecEdit(input)];
 
       if (edits.length > 0) {
@@ -86,6 +93,8 @@ function stepsFor(mode: RunnerInput["mode"]): string[] {
   if (mode === "database") return ["Reading request", "Checking for an existing DB/ORM convention", "Drafting schema, migration, and model changes"];
   if (mode === "architecture") return ["Reading architecture evidence bundle", "Mapping real components, routes, and schema", "Drafting HLD.md and LLD.md with Mermaid diagrams"];
   if (mode === "testing") return ["Reading testing evidence bundle", "Matching existing test style", "Drafting test file(s)"];
+  if (mode === "devops") return ["Reading devops evidence bundle", "Mapping real services to containers", "Drafting Dockerfile(s), docker-compose.yml, and CI pipeline"];
+  if (mode === "auth") return ["Reading auth evidence bundle", "Checking for an existing auth convention", "Drafting authentication/authorization changes"];
   return ["Reading request", "Reviewing project context", "Drafting proposed changes"];
 }
 
@@ -119,6 +128,12 @@ function renderOutput(input: RunnerInput): string {
   }
   if (input.mode === "testing") {
     return `${banner}Testing Engine for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "testing" mode (roadmap Phase 10) proposes real test file(s) for the code shown to you, the same way "build" mode proposes code edits: only desktop-agent ever writes them, and only once you review and click Apply. A real model is handed a pre-computed evidence bundle (GET /testing-evidence: this project's real detected test framework(s) and an existing test file sample when one exists) and instructed to write tests only against real, visible code -- never an imagined API. Below is a clearly-labeled DEMO test file so you can exercise that flow without a real model configured.${context}`;
+  }
+  if (input.mode === "devops") {
+    return `${banner}DevOps/Infrastructure Generation for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "devops" mode (roadmap Phase 14) proposes a Dockerfile per real detected service, a root docker-compose.yml, and a CI pipeline, the same way "build" mode proposes code edits: only desktop-agent ever writes them, and only once you review and click Apply. A real model is handed a pre-computed evidence bundle (GET /devops-evidence: real detected frontend/backend/database components, any infra file already present, and this project's own real build/test/lint commands) and instructed to ground every proposed file in it. Below is a clearly-labeled DEMO Dockerfile so you can exercise that flow without a real model configured.${context}`;
+  }
+  if (input.mode === "auth") {
+    return `${banner}Auth/RBAC Engineering for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "auth" mode (roadmap Phase 19) proposes authentication/authorization middleware and route changes, the same way "build" mode proposes code edits: only desktop-agent ever writes them, and only once you review and click Apply. A real model is handed a pre-computed evidence bundle (GET /auth-evidence: this project's real detected auth library, backend component location(s), and any existing auth-shaped file) and instructed to extend/match what's actually there rather than introduce a second, competing implementation. Below is a clearly-labeled DEMO auth middleware file so you can exercise that flow without a real model configured.${context}`;
   }
   return `${banner}Proposed-changes summary for: "${input.prompt}"\n\nThis reference gateway never writes to disk itself — "build" mode proposes full-file-content edits (below) that only desktop-agent ever writes to disk, and only once you review and click Apply (see docs/ARCHITECTURE.md §8's approval step). Below is a clearly-labeled DEMO edit so you can exercise that full propose → review → apply flow without a real model configured. A real model (see README) would propose an edit addressing your actual prompt instead.${context}`;
 }
@@ -410,6 +425,42 @@ function demoDevopsEdits(input: RunnerInput): { path: string; action: "create"; 
 
 FROM alpine:3.19
 CMD ["echo", "DEMO placeholder image -- configure a real model for an actual generated Dockerfile"]
+`,
+    },
+  ];
+}
+
+function demoAuthEdits(input: RunnerInput): { path: string; action: "create"; content: string }[] {
+  return [
+    {
+      path: "backend/auth_demo_placeholder.py",
+      action: "create",
+      content: `# Demo auth middleware (not a real AI-generated implementation)
+#
+# Created by the cloud-agent-gateway's DEMO runner, not a real model. No
+# ANTHROPIC_API_KEY is configured, so there is no real analysis of this
+# project's actual backend framework or existing auth convention behind
+# this -- it exists only to exercise MobiusX.ai WDC's Auth/RBAC
+# Engineering flow (roadmap Phase 19) end-to-end:
+#
+# 1. The gateway proposed this file (an "auth" task).
+# 2. You reviewed it and clicked Apply.
+# 3. completion.ts's auth_verified criterion (Project Completion Contract)
+#    would then look for a real token-verification call in this project's
+#    files -- a real model's actual implementation would be found there;
+#    this placeholder deliberately is NOT, so applying it alone won't
+#    flip that criterion to "pass" -- see hasWiredAuthImplementation in
+#    apps/desktop-agent/src/authContext.ts.
+#
+# Original prompt: "${input.prompt}"
+# Safe to delete. Configure a real model (see apps/cloud-agent-gateway/README.md)
+# to get an actual JWT/RBAC implementation grounded in GET /auth-evidence
+# (this project's real detected auth library, backend location, and any
+# existing auth-shaped file) instead of this placeholder.
+
+
+def demo_placeholder_auth_check():
+    raise NotImplementedError("DEMO placeholder -- configure a real model for an actual auth implementation.")
 `,
     },
   ];
