@@ -17,6 +17,7 @@ function showView(name) {
   if (name === "settings") loadSettings();
   if (name === "artifacts") loadArtifacts();
   if (name === "knowledge") loadKnowledgeView();
+  if (name === "home") loadDashboard();
 }
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -117,6 +118,73 @@ function renderRecents() {
   }
 }
 renderRecents();
+
+// ============================================================
+// Dashboard (roadmap Phase 18, source §32/§33/§34) -- "the single 'what
+// do you want to build' entry point [the ask-box above] and a live
+// per-project health dashboard (build/test/security status, artifact
+// list, agent activity feed)." Only shown once a project is open;
+// re-fetched every time Home is navigated to, same lazy-load-on-nav
+// pattern every other view in this file already follows. Reuses
+// renderCompletionReport (build/test/security) and GET /audit (activity,
+// filtered client-side to this project) rather than re-implementing
+// either -- see dashboard.ts's own doc comment for why.
+// ============================================================
+async function loadDashboard() {
+  const section = document.getElementById("dashboard-section");
+  if (!currentProjectPath) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  document.getElementById("dashboard-project-name").textContent = currentProjectPath.split("/").filter(Boolean).pop() || currentProjectPath;
+
+  const completionEl = document.getElementById("dashboard-completion");
+  const artifactsEl = document.getElementById("dashboard-artifacts");
+  const activityEl = document.getElementById("dashboard-activity");
+  completionEl.innerHTML = "<div class='verify-pending'>Computing…</div>";
+  artifactsEl.innerHTML = "<div class='recent-empty'>Loading…</div>";
+  activityEl.innerHTML = "<div class='debug-empty'>Loading…</div>";
+
+  try {
+    const dash = await api("/dashboard");
+    renderCompletionReport(dash.completion, completionEl);
+    if (dash.artifacts.length === 0) {
+      artifactsEl.innerHTML = "<div class='recent-empty'>No generated artifacts yet — Architecture, DevOps, and other modes will create some as you use them.</div>";
+    } else {
+      artifactsEl.innerHTML = dash.artifacts
+        .map((a) => `<div class="recent-item"><span>${escapeHtml(a.label)}</span><span class="recent-item-path">${escapeHtml(a.path)}</span></div>`)
+        .join("");
+    }
+  } catch (err) {
+    completionEl.innerHTML = `<div class="verify-none">Dashboard failed: ${escapeHtml(err.message)}</div>`;
+    artifactsEl.innerHTML = "";
+  }
+
+  try {
+    const { entries } = await api("/audit?limit=200");
+    const mine = entries.filter((e) => e.detail && e.detail.projectPath === currentProjectPath).slice(-8).reverse();
+    if (mine.length === 0) {
+      activityEl.innerHTML = "<div class='debug-empty'>No agent activity recorded yet for this project.</div>";
+    } else {
+      activityEl.innerHTML = mine
+        .map(
+          (e) => `
+        <div class="audit-entry ${e.severity}">
+          <div class="audit-entry-head">
+            <span class="audit-entry-time">${formatAuditTime(e.timestamp)}</span>
+            <span class="audit-entry-category">${escapeHtml(e.category)}</span>
+          </div>
+          <div class="audit-entry-summary">${escapeHtml(e.summary)}</div>
+        </div>`,
+        )
+        .join("");
+    }
+  } catch (err) {
+    activityEl.innerHTML = `<div class="debug-empty">Failed to load activity: ${escapeHtml(err.message)}</div>`;
+  }
+}
+document.getElementById("dashboard-refresh-btn")?.addEventListener("click", loadDashboard);
 
 // ============================================================
 // Project open + file tree
@@ -2474,7 +2542,7 @@ document.getElementById("error-intel-run-btn").addEventListener("click", runErro
 const completionCheckBtn = document.getElementById("completion-check-btn");
 const completionResultsEl = document.getElementById("completion-results");
 
-function renderCompletionReport(report) {
+function renderCompletionReport(report, targetEl = completionResultsEl) {
   const overallLabel = { verified: "Verified", in_progress: "In progress", not_started: "Not started", unknown: "Unknown" }[report.overall] || report.overall;
   const rows = report.criteria
     .map((c) => {
@@ -2487,7 +2555,7 @@ function renderCompletionReport(report) {
         </div>`;
     })
     .join("");
-  completionResultsEl.innerHTML = `
+  targetEl.innerHTML = `
     <div class="completion-summary ${report.overall}">${overallLabel} — ${report.completionPercent}% of measured criteria pass</div>
     <div class="completion-criteria">${rows}</div>
     <div class="completion-meta">Generated ${new Date(report.generatedAt).toLocaleString()} · written to .mobiusx/PROJECT_COMPLETION.json</div>

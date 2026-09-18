@@ -77,6 +77,27 @@
             </div>
           </div>
 
+          <section id="dashboard-section" hidden>
+            <div class="dashboard-header">
+              <h3 class="section-title" style="margin-bottom:0">Project health — <span id="dashboard-project-name"></span></h3>
+              <button id="dashboard-refresh-btn" class="refresh-btn" title="Refresh">&#8635; Refresh</button>
+            </div>
+            <div class="dashboard-grid">
+              <div class="dashboard-col">
+                <div class="dashboard-col-title">Build / test / security</div>
+                <div id="dashboard-completion"></div>
+              </div>
+              <div class="dashboard-col">
+                <div class="dashboard-col-title">Artifacts</div>
+                <div id="dashboard-artifacts" class="recent-list"></div>
+              </div>
+              <div class="dashboard-col">
+                <div class="dashboard-col-title">Recent agent activity</div>
+                <div id="dashboard-activity" class="audit-log"></div>
+              </div>
+            </div>
+          </section>
+
           <h3 class="section-title">Quick actions</h3>
           <div class="quick-actions">
             <button class="quick-action" id="qa-new-project">

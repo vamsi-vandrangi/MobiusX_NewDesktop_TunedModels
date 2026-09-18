@@ -38,9 +38,11 @@ import type {
   ErrorIntelligenceReport,
   CheckpointListResponse,
   CheckpointRestoreResponse,
+  DashboardResponse,
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
 import { createCheckpoint, deleteCheckpoint, listCheckpoints, restoreCheckpoint } from "./checkpoints.js";
+import { gatherDashboard } from "./dashboard.js";
 import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
 import { verifyProject } from "./verify.js";
 import { runBrowserValidation } from "./browserOps.js";
@@ -357,6 +359,24 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "completion report failed", detail: (err as Error).message });
+    }
+  });
+
+  // Dashboard (roadmap Phase 18, source §32/§33/§34) -- a presentation
+  // layer over the completion report above plus a real, existing-only
+  // artifact list. See dashboard.ts's doc comment for exactly what's
+  // checked and why "agent activity feed" isn't duplicated here (the
+  // shell filters the existing GET /audit feed client-side instead).
+  router.get("/dashboard", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const result: DashboardResponse = await gatherDashboard(projectState.path, projectState.isGitRepo);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "dashboard failed", detail: (err as Error).message });
     }
   });
 

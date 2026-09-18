@@ -645,6 +645,43 @@ export interface ProjectCompletionReport {
 export type ProjectCompletionResponse = ProjectCompletionReport;
 
 /**
+ * Dashboard (roadmap Phase 18, source §32/§33/§34): "a live per-project
+ * health dashboard (build/test/security status, artifact list, agent
+ * activity feed)." Deliberately a presentation layer over signals earlier
+ * phases already compute for real -- this never re-implements a check
+ * that already exists.
+ *
+ * One real, existing generated file (or non-empty steering file) this
+ * project already has on disk -- never a placeholder for a file that
+ * *could* be generated. See apps/desktop-agent/src/dashboard.ts for the
+ * fixed, honest list of candidate paths checked.
+ */
+export interface DashboardArtifact {
+  /** Project-relative path. */
+  path: string;
+  label: string;
+  category: "architecture" | "context" | "completion" | "steering" | "devops" | "spec" | "config";
+  sizeBytes?: number;
+  modifiedAt?: string;
+}
+
+/**
+ * Body of GET /dashboard. `completion` is exactly what GET /completion
+ * returns (same computation, same honesty about "not_configured" —
+ * covers the "build/test/security status" part of the roadmap line);
+ * `artifacts` covers "artifact list". "Agent activity feed" deliberately
+ * isn't duplicated here -- the desktop shell filters the existing GET
+ * /audit feed to this project's own entries client-side, since audit-log
+ * already tracks `detail.projectPath` on every entry it writes.
+ */
+export interface DashboardResponse {
+  projectPath: string;
+  generatedAt: string;
+  completion: ProjectCompletionReport;
+  artifacts: DashboardArtifact[];
+}
+
+/**
  * Project Understanding Engine (roadmap Phase 7, source requirement §5): a
  * category of the project's tech stack this codebase knows how to look
  * for. Kept as a closed union (not a free-form string) so a category with

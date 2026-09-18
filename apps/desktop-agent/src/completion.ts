@@ -94,20 +94,39 @@ export async function computeCompletionReport(projectRoot: string, isGitRepo: bo
       id: "e2e_tests_pass",
       label: "End-to-end (browser) tests passing",
       status: "not_configured",
-      detail: "Browser/application validation not yet implemented — see roadmap Phase 12.",
+      // Phase 12 shipped a real headless-browser validator
+      // (browserOps.ts's runBrowserValidation, POST /browser-validate) --
+      // this criterion stays honestly "not_configured" because that check
+      // is on-demand and requires an already-running preview; there is no
+      // cached last-run result this report could report a real pass/fail
+      // from without re-running it itself (which would change GET
+      // /completion from a fast status read into one that launches a
+      // headless browser on every call). Run it from the AI Assistant /
+      // Verify panel to get a real result.
+      detail: "Browser/Application Validation (Phase 12) exists but is on-demand and needs a running preview — run it from the Verify panel; it isn't cached here.",
     },
     {
       id: "security_scan_clean",
       label: "Security scan clean",
       status: "not_configured",
-      detail:
-        "Only outbound/inbound secret-shaped-text flagging exists today (packages/secret-scan); a real SAST / dependency-vulnerability scan is not yet implemented — see roadmap Phase 14.",
+      // Still genuinely true as of Phase 15: packages/secret-scan only
+      // flag-scans content an AI is about to WRITE (fsOps.ts#applyEdits),
+      // never the project's already-existing files. No roadmap phase
+      // number is assigned to a real project-wide SAST / dependency scan
+      // yet (Phase 14 turned out to be DevOps/Infrastructure Generation,
+      // not a security scanner -- the old text here guessed wrong).
+      detail: "Only outbound/inbound secret-shaped-text flagging exists today (packages/secret-scan), and only on content about to be written — a real project-wide SAST / dependency-vulnerability scan is not yet implemented or roadmapped.",
     },
     {
       id: "deployment_verified",
       label: "Deployment verified",
       status: "not_configured",
-      detail: "DevOps/infrastructure generation and deployment are not yet implemented — see roadmap Phase 14.",
+      // Phase 14 shipped real DevOps/infrastructure GENERATION
+      // (Dockerfile/compose/CI proposals, grounded in this project's own
+      // real components and verification steps) -- but generating infra
+      // files is not the same as verifying an actual deployment, which
+      // this codebase still doesn't do.
+      detail: "DevOps/infrastructure generation (Phase 14) can propose Docker/Compose/CI files, but actually deploying and verifying a live deployment is not yet implemented.",
     },
   );
 
