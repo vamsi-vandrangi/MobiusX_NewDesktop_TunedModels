@@ -881,7 +881,7 @@ export type ArchitectureEvidenceResponse = ArchitectureEvidence;
  * line, a preview log excerpt) has neither.
  */
 export interface TraceEvidence {
-  /** "ticket" is the originating symptom layer for X-Debug & Fix's pasted-ticket investigations (see debug.ts's ParsedTicket) -- distinct from "browser" (a live Browser Validation failure), since a ticket is text the user supplied, not something this app observed itself. */
+  /** "ticket" is the originating symptom layer for Debug & Fix's pasted-ticket investigations (see debug.ts's ParsedTicket) -- distinct from "browser" (a live Browser Validation failure), since a ticket is text the user supplied, not something this app observed itself. */
   layer: "ticket" | "browser" | "frontend" | "api" | "backend" | "database";
   label: string;
   detail: string;

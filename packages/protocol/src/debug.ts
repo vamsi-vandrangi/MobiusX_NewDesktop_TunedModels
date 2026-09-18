@@ -51,7 +51,7 @@ export interface DebugHistoryResponse {
 }
 
 // ============================================================
-// X-Debug & Fix: paste a JIRA/Service Desk ticket, get it investigated
+// Debug & Fix: paste a JIRA/Service Desk ticket, get it investigated
 // against THIS project's own real evidence, then generate a fix.
 //
 // Scope, honestly: this does NOT call out to Jira/Service Desk -- the

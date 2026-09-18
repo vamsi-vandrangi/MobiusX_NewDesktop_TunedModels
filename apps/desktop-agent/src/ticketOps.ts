@@ -16,7 +16,7 @@ import { searchKnowledge } from "./knowledgeOps.js";
 import { extractRecentBackendTraceback, backendTracebackMentionsDb, findMatchingRoute, pathsMatch } from "./errorIntelligence.js";
 
 /**
- * X-Debug & Fix (extends Phase 2/13's Debug view -- see @mobiusx/protocol's
+ * Debug & Fix (extends Phase 2/13's Debug view -- see @mobiusx/protocol's
  * debug.ts for the full scope note). A developer pastes a JIRA/Service
  * Desk ticket's raw text; this module extracts whatever structured
  * signal that text actually contains (a route, a status code, a pasted

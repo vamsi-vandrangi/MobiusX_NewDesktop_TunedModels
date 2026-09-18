@@ -2750,7 +2750,7 @@ async function runErrorIntelligence() {
 }
 document.getElementById("error-intel-run-btn").addEventListener("click", runErrorIntelligence);
 // ============================================================
-// X-Debug & Fix: ticket investigation (extends Error Intelligence above
+// Debug & Fix: ticket investigation (extends Error Intelligence above
 // with a developer-pasted-ticket entry point instead of a live browser
 // failure). See apps/desktop-agent/src/ticketOps.ts's doc comment for
 // the scope note: no live Jira/Service Desk integration -- the developer
@@ -2887,7 +2887,7 @@ async function runTicketInvestigation() {
 // handler uses (see buildEditsCard's own diagnoseBtn listener), grounded
 // in the ticket's raw text plus this investigation's own cited evidence
 // (matched route/file, reasoning) so the model sees both the developer's
-// words and what X-Debug already found, rather than re-deriving it alone.
+// words and what the ticket investigation already found, rather than re-deriving it alone.
 async function generateFixFromTicket(report, resultsEl, triggerBtn) {
   if (!currentProjectPath || !cloudBaseUrl) return;
   triggerBtn.disabled = true;
@@ -2908,7 +2908,7 @@ async function generateFixFromTicket(report, resultsEl, triggerBtn) {
       "--- Ticket text (as pasted by the developer) ---",
       ticket.rawText,
       "",
-      "--- X-Debug investigation findings ---",
+      "--- Debug & Fix investigation findings ---",
       `Category: ${category}`,
       reasoning,
       focusFiles.length > 0 ? `Files already cited as evidence by the investigation above: ${focusFiles.join(", ")}` : "",

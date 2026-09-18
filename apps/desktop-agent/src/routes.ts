@@ -680,7 +680,7 @@ export function buildRouter(): Router {
     }
   });
 
-  // X-Debug & Fix (extends Phase 13's Error Intelligence): a developer
+  // Debug & Fix (extends Phase 13's Error Intelligence): a developer
   // pastes a JIRA/Service Desk ticket's raw text; this correlates it
   // against the same real evidence sources errorIntelligence.ts already
   // uses (detected routes, ORM entities, a live backend log when a

@@ -899,7 +899,7 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .error-trace-category.insufficient-evidence { background: #1c1d21; color: #9a9ba1; }
 .ticket-live-badge { font-size: 10px; padding: 1px 7px; border-radius: 3px; background: #142418; color: #6fcf73; font-weight: 600; }
 
-/* ---- X-Debug & Fix: paste-a-ticket investigation ---- */
+/* ---- Debug & Fix: paste-a-ticket investigation ---- */
 .ticket-investigate-box { margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid #232429; }
 .ticket-investigate-box h3 { font-size: 13px; margin-bottom: 8px; }
 .ticket-textarea { width: 100%; min-height: 110px; resize: vertical; background: #0e0f12; border: 1px solid #232429; border-radius: 6px; padding: 10px 12px; color: #e5e6ea; font-size: 12.5px; font-family: inherit; line-height: 1.5; box-sizing: border-box; }
