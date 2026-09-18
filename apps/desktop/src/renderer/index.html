@@ -21,7 +21,7 @@
         <button class="nav-item" data-view="knowledge"><span class="nav-icon">◈</span>Knowledge</button>
         <button class="nav-item" data-view="agents"><span class="nav-icon">◎</span>Agents</button>
         <button class="nav-item" data-view="tasks"><span class="nav-icon">☑</span>Tasks</button>
-        <button class="nav-item" data-view="debug"><span class="nav-icon">◐</span>Debug</button>
+        <button class="nav-item" data-view="debug"><span class="nav-icon">◐</span>X-Debug &amp; Fix</button>
         <button class="nav-item" data-view="changes"><span class="nav-icon">±</span>Changes</button>
         <button class="nav-item" data-view="artifacts"><span class="nav-icon">▣</span>Artifacts</button>
         <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Settings</button>
@@ -409,23 +409,48 @@
           </div>
         </section>
         <section class="view" id="view-debug" hidden>
-          <h2>Intelligent Debugger</h2>
+          <h2>X-Debug &amp; Fix</h2>
           <p class="scope-note">
-            Static code intelligence: semantic-ish code search (local, no cloud) correlated with git history
-            for the files that turn up. This is <strong>not</strong> live log/trace/metric analysis across a
-            running system — that needs real observability data and MobiusX Cloud, which is Phase 3. Treat
-            results as "code and history worth looking at," not an automated root-cause verdict.
+            Paste a JIRA / Service Desk ticket and get it investigated against THIS project's own real
+            evidence — detected routes, database entities, semantic code search, your configured Enterprise
+            Knowledge docs, and (when one is running) the live preview's own backend log — then generate a
+            fix. This is <strong>not</strong> a live Jira/Service Desk integration (nothing is fetched by ID,
+            nothing is written back) and not cross-service distributed tracing — that needs real observability
+            data and MobiusX Cloud. Treat results as evidence-grounded leads, not an automated verdict.
           </p>
 
-          <div class="ask-box">
-            <input id="debug-query-input" placeholder="Describe the issue, e.g. \"payment retry backoff logic\"…" />
-            <div class="ask-modes">
-              <span id="debug-index-status" class="status-text">No index built yet for this project</span>
-              <button id="debug-search-btn" class="send-btn">→</button>
+          <div class="ticket-investigate-box">
+            <h3>Investigate a ticket</h3>
+            <textarea
+              id="ticket-text-input"
+              class="ticket-textarea"
+              rows="6"
+              placeholder="Paste the ticket's title, description, comments — whatever it contains. Include the error message, endpoint/URL, or stack trace if the ticket has one; the more it has, the more this can correlate."
+            ></textarea>
+            <div class="ticket-investigate-actions">
+              <button id="ticket-investigate-btn" class="refresh-btn">Investigate ticket</button>
             </div>
+            <div id="ticket-investigation-results" class="ticket-investigation-results"></div>
           </div>
 
-          <div id="debug-results" class="debug-results"></div>
+          <div class="debug-static-search">
+            <h3>Static code search</h3>
+            <p class="scope-note">
+              Semantic-ish code search (local, no cloud) correlated with git history for the files that turn
+              up. Not live log/trace/metric analysis — see the ticket investigation above for evidence-grounded
+              root-cause correlation instead.
+            </p>
+
+            <div class="ask-box">
+              <input id="debug-query-input" placeholder="Describe the issue, e.g. \"payment retry backoff logic\"…" />
+              <div class="ask-modes">
+                <span id="debug-index-status" class="status-text">No index built yet for this project</span>
+                <button id="debug-search-btn" class="send-btn">→</button>
+              </div>
+            </div>
+
+            <div id="debug-results" class="debug-results"></div>
+          </div>
 
           <div class="debug-error-intelligence">
             <h3>Error Intelligence (roadmap Phase 13 — full-stack tracing + root-cause classification)</h3>

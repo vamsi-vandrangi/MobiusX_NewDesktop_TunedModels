@@ -14,6 +14,7 @@ import type {
   FsTreeResponse,
   GitDiffRequest,
   OpenProjectRequest,
+  TicketInvestigateRequest,
   OpenProjectResponse,
   PreviewStartResponse,
   PreviewStatusResponse,
@@ -68,6 +69,7 @@ import { loadProjectHooks, runHooksForEvent } from "./hooks.js";
 import { callMcpTool, getMcpStatus } from "@mobiusx/mcp-client";
 import { addKnowledgeSource, buildKnowledgeIndex, listKnowledgeSources, removeKnowledgeSource, searchKnowledge } from "./knowledgeOps.js";
 import { runErrorIntelligence } from "./errorIntelligence.js";
+import { investigateTicket } from "./ticketOps.js";
 
 export function buildRouter(): Router {
   const router = Router();
@@ -675,6 +677,46 @@ export function buildRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "error intelligence failed", detail: (err as Error).message });
+    }
+  });
+
+  // X-Debug & Fix (extends Phase 13's Error Intelligence): a developer
+  // pastes a JIRA/Service Desk ticket's raw text; this correlates it
+  // against the same real evidence sources errorIntelligence.ts already
+  // uses (detected routes, ORM entities, a live backend log when a
+  // preview happens to be running) plus semantic code search and
+  // Enterprise Knowledge search over the ticket's own text -- see
+  // ticketOps.ts's doc comment for the full scope note (no live
+  // Jira/Service Desk integration; the developer copies the text in).
+  router.post("/debug/ticket-investigate", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const { ticketText: rawTicketText } = req.body as TicketInvestigateRequest;
+    const ticketText = String(rawTicketText ?? "").trim();
+    if (!ticketText) {
+      res.status(400).json({ error: "ticketText is required" });
+      return;
+    }
+    try {
+      const result = await investigateTicket(projectState.path, ticketText);
+      void appendAuditEntry({
+        source: "desktop-agent",
+        category: "ticket-investigation",
+        severity: result.category === "insufficient-evidence" ? "info" : "warning",
+        summary: `Ticket investigation: ${result.category} (${result.confidence} confidence)${result.ticket.ticketId ? ` for ${result.ticket.ticketId}` : ""} in ${projectState.path}`,
+        detail: {
+          projectPath: projectState.path,
+          ticketId: result.ticket.ticketId,
+          category: result.category,
+          confidence: result.confidence,
+          relevantFileCount: result.relevantFiles.length,
+        },
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "ticket investigation failed", detail: (err as Error).message });
     }
   });
 

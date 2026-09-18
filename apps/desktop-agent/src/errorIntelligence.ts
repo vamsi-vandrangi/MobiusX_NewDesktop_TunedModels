@@ -50,14 +50,14 @@ function isParamSegment(seg: string): boolean {
 }
 
 /** A real backend route's path (possibly with FastAPI `{id}`/Express `:id`/Next `[id]` param segments) matched against a real observed request path -- never a fuzzy/substring match. */
-function pathsMatch(routePath: string, requestPath: string): boolean {
+export function pathsMatch(routePath: string, requestPath: string): boolean {
   const a = routePath.split("/").filter(Boolean);
   const b = requestPath.split("/").filter(Boolean);
   if (a.length !== b.length) return false;
   return a.every((seg, i) => isParamSegment(seg) || seg === b[i]);
 }
 
-function findMatchingRoute(routes: DetectedRoute[], method: string, requestPath: string): DetectedRoute | null {
+export function findMatchingRoute(routes: DetectedRoute[], method: string, requestPath: string): DetectedRoute | null {
   const exact = routes.find((r) => r.method === method && pathsMatch(r.path, requestPath));
   if (exact) return exact;
   // A route registered as "HANDLER" (Next.js Pages Router -- method
@@ -86,7 +86,7 @@ export function extractRecentBackendTraceback(log: string[]): string[] | null {
   return null;
 }
 
-function backendTracebackMentionsDb(tracebackLines: string[], evidence: ArchitectureEvidence): boolean {
+export function backendTracebackMentionsDb(tracebackLines: string[], evidence: ArchitectureEvidence): boolean {
   const text = tracebackLines.join("\n").toLowerCase();
   if (/sqlalchemy|sqlmodel|psycopg|sqlite3|pymongo|mongoose|prisma\.|\.query\(|session\.(add|commit|query)/.test(text)) return true;
   return evidence.database.ormEntities.some((e) => text.includes(e.name.toLowerCase()) || text.includes(e.tableName.toLowerCase()));

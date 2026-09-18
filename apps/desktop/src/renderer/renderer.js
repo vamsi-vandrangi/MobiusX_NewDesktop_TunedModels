@@ -2685,7 +2685,7 @@ const CATEGORY_LABELS = {
   "client-error": "Client error (4xx)",
   unclassified: "Unclassified",
 };
-const LAYER_ORDER = ["browser", "frontend", "api", "backend", "database"];
+const LAYER_ORDER = ["ticket", "browser", "frontend", "api", "backend", "database"];
 
 async function runErrorIntelligence() {
   const btn = document.getElementById("error-intel-run-btn");
@@ -2749,6 +2749,223 @@ async function runErrorIntelligence() {
   btn.textContent = "Run full-stack trace again";
 }
 document.getElementById("error-intel-run-btn").addEventListener("click", runErrorIntelligence);
+// ============================================================
+// X-Debug & Fix: ticket investigation (extends Error Intelligence above
+// with a developer-pasted-ticket entry point instead of a live browser
+// failure). See apps/desktop-agent/src/ticketOps.ts's doc comment for
+// the scope note: no live Jira/Service Desk integration -- the developer
+// pastes the ticket's text in, and everything below is real correlation
+// against THIS project's own evidence, never sent to a ticket system.
+// ============================================================
+const ticketTextInput = document.getElementById("ticket-text-input");
+const ticketInvestigateBtn = document.getElementById("ticket-investigate-btn");
+const ticketResultsEl = document.getElementById("ticket-investigation-results");
+
+const TICKET_CATEGORY_LABELS = Object.assign({ "insufficient-evidence": "Insufficient evidence" }, CATEGORY_LABELS);
+
+function renderEvidenceChain(container, evidence) {
+  const sorted = [...evidence].sort((a, b) => LAYER_ORDER.indexOf(a.layer) - LAYER_ORDER.indexOf(b.layer));
+  for (const ev of sorted) {
+    const evEl = document.createElement("div");
+    evEl.className = "error-trace-evidence";
+    evEl.innerHTML = `
+      <div class="error-trace-evidence-head">
+        <span class="error-trace-layer-badge ${escapeHtml(ev.layer)}">${escapeHtml(ev.layer)}</span>
+        <span class="error-trace-evidence-label">${escapeHtml(ev.label)}</span>
+        ${ev.source ? `<span class="error-trace-evidence-source">${escapeHtml(ev.source)}${ev.line ? `:${ev.line}` : ""}</span>` : ""}
+      </div>
+      <pre class="error-trace-evidence-detail">${escapeHtml(ev.detail)}</pre>
+    `;
+    if (ev.source) {
+      evEl.querySelector(".error-trace-evidence-source").addEventListener("click", () => {
+        openFile(ev.source);
+        showView("workspace");
+      });
+    }
+    container.appendChild(evEl);
+  }
+}
+
+function renderTicketInvestigation(report) {
+  const { ticket, category, confidence, reasoning, evidence, relevantFiles, knowledgeHits, livePreviewCorroboration } = report;
+
+  ticketResultsEl.innerHTML = `
+    <div class="ticket-report-head">
+      ${ticket.ticketId ? `<span class="ticket-id-badge">${escapeHtml(ticket.ticketId)}</span>` : ""}
+      <span class="error-trace-category ${escapeHtml(category)}">${escapeHtml(TICKET_CATEGORY_LABELS[category] || category)}</span>
+      <span class="error-trace-confidence ${escapeHtml(confidence)}">${escapeHtml(confidence)} confidence</span>
+      ${livePreviewCorroboration ? '<span class="ticket-live-badge">corroborated by live preview</span>' : ""}
+    </div>
+    ${ticket.title ? `<div class="ticket-title">${escapeHtml(ticket.title)}</div>` : ""}
+    <p class="error-trace-reasoning">${escapeHtml(reasoning)}</p>
+    <div class="error-trace-chain" id="ticket-evidence-chain"></div>
+    <div class="ticket-relevant-files"></div>
+    <div class="ticket-knowledge-hits"></div>
+    <div class="ticket-generate-fix"></div>
+  `;
+
+  renderEvidenceChain(ticketResultsEl.querySelector("#ticket-evidence-chain"), evidence);
+
+  const filesEl = ticketResultsEl.querySelector(".ticket-relevant-files");
+  if (relevantFiles.length > 0) {
+    const title = document.createElement("div");
+    title.className = "ticket-section-title";
+    title.textContent = "Relevant files (semantic search over the ticket text)";
+    filesEl.appendChild(title);
+    for (const hit of relevantFiles) {
+      const scoreBand = hit.score >= 0.7 ? "high" : hit.score >= 0.4 ? "medium" : "low";
+      const card = document.createElement("div");
+      card.className = "debug-hit";
+      card.innerHTML = `
+        <div class="debug-hit-head">
+          <span class="debug-hit-path">${escapeHtml(hit.relPath)}:${hit.startLine}-${hit.endLine}</span>
+          <span class="debug-hit-badges">
+            <span class="debug-hit-kind-badge">${escapeHtml(hit.kind)}</span>
+            <span class="debug-hit-score-badge ${scoreBand}">${hit.score.toFixed(2)} match</span>
+          </span>
+        </div>
+        <pre class="debug-hit-snippet">${escapeHtml(hit.snippet)}</pre>
+      `;
+      card.querySelector(".debug-hit-path").addEventListener("click", () => {
+        openFile(hit.relPath);
+        showView("workspace");
+      });
+      filesEl.appendChild(card);
+    }
+  }
+
+  const knowledgeEl = ticketResultsEl.querySelector(".ticket-knowledge-hits");
+  if (knowledgeHits.length > 0) {
+    const title = document.createElement("div");
+    title.className = "ticket-section-title";
+    title.textContent = "Enterprise Knowledge";
+    knowledgeEl.appendChild(title);
+    for (const hit of knowledgeHits) {
+      const card = document.createElement("div");
+      card.className = "debug-hit";
+      card.innerHTML = `
+        <div class="debug-hit-head">
+          <span class="debug-hit-path">${escapeHtml(hit.sourceLabel)} — ${escapeHtml(hit.relPath)}${hit.heading ? ` — ${escapeHtml(hit.heading)}` : ""}</span>
+          <span class="debug-hit-badges"><span class="debug-hit-score-badge ${hit.score >= 0.7 ? "high" : hit.score >= 0.4 ? "medium" : "low"}">${hit.score.toFixed(2)} match</span></span>
+        </div>
+        <pre class="debug-hit-snippet">${escapeHtml(hit.snippet)}</pre>
+      `;
+      knowledgeEl.appendChild(card);
+    }
+  }
+
+  const fixEl = ticketResultsEl.querySelector(".ticket-generate-fix");
+  fixEl.innerHTML = `<button id="ticket-generate-fix-btn" class="refresh-btn">Generate Fix</button><div class="ticket-fix-results"></div>`;
+  const fixBtn = fixEl.querySelector("#ticket-generate-fix-btn");
+  const fixResultsEl = fixEl.querySelector(".ticket-fix-results");
+  fixBtn.addEventListener("click", () => generateFixFromTicket(report, fixResultsEl, fixBtn));
+}
+
+async function runTicketInvestigation() {
+  const ticketText = ticketTextInput.value.trim();
+  if (!ticketText) return;
+  if (!currentProjectPath) {
+    ticketResultsEl.innerHTML = "<div class='debug-empty'>Open a project first.</div>";
+    return;
+  }
+  ticketInvestigateBtn.disabled = true;
+  ticketInvestigateBtn.textContent = "Investigating…";
+  ticketResultsEl.innerHTML = "<div class='debug-empty'>Correlating the ticket against this project's real evidence…</div>";
+  try {
+    const report = await api("/debug/ticket-investigate", { method: "POST", body: JSON.stringify({ ticketText }) });
+    renderTicketInvestigation(report);
+  } catch (err) {
+    ticketResultsEl.innerHTML = `<div class="verify-none">Ticket investigation failed: ${escapeHtml(err.message)}</div>`;
+  }
+  ticketInvestigateBtn.disabled = false;
+  ticketInvestigateBtn.textContent = "Investigate ticket";
+}
+
+// Autonomous Build/Test/Fix Loop (roadmap Phase 6), triggered from a
+// ticket instead of a failing verification step -- reuses the exact same
+// mode:"fix" task pipeline and buildEditsCard() rendering diagnoseBtn's
+// handler uses (see buildEditsCard's own diagnoseBtn listener), grounded
+// in the ticket's raw text plus this investigation's own cited evidence
+// (matched route/file, reasoning) so the model sees both the developer's
+// words and what X-Debug already found, rather than re-deriving it alone.
+async function generateFixFromTicket(report, resultsEl, triggerBtn) {
+  if (!currentProjectPath || !cloudBaseUrl) return;
+  triggerBtn.disabled = true;
+  triggerBtn.textContent = "Generating fix…";
+  const pendingEl = document.createElement("div");
+  pendingEl.className = "verify-pending";
+  pendingEl.textContent = "Drafting a fix grounded in the ticket and the investigation above…";
+  resultsEl.appendChild(pendingEl);
+  try {
+    const { ticket, reasoning, category } = report;
+    const focusFiles = report.evidence.filter((e) => e.source).map((e) => `${e.source}${e.line ? `:${e.line}` : ""}`);
+    const searchText = `${ticket.title ?? ""}\n${ticket.rawText}`.slice(0, 2000);
+    const { hits: relevantFiles, storeSize: indexedChunkCount } = await findRelevantFiles(searchText || "ticket fix", "fix");
+    const steeringContext = await fetchSteeringContext();
+    const promptParts = [
+      `Fix the issue described in this support ticket${ticket.ticketId ? ` (${ticket.ticketId})` : ""}${ticket.title ? `: ${ticket.title}` : ""}.`,
+      "",
+      "--- Ticket text (as pasted by the developer) ---",
+      ticket.rawText,
+      "",
+      "--- X-Debug investigation findings ---",
+      `Category: ${category}`,
+      reasoning,
+      focusFiles.length > 0 ? `Files already cited as evidence by the investigation above: ${focusFiles.join(", ")}` : "",
+    ].filter(Boolean);
+    const prompt = promptParts.join("\n");
+    const { task } = await cloudApi("/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        mode: "fix",
+        prompt,
+        projectContext: {
+          projectPath: currentProjectPath,
+          relevantFiles,
+          indexedChunkCount,
+          ...(steeringContext ? { steeringContext } : {}),
+        },
+      }),
+    });
+    let detail = await cloudApi(`/tasks/${task.id}`);
+    if (detail.status === "queued" || detail.status === "running") {
+      const refresh = async () => {
+        detail = await cloudApi(`/tasks/${task.id}`);
+      };
+      await streamTask(task.id, { onEdits: refresh, onStatus: refresh, onError: refresh, onOutput: refresh, onStep: refresh, onReview: refresh });
+      // Same "done" race documented on diagnoseBtn's handler above -- one
+      // guaranteed-fresh fetch after the WS closes rather than trusting
+      // whichever refresh() happened to land last.
+      detail = await cloudApi(`/tasks/${task.id}`);
+    }
+    pendingEl.remove();
+    const prefix = document.createElement("div");
+    prefix.className = "verify-pending";
+    prefix.textContent = `[runner: ${detail.runner}${detail.model ? " / " + detail.model : ""}]${detail.modelNote ? ` — ${detail.modelNote}` : ""}`;
+    resultsEl.appendChild(prefix);
+    if (detail.edits && detail.edits.length > 0) {
+      const card = buildEditsCard(detail.edits, detail.projectPath, detail.review);
+      resultsEl.appendChild(card);
+    } else {
+      const none = document.createElement("div");
+      none.className = "verify-none";
+      none.textContent = detail.output?.trim()
+        ? `No concrete fix was proposed. Runner said: ${detail.output.trim().slice(0, 400)}`
+        : "No concrete fix was proposed.";
+      resultsEl.appendChild(none);
+    }
+  } catch (err) {
+    pendingEl.textContent = `Generate Fix failed: ${err.message}`;
+  }
+  triggerBtn.disabled = false;
+  triggerBtn.textContent = "Generate Fix again";
+}
+
+ticketInvestigateBtn.addEventListener("click", runTicketInvestigation);
+ticketTextInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runTicketInvestigation();
+});
+
 
 // ============================================================
 // Project Completion Contract (roadmap Phase 6, source requirement §31):
