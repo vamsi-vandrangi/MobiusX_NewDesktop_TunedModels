@@ -154,6 +154,15 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
   width: 100%; background: transparent; border: none; color: #e6e6e6; font-size: 14px; outline: none; padding: 6px 4px 12px;
 }
 .ask-modes { display: flex; align-items: center; gap: 8px; }
+/* The model <select> sizes itself to its widest <option> (provider/model
+   names can be long) and, as a flex item, won't shrink below that content
+   width by default (min-width:auto) -- it was pushing past the ask-box's
+   right edge and shoving the send button out with it. flex + min-width:0
+   lets it actually shrink to the row's available space; max-width keeps it
+   from ballooning back out when the window is wide; flex-shrink:0 on the
+   mode buttons keeps THEM a fixed size so the select is what gives way. */
+.ask-modes .mode-btn { flex-shrink: 0; }
+.ask-modes select.model-select { flex: 1; min-width: 0; max-width: 220px; }
 .mode-btn.active { background: #2a3a63; border-color: #3d5aa8; color: #cfe0ff; }
 .send-btn {
   margin-left: auto; width: 30px; height: 30px; border-radius: 50%;
@@ -208,6 +217,17 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
 .context-row.not-detected .context-row-value { color: #5a5b60; font-style: italic; }
 .context-row-loc { color: #6a6b70; font-size: 10px; }
 #center-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* Resizable 3-pane workspace (feature request: "the 3 pane view can be
+   increased or decreased width, user can drag to increase/decrease the
+   width"). A thin invisible-until-hover drag handle between tree-panel/
+   center-panel and between center-panel/assistant-embedded; center-panel
+   itself stays flex:1 so it's always the one that gives up or gains space. */
+.pane-resize-handle {
+  flex-shrink: 0; width: 5px; margin: 0 -2px; cursor: col-resize;
+  background: transparent; position: relative; z-index: 2;
+}
+.pane-resize-handle:hover, .pane-resize-handle.dragging { background: #3d5aa8; }
 
 #tabs-bar { display: flex; border-bottom: 1px solid #232429; overflow-x: auto; flex-shrink: 0; }
 .file-tab {
@@ -305,7 +325,16 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
   width: 300px; flex-shrink: 0; border-left: 1px solid #232429;
   display: flex; flex-direction: column; background: #131417;
 }
-.assistant-panel--full { width: 100%; border-left: none; max-width: 760px; margin: 0 auto; }
+/* Full AI Assistant page (#view-assistant): unlike the embedded sidebar
+   copy of this panel (which already lives inside a height-bounded flex
+   layout so .assistant-feed's own overflow:auto does the scrolling), this
+   one had no bounded height -- the whole panel just grew as tall as the
+   conversation, so .view's PAGE-level scroll container was what scrolled,
+   carrying the title bar and mode tabs away with it. height:100% (of
+   .view, which is itself height:100%/bounded) + overflow:hidden here
+   makes .assistant-feed the one thing that scrolls, so the tabs above it
+   stay put -- same behavior the sidebar copy already has. */
+.assistant-panel--full { width: 100%; border-left: none; max-width: 760px; margin: 0 auto; height: 100%; overflow: hidden; }
 .assistant-titlebar {
   display: flex; align-items: center; gap: 7px; padding: 12px 12px 0; flex-shrink: 0;
   font-weight: 600; font-size: 13px; color: #e6e6e6;
@@ -342,6 +371,17 @@ select.model-select option:disabled, #default-model-select option:disabled { col
   border-radius: 6px; padding: 5px 8px; line-height: 1.5;
 }
 .assistant-feed { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+/* Token-limit alerts (feature request: "alert the token limits (50%, 75%,
+   90% consumed) to the user while working"). Severity rises with the
+   threshold crossed -- 50% is informational, 90% is a real warning. */
+.usage-alert {
+  font-size: 11.5px; padding: 7px 10px; border-radius: 6px; line-height: 1.5;
+  border: 1px solid; flex-shrink: 0;
+}
+.usage-alert-50 { background: #14151a; border-color: #232429; color: #9a9ba1; }
+.usage-alert-75 { background: #1f1a10; border-color: #4a3a1a; color: #e0b96b; }
+.usage-alert-90 { background: #241214; border-color: #5a2226; color: #f0888d; }
 .assistant-msg { padding: 8px 10px; border-radius: 8px; font-size: 12.5px; line-height: 1.5; }
 .assistant-msg.user { background: #23324f; align-self: flex-end; max-width: 90%; }
 .assistant-msg.system { background: #1a1b1f; color: #9a9ba1; border: 1px solid #232429; }
@@ -494,6 +534,35 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .assistant-step-marker.completed { color: #6fcf73; }
 .assistant-step-marker.in_progress { color: #7c9eff; }
 .assistant-step-marker.pending { color: #4a4b52; }
+.assistant-step-label { }
+/* "Strike off once completed" (like Claude Code/Cursor's todo list) --
+   applies to both the model-call step log above and the edits-card
+   lifecycle checklist below. */
+.assistant-step-line.completed .assistant-step-label { color: #6d7079; text-decoration: line-through; }
+
+/* ---- Edits-card lifecycle checklist: Apply / Verify / Diagnose & Fix as a
+   live todo list, not just buttons -- roadmap-adjacent feature request:
+   "show the todos (progress) to complete the task and strike off once the
+   task is completed (like claude or cursor)". Distinct from the
+   .assistant-steps log above (which only covers the initial model call +
+   review); this one tracks the rest of a task's real lifecycle: applying
+   the proposed files, running verification, and diagnosing a failure. ---- */
+.edits-card-checklist {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 2px 0 10px; padding: 8px 10px;
+  background: #14151a; border: 1px solid #202126; border-radius: 6px;
+}
+.edits-checklist-row { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.edits-checklist-marker { flex-shrink: 0; width: 13px; text-align: center; font-weight: 700; }
+.edits-checklist-marker.pending { color: #4a4b52; }
+.edits-checklist-marker.in_progress { color: #7c9eff; }
+.edits-checklist-marker.completed { color: #6fcf73; }
+.edits-checklist-marker.failed { color: #e0616b; }
+.edits-checklist-marker.skipped { color: #6d6e75; }
+.edits-checklist-label { color: #cfd0d4; }
+.edits-checklist-row.completed .edits-checklist-label { color: #6d7079; text-decoration: line-through; }
+.edits-checklist-row.failed .edits-checklist-label { color: #e0616b; }
+.edits-checklist-row.skipped .edits-checklist-label { color: #6d6e75; text-decoration: line-through; }
 .assistant-msg.streaming .assistant-output { margin-top: 6px; white-space: pre-wrap; }
 
 /* ---- Settings view (Phase 5: command guard policy + audit log) ---- */

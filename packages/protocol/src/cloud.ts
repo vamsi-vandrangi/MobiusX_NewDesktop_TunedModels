@@ -425,6 +425,8 @@ export interface TaskDetail extends TaskSummary {
   edits?: ProposedEdit[];
   /** Present once a build-mode task's edits have been through the second-pass Reviewer agent (see EditReview above). Never present without `edits` also being present. */
   review?: EditReview;
+  /** Real token usage for this task's model call, when the provider reported it (see TokenUsage above). Absent for the demo runner and for providers/responses that didn't include usage data. */
+  usage?: TokenUsage;
 }
 
 export interface ListTasksResponse {
@@ -432,12 +434,32 @@ export interface ListTasksResponse {
 }
 
 /** Streamed over the /tasks/:id/stream WebSocket, and also what GET /tasks/:id's `steps`/`output`/`edits` are built from server-side. */
+/**
+ * Real token consumption for one task's model call, read back from the
+ * provider's own response (never estimated/guessed) -- feature request:
+ * "alert the token limits (50%, 75%, 90% consumed) to the user while
+ * working". `contextWindow` is a best-effort lookup by model id (see
+ * apps/cloud-agent-gateway/src/runners/contextWindows.ts) -- absent when
+ * the model isn't in that table, so the UI can honestly show token counts
+ * without a made-up percentage rather than compute one against the wrong
+ * limit. Absent entirely for the demo runner (no real provider call, so no
+ * real usage to report) and for any provider response that didn't include
+ * usage data.
+ */
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  contextWindow?: number;
+}
+
 export type TaskEvent =
   | { type: "step"; step: TaskStep }
   | { type: "output"; delta: string }
   | { type: "edits"; edits: ProposedEdit[] }
   | { type: "review"; review: EditReview }
   | { type: "status"; status: TaskStatus }
+  | { type: "usage"; usage: TokenUsage }
   | { type: "error"; message: string }
   | { type: "done" };
 

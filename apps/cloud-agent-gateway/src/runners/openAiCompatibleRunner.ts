@@ -2,6 +2,7 @@ import type { ModelOption, ModelProvider, ProposedEdit, TaskEvent } from "@mobiu
 import type { AgentRunner, RunnerInput } from "./types.js";
 import { EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
 import { runPersonaReview } from "./personas.js";
+import { contextWindowFor } from "./contextWindows.js";
 
 // How much of a model's "reasoning" trace to show as a fallback when it
 // never produces real `content` (see streamOpenAiSse's reasoning handling
@@ -132,6 +133,12 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
               { role: "user", content: input.prompt },
             ],
             stream: true,
+            // Asks the provider to send a final SSE chunk carrying real
+            // token counts (see streamOpenAiSse's onUsage) -- OpenAI/
+            // OpenRouter/Groq all honor this; a provider that doesn't just
+            // omits the field and this task's usage goes unreported
+            // (honest absence, not a guess -- see TokenUsage's doc comment).
+            stream_options: { include_usage: true },
           }),
         });
 
@@ -155,6 +162,10 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
         const onReasoning = (chunk: string) => {
           reasoningText += chunk;
         };
+        let capturedUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+        const onUsage = (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => {
+          capturedUsage = usage;
+        };
 
         let sawText: boolean;
         if (MODES_WITH_STRUCTURED_EDITS.has(input.mode)) {
@@ -164,26 +175,31 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
               fullText += delta;
             },
             onReasoning,
+            onUsage,
           );
           if (!sawText) {
             emit({ type: "output", delta: reasoningFallbackMessage(reasoningText) });
           } else {
-            let { prose, edits, droppedCount } = parseBuildResponse(fullText, input);
+            let { prose, edits, droppedCount, hadMarker } = parseBuildResponse(fullText, input);
 
             // Real, observed failure mode (Sept 2026: openai/gpt-oss-120b via
             // Groq, asked to build a payroll app) distinct from the "wrong
             // format" case above -- the model wrote a plausible one-paragraph
             // *description* of what it would build and then simply stopped,
             // never attempting EDITS_MARKER at all. edits.length === 0 AND
-            // droppedCount === 0 is exactly that signature (a marker that was
-            // present but had unusable entries already sets droppedCount, so
-            // this only fires when nothing was attempted). One automatic,
-            // narrowly-scoped retry -- handing the model its own prior answer
-            // and explicitly demanding just the missing block -- costs one
-            // extra request but recovers the (common) case where the model
-            // merely forgot the format rather than being incapable of it.
+            // droppedCount === 0 AND !hadMarker is exactly that signature (a
+            // marker that was present but had unusable entries already sets
+            // droppedCount; a marker present with a deliberate empty array --
+            // the pre-flight-clarification case, see the BUILD prompt's
+            // {"edits": []} instruction -- sets hadMarker but proposes
+            // nothing, and should NOT be treated as a failure to retry away).
+            // One automatic, narrowly-scoped retry -- handing the model its
+            // own prior answer and explicitly demanding just the missing
+            // block -- costs one extra request but recovers the (common)
+            // case where the model merely forgot the format rather than
+            // being incapable of it.
             let retried = false;
-            if (edits.length === 0 && droppedCount === 0) {
+            if (edits.length === 0 && droppedCount === 0 && !hadMarker) {
               retried = true;
               const retry = await retryForEdits(config, key, systemPrompt, input, fullText);
               if (retry) {
@@ -195,10 +211,20 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
 
             emit({ type: "output", delta: prose || fullText });
             if (edits.length > 0) emit({ type: "edits", edits });
-            if (edits.length === 0 && droppedCount === 0) {
+            if (edits.length === 0 && droppedCount === 0 && !hadMarker) {
               emit({
                 type: "output",
                 delta: `\n\n(No file changes were proposed${retried ? " even after asking again" : ""} — ${config.provider}/${model} produced a plan or description instead of the required file-edit format. This happens on some free models some of the time; try again, be more explicit (e.g. "write the complete files now"), or switch models in Settings.)`,
+              });
+            } else if (edits.length === 0 && hadMarker && droppedCount === 0) {
+              // The pre-flight-clarification case: the model deliberately
+              // asked questions instead of proposing files (its questions
+              // are already in `prose`/the output above) -- a plain,
+              // accurate note instead of the "this happens on some free
+              // models" apology, which would be actively misleading here.
+              emit({
+                type: "output",
+                delta: `\n\n(Waiting on your answer above before proposing any files — reply in this conversation and ask again, or just say "go ahead" once you've decided.)`,
               });
             }
             if (droppedCount > 0) {
@@ -231,10 +257,22 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
               emit({ type: "output", delta });
             },
             onReasoning,
+            onUsage,
           );
           if (!sawText) emit({ type: "output", delta: reasoningFallbackMessage(reasoningText) });
         }
 
+        if (capturedUsage) {
+          emit({
+            type: "usage",
+            usage: {
+              promptTokens: capturedUsage.prompt_tokens,
+              completionTokens: capturedUsage.completion_tokens,
+              totalTokens: capturedUsage.total_tokens,
+              contextWindow: contextWindowFor(model),
+            },
+          });
+        }
         emit({ type: "step", step: { ...step, status: "completed", completedAt: new Date().toISOString() } });
         emit({ type: "status", status: "completed" });
         emit({ type: "done" });
@@ -437,6 +475,7 @@ export async function streamOpenAiSse(
   body: ReadableStream<Uint8Array>,
   onText: (text: string) => void,
   onReasoning?: (text: string) => void,
+  onUsage?: (usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number }) => void,
 ): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -462,6 +501,7 @@ export async function streamOpenAiSse(
         let parsed: {
           choices?: { delta?: { content?: string; reasoning?: string }; finish_reason?: string }[];
           error?: { message?: string };
+          usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
         };
         try {
           parsed = JSON.parse(dataStr);
@@ -479,6 +519,23 @@ export async function streamOpenAiSse(
         }
         const reasoning = parsed.choices?.[0]?.delta?.reasoning;
         if (reasoning && onReasoning) onReasoning(reasoning);
+        // The chunk carrying `usage` (requested via stream_options above)
+        // has an EMPTY choices array per the OpenAI spec -- it's a
+        // trailer, not a content delta -- so this is checked unconditionally,
+        // not nested inside the `text`/`reasoning` handling above.
+        if (
+          onUsage &&
+          parsed.usage &&
+          typeof parsed.usage.prompt_tokens === "number" &&
+          typeof parsed.usage.completion_tokens === "number" &&
+          typeof parsed.usage.total_tokens === "number"
+        ) {
+          onUsage({
+            prompt_tokens: parsed.usage.prompt_tokens,
+            completion_tokens: parsed.usage.completion_tokens,
+            total_tokens: parsed.usage.total_tokens,
+          });
+        }
       }
     }
   } finally {

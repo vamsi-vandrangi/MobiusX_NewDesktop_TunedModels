@@ -151,6 +151,12 @@
               <div id="file-tree"><div class="debug-empty">Open a project to see its files.</div></div>
             </div>
 
+            <!-- Resizable 3-pane workspace: drag to grow/shrink the file
+                 tree and assistant panels (center-panel always fills what's
+                 left). Widths persist per-user across restarts -- see
+                 initPaneResize() in renderer.js. -->
+            <div class="pane-resize-handle" data-resize-target="tree-panel" title="Drag to resize"></div>
+
             <div id="center-panel">
               <div id="tabs-bar"></div>
               <div id="editor-panel" class="panel">
@@ -199,6 +205,7 @@
               </div>
             </div>
 
+            <div class="pane-resize-handle" data-resize-target="assistant-embedded" data-resize-reverse title="Drag to resize"></div>
             <div class="assistant-panel" id="assistant-embedded"></div>
           </div>
         </section>

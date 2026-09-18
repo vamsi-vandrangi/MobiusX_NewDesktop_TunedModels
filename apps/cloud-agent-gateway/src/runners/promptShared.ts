@@ -15,6 +15,20 @@ import type { RunnerInput } from "./types.js";
 /** Marks the boundary between the model's human-readable summary and the machine-readable edits JSON block in a build/spec-mode response. Never shown to the user. */
 export const EDITS_MARKER = "===MOBIUSX_EDITS===";
 
+/**
+ * Standing quality rule appended to every mode that actually writes
+ * application code (build, fix, database, testing, devops, auth) — feature
+ * request: "always generate the project code that human engineers can
+ * debug the code". Not a new capability, a prompt-level constraint: code
+ * that's clever/compressed/unlabeled is harder for a human to pick up when
+ * something goes wrong than code that's ordinary and legible, and this
+ * platform's whole premise is a human reviewing and applying every edit
+ * (see the Apply/Verify/Diagnose flow), not code nobody but the model can
+ * follow.
+ */
+export const DEBUGGABLE_CODE_RULE =
+  "Write code a human engineer can actually debug: clear, descriptive names (no single-letter variables outside trivial loop counters), small functions with a single obvious purpose, comments on non-obvious logic (why, not what), consistent formatting/style with the rest of this project, and explicit error handling with informative messages instead of silently swallowing failures. Prefer the straightforward, readable approach over a clever one-liner — this code will be read, run, and fixed by a person, not just executed.";
+
 /** Modes whose response is buffered and parsed for a structured ProposedEdit[] block, rather than streamed live token-by-token. */
 export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture", "testing", "devops", "auth"]);
 
@@ -80,9 +94,9 @@ function repairOverEscapedContent(content: string): string {
 export function parseBuildResponse(
   fullText: string,
   input: RunnerInput,
-): { prose: string; edits: ProposedEdit[]; droppedCount: number } {
+): { prose: string; edits: ProposedEdit[]; droppedCount: number; hadMarker: boolean } {
   const markerIdx = fullText.indexOf(EDITS_MARKER);
-  if (markerIdx === -1) return { prose: fullText, edits: [], droppedCount: 0 };
+  if (markerIdx === -1) return { prose: fullText, edits: [], droppedCount: 0, hadMarker: false };
 
   const prose = fullText.slice(0, markerIdx).trim();
   const rest = fullText.slice(markerIdx + EDITS_MARKER.length);
@@ -95,7 +109,7 @@ export function parseBuildResponse(
   try {
     parsed = JSON.parse(jsonText);
   } catch {
-    return { prose, edits: [], droppedCount: 0 };
+    return { prose, edits: [], droppedCount: 0, hadMarker: true };
   }
 
   const rawEdits =
@@ -136,7 +150,7 @@ export function parseBuildResponse(
     edits.push({ path: e.path, action: e.action, content: repairOverEscapedContent(e.content) });
   }
 
-  return { prose, edits, droppedCount };
+  return { prose, edits, droppedCount, hadMarker: true };
 }
 
 /**
@@ -222,6 +236,7 @@ export function systemPromptFor(input: RunnerInput): string {
 
     return steering + [
       "You are the MobiusX Desktop AI Assistant in FIX mode (Autonomous Build/Test/Fix Loop, roadmap Phase 6) -- diagnosing and repairing a REAL verification failure, not responding to a free-form feature request.",
+    DEBUGGABLE_CODE_RULE,
       "Your job is to propose the MINIMAL set of file edits that fix the failing step(s) below. Do not refactor, rename, reformat, or \"improve\" anything unrelated to the failure -- a fix that changes more than it needs to makes the next verification pass harder to trust, not easier.",
       "If the evidence below is insufficient to diagnose a real fix (e.g. the output doesn't point at a specific file or line), say so plainly in your prose summary and propose your best-supported hypothesis rather than guessing silently.",
       "CRITICAL OUTPUT FORMAT -- follow this exactly, even for a multi-file fix:",
@@ -259,6 +274,7 @@ export function systemPromptFor(input: RunnerInput): string {
       .map((f) => f.relPath);
     return steering + [
       "You are the MobiusX Desktop AI Assistant in DATABASE mode (Database Engineering, roadmap Phase 8) -- proposing a schema, its forward migration, and ORM model changes as ONE coherent set, not scattered files inside a generic build request.",
+    DEBUGGABLE_CODE_RULE,
       "First, inspect the files shown to you below (if any) for an EXISTING database/ORM convention already used in this project -- an ORM's model classes (e.g. SQLModel/SQLAlchemy/Prisma/Sequelize/TypeORM/Mongoose), an existing schema file, or a migrations directory. If you find one, follow that exact convention and file layout. If you find none, default to plain SQL DDL for PostgreSQL under \"db/schema.sql\" and a matching forward migration under \"db/migrations/<NNN>_<slug>.sql\" (zero-padded 3-digit NNN, incrementing from the highest existing migration number you were shown, or 001 if none) -- and say so explicitly in your prose summary (e.g. \"No existing ORM or schema convention was found, so this assumes plain PostgreSQL.\"). Never silently switch technology away from what the project already evidently uses.",
       "Every table you add or change in the schema/migration MUST have a corresponding entry in the ORM model file when this project uses an ORM -- never update one layer and leave the other stale. State the entities and their relationships in one to two prose sentences (a brief domain model) before the file list, so the schema's intent is reviewable on its own, not just its SQL.",
       "If the request requires a destructive operation (DROP TABLE, DROP COLUMN, TRUNCATE, a non-additive column type change), say so explicitly and plainly in your prose summary as a risk -- this codebase has no migration rollback/checkpoint mechanism yet (see roadmap Phase 15), so a destructive migration cannot be undone automatically once applied.",
@@ -363,6 +379,7 @@ export function systemPromptFor(input: RunnerInput): string {
       .map((f) => f.relPath);
     return steering + [
       "You are the MobiusX Desktop AI Assistant in TESTING mode (Testing Engine, roadmap Phase 10) -- writing real, runnable test file(s) for the code shown to you below.",
+    DEBUGGABLE_CODE_RULE,
       "",
       "THE #1 RULE, non-negotiable: only write tests against functions, classes, routes, or exports that ACTUALLY APPEAR in the file content shown to you below -- never invent a function, parameter, or return shape you weren't shown. If you can't see what a piece of code does, test its actually-visible behavior, don't guess at intent beyond that.",
       "",
@@ -431,6 +448,7 @@ export function systemPromptFor(input: RunnerInput): string {
     const dbComponents = (devopsEvidence?.projectContext.components ?? []).filter((c) => c.category === "database");
     return steering + [
       "You are the MobiusX Desktop AI Assistant in DEVOPS mode (DevOps/Infrastructure Generation, roadmap Phase 14) -- proposing a Dockerfile per real detected service, a root docker-compose.yml wiring them together, and a CI pipeline file, all grounded strictly in the evidence bundle below.",
+    DEBUGGABLE_CODE_RULE,
       "",
       "THE #1 RULE, non-negotiable: every Dockerfile, compose service, and CI step you propose MUST trace back to a real entry in the evidence bundle below (a detected component + its real location, an existing infra file, or a real verification command). Never invent a service, port, database, or build/test command the evidence doesn't actually show.",
       "",
@@ -497,6 +515,7 @@ export function systemPromptFor(input: RunnerInput): string {
     const hasBackend = (authEvidence?.backendComponents.length ?? 0) > 0;
     return steering + [
       "You are the MobiusX Desktop AI Assistant in AUTH mode (Auth/RBAC Engineering, roadmap Phase 19) -- adding or extending JWT-based authentication and role-based authorization for this project's real detected backend, grounded strictly in the evidence bundle below.",
+    DEBUGGABLE_CODE_RULE,
       "",
       "THE #1 RULE, non-negotiable: every middleware, route, and dependency you propose MUST trace back to this project's REAL detected backend framework and location shown in the evidence bundle below. Never invent a backend, framework, or file location the evidence doesn't actually show.",
       "",
@@ -541,6 +560,22 @@ export function systemPromptFor(input: RunnerInput): string {
 
   return steering + [
     "You are the MobiusX Desktop AI Assistant in BUILD mode.",
+    DEBUGGABLE_CODE_RULE,
+    // Optional pre-flight clarification (feature request: "MobiusX.ai
+    // Desktop App should have interactivity (ask questions, and give
+    // recommendations) similar to Claude before implementing the code").
+    // Deliberately narrow and opt-in per request, not a mandatory step
+    // before every Build task -- most "build/add/create X" requests are
+    // clear enough to act on directly, and a model that stops to ask
+    // questions on every obvious request would just slow the user down.
+    // {"edits": []} (marker present, empty array) is the signal used here
+    // rather than omitting the marker entirely, because the marker being
+    // absent already means something else in this prompt: the model
+    // failed to follow the required format at all (see the retry-and-
+    // apologize handling in each runner). This keeps "I'm deliberately not
+    // proposing files yet, see my questions above" distinguishable from
+    // "I forgot the format" -- the UI treats them very differently.
+    `Before writing any files, check whether this request actually gives you enough to build it correctly. If it is genuinely ambiguous or leaves out a decision a competent engineer would ask about before starting -- which of several reasonable approaches (auth strategy, database choice, UI layout), what fields a form/model needs, which existing page or flow this should plug into, and similar -- do NOT guess. Instead, write 2-4 short, specific clarifying questions in your prose response (and a brief recommendation for what you'd default to, if you have one), then still emit ${EDITS_MARKER} followed by a fenced json block containing exactly {"edits": []}. Once the user answers (their reply arrives as a follow-up in this same conversation), build normally from their answer. Reserve this for requests that are ACTUALLY ambiguous -- most concrete "build/add/create X" requests, especially ones matching a common, well-understood pattern, should go straight to writing files as usual. Do not ask questions just to be cautious, to hedge, or to avoid committing to a reasonable interpretation.`,
     // Reinforced Sept 2026 after real evidence (openai/gpt-oss-120b via
     // Groq, asked to build a multi-file Next.js + FastAPI + SQLite app):
     // a model can be perfectly capable of proposing concrete file changes

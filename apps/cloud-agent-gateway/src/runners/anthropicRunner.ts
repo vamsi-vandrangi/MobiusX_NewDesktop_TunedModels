@@ -3,6 +3,7 @@ import type { AgentRunner, RunnerInput } from "./types.js";
 import { EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
 import { parseReview, runPersonaReview } from "./personas.js";
 import { listAllTools, callMcpTool, toAnthropicToolDefs } from "@mobiusx/mcp-client";
+import { contextWindowFor } from "./contextWindows.js";
 
 // Re-exported so existing imports (test/anthropicRunner.test.ts) keep working
 // unchanged now that the underlying implementation lives in promptShared.ts
@@ -148,15 +149,34 @@ export const anthropicRunner: AgentRunner = {
           throw new Error("Anthropic API response had no body to stream");
         }
 
+        let capturedUsage: { inputTokens: number; outputTokens: number } | undefined;
+        const onUsage = (usage: { inputTokens: number; outputTokens: number }) => {
+          capturedUsage = usage;
+        };
         if (MODES_WITH_STRUCTURED_EDITS.has(input.mode)) {
           let fullText = "";
-          const sawText = await streamSse(res.body, (delta) => {
-            fullText += delta;
-          });
+          const sawText = await streamSse(
+            res.body,
+            (delta) => {
+              fullText += delta;
+            },
+            onUsage,
+          );
           await finishStructuredEdits(fullText, sawText);
         } else {
-          const sawText = await streamSse(res.body, (delta) => emit({ type: "output", delta }));
+          const sawText = await streamSse(res.body, (delta) => emit({ type: "output", delta }), onUsage);
           if (!sawText) emit({ type: "output", delta: "(model returned no text content)" });
+        }
+        if (capturedUsage) {
+          emit({
+            type: "usage",
+            usage: {
+              promptTokens: capturedUsage.inputTokens,
+              completionTokens: capturedUsage.outputTokens,
+              totalTokens: capturedUsage.inputTokens + capturedUsage.outputTokens,
+              contextWindow: contextWindowFor(model),
+            },
+          });
         }
       }
 
@@ -338,11 +358,27 @@ async function callAnthropicNonStreamed(apiKey: string, model: string, systemPro
  * seen at all, so the caller can fall back to a placeholder if not.
  * See https://docs.claude.com/en/api/messages-streaming for the event shapes.
  */
-async function streamSse(body: ReadableStream<Uint8Array>, onText: (text: string) => void): Promise<boolean> {
+async function streamSse(
+  body: ReadableStream<Uint8Array>,
+  onText: (text: string) => void,
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void,
+): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let sawText = false;
+  // Anthropic reports usage across two event types: `message_start` carries
+  // the real input_tokens once, up front; `message_delta` carries a
+  // cumulative output_tokens that updates as the response streams. Track
+  // both and re-report on every update -- the caller just keeps whatever
+  // it saw last, which by the time the stream ends is the final total.
+  let inputTokens: number | undefined;
+  let outputTokens: number | undefined;
+  const reportUsage = () => {
+    if (onUsage && inputTokens !== undefined && outputTokens !== undefined) {
+      onUsage({ inputTokens, outputTokens });
+    }
+  };
 
   try {
     while (true) {
@@ -357,7 +393,13 @@ async function streamSse(body: ReadableStream<Uint8Array>, onText: (text: string
         const dataLine = rawEvent.split("\n").find((line) => line.startsWith("data:"));
         if (!dataLine) continue;
 
-        let parsed: { type?: string; delta?: { type?: string; text?: string }; error?: { message?: string } };
+        let parsed: {
+          type?: string;
+          delta?: { type?: string; text?: string };
+          error?: { message?: string };
+          message?: { usage?: { input_tokens?: number } };
+          usage?: { output_tokens?: number };
+        };
         try {
           parsed = JSON.parse(dataLine.slice(5).trim());
         } catch {
@@ -367,6 +409,12 @@ async function streamSse(body: ReadableStream<Uint8Array>, onText: (text: string
         if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta" && parsed.delta.text) {
           onText(parsed.delta.text);
           sawText = true;
+        } else if (parsed.type === "message_start" && typeof parsed.message?.usage?.input_tokens === "number") {
+          inputTokens = parsed.message.usage.input_tokens;
+          reportUsage();
+        } else if (parsed.type === "message_delta" && typeof parsed.usage?.output_tokens === "number") {
+          outputTokens = parsed.usage.output_tokens;
+          reportUsage();
         } else if (parsed.type === "error") {
           throw new Error(parsed.error?.message ?? "Anthropic stream reported an error");
         }

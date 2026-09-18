@@ -165,6 +165,16 @@ async function createWindow() {
     // via app.dock.setIcon since that's the API macOS actually reads from
     // in unpackaged/dev-mode runs.
     icon: ICON_PATH,
+    // Electron defaults this to false on macOS, meaning a click on the
+    // window while it's NOT the frontmost app only focuses/activates the
+    // window and does not reach the web content -- the user has to click
+    // a second time for the button/tab they clicked to actually do
+    // anything. That's a real, reported bug: switch to another app (the
+    // embedded terminal, a browser, an editor) and back, then click a
+    // button here as your first action, and nothing visibly happens.
+    // true makes the very first click both focus the window AND register
+    // normally, matching how most native macOS apps behave.
+    acceptsFirstMouse: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       additionalArguments: [

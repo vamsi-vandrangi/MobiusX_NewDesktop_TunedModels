@@ -1471,6 +1471,7 @@ function buildEditsCard(edits, taskProjectPath, review) {
   card.className = "edits-card";
   card.innerHTML = `
     <div class="edits-card-head">Proposed changes — ${edits.length} file${edits.length === 1 ? "" : "s"}</div>
+    <div class="edits-card-checklist"></div>
     <div class="edits-card-review">${review ? renderReviewBannerHtml(review) : ""}</div>
     ${
       projectMismatch
@@ -1489,6 +1490,32 @@ function buildEditsCard(edits, taskProjectPath, review) {
     <div class="browser-validate-results" hidden></div>
   `;
   const list = card.querySelector(".edits-card-list");
+
+  // Lifecycle todo list (feature request: "show the todos (progress) to
+  // complete the task and strike off once completed, like Claude or
+  // Cursor"). Distinct from the .assistant-steps log (which only covers
+  // the initial model call + review) -- this tracks what's actually left
+  // to DO with this proposed change: apply it, verify it, and (only if
+  // verification fails) diagnose/fix it. Seeded upfront so the user sees
+  // the whole plan, not just a retroactive log of what already happened.
+  const checklistEl = card.querySelector(".edits-card-checklist");
+  const checklistRows = new Map(); // label -> row element
+  function setChecklistStep(label, status) {
+    let row = checklistRows.get(label);
+    if (!row) {
+      row = document.createElement("div");
+      row.innerHTML = `<span class="edits-checklist-marker"></span><span class="edits-checklist-label">${escapeHtml(label)}</span>`;
+      checklistEl.appendChild(row);
+      checklistRows.set(label, row);
+    }
+    row.className = `edits-checklist-row ${status}`;
+    const marker = row.querySelector(".edits-checklist-marker");
+    marker.className = `edits-checklist-marker ${status}`;
+    marker.textContent =
+      status === "completed" ? "✓" : status === "failed" ? "✗" : status === "skipped" ? "–" : status === "in_progress" ? "…" : "○";
+  }
+  setChecklistStep("Apply changes", "pending");
+  setChecklistStep("Run verification", "pending");
 
   // Project Understanding + Specification Engine (roadmap Phase 7, source
   // requirement §6): Spec mode now emits a structured .mobiusx/specs/*.json
@@ -1588,6 +1615,7 @@ function buildEditsCard(edits, taskProjectPath, review) {
     }
     applyBtn.disabled = true;
     applyBtn.textContent = "Applying…";
+    setChecklistStep("Apply changes", "in_progress");
     try {
       const { results, hookResults } = await api("/fs/apply-edits", { method: "POST", body: JSON.stringify({ edits }) });
       const appliedCount = results.filter((r) => r.status === "applied").length;
@@ -1654,11 +1682,20 @@ function buildEditsCard(edits, taskProjectPath, review) {
       if (appliedCount > 0) {
         verifyBtn.hidden = false;
         browserValidateBtn.hidden = false;
+        setChecklistStep("Apply changes", "completed");
+      } else {
+        // every file was skipped (e.g. CREATE-vs-existing-file safety, or a
+        // project mismatch caught late) -- nothing to verify off the back
+        // of an apply that didn't actually change anything.
+        setChecklistStep("Apply changes", "failed");
+        setChecklistStep("Run verification", "skipped");
       }
     } catch (err) {
       applyBtn.disabled = false;
       applyBtn.textContent = "Apply";
       resultEl.textContent = `Failed: ${err.message}`;
+      setChecklistStep("Apply changes", "failed");
+      setChecklistStep("Run verification", "skipped");
     }
   });
 
@@ -1692,6 +1729,10 @@ function buildEditsCard(edits, taskProjectPath, review) {
       diagnoseBtn.hidden = false;
       diagnoseBtn.disabled = false;
       diagnoseBtn.textContent = "Diagnose & Fix";
+      // Only added to the todo list once it's actually relevant (a real
+      // failure exists to diagnose) -- most tasks verify clean on the
+      // first try and never need this row at all.
+      if (!checklistRows.has("Diagnose & Fix")) setChecklistStep("Diagnose & Fix", "pending");
     } else {
       diagnoseBtn.hidden = true;
     }
@@ -1699,6 +1740,7 @@ function buildEditsCard(edits, taskProjectPath, review) {
   verifyBtn.addEventListener("click", async () => {
     verifyBtn.disabled = true;
     verifyBtn.textContent = "Verifying…";
+    setChecklistStep("Run verification", "in_progress");
     verifyResultsEl.hidden = false;
     verifyResultsEl.innerHTML = `<div class="verify-pending">Running the project's build/test scripts…</div>`;
     lastFailingVerifySteps = [];
@@ -1707,7 +1749,9 @@ function buildEditsCard(edits, taskProjectPath, review) {
       const result = await api("/verify", { method: "POST" });
       if (result.overall === "no-verification-available") {
         verifyResultsEl.innerHTML = `<div class="verify-none">No build/test/lint/typecheck script found in this project's package.json — nothing to verify.</div>`;
+        setChecklistStep("Run verification", "skipped");
       } else {
+        setChecklistStep("Run verification", result.overall === "passed" ? "completed" : "failed");
         const passedCount = result.steps.filter((s) => s.status === "passed").length;
         verifyResultsEl.innerHTML = `
           <div class="verify-summary ${result.overall}">${result.overall === "passed" ? "✓" : "✗"} Verification ${result.overall} — ${passedCount}/${result.steps.length} step(s) passed</div>
@@ -1741,6 +1785,7 @@ function buildEditsCard(edits, taskProjectPath, review) {
       }
     } catch (err) {
       verifyResultsEl.innerHTML = `<div class="verify-none">Verification failed to run: ${escapeHtml(err.message)}</div>`;
+      setChecklistStep("Run verification", "failed");
     }
     verifyBtn.disabled = false;
     verifyBtn.textContent = "Run verification again";
@@ -1750,6 +1795,11 @@ function buildEditsCard(edits, taskProjectPath, review) {
   browserValidateBtn.addEventListener("click", async () => {
     browserValidateBtn.disabled = true;
     browserValidateBtn.textContent = "Validating…";
+    // Added to the todo list lazily (on first click), not seeded upfront
+    // like Apply/Verify -- a lot of projects have no preview running yet,
+    // making this an opt-in extra evidence source rather than a standard
+    // step every task needs.
+    setChecklistStep("Run browser validation", "in_progress");
     browserValidateResultsEl.hidden = false;
     browserValidateResultsEl.innerHTML = `<div class="verify-pending">Driving the running preview with a real browser…</div>`;
     lastFailingBrowserSteps = [];
@@ -1758,7 +1808,9 @@ function buildEditsCard(edits, taskProjectPath, review) {
       const result = await api("/browser-validate", { method: "POST" });
       if (result.overall === "no-preview-running") {
         browserValidateResultsEl.innerHTML = `<div class="verify-none">${escapeHtml(result.previewUnavailableReason || "No preview is running yet.")}</div>`;
+        setChecklistStep("Run browser validation", "skipped");
       } else {
+        setChecklistStep("Run browser validation", result.overall === "passed" ? "completed" : "failed");
         const passedCount = result.steps.filter((s) => s.status === "passed").length;
         browserValidateResultsEl.innerHTML = `
           <div class="verify-summary ${result.overall}">${result.overall === "passed" ? "✓" : "✗"} Browser validation ${result.overall} — ${passedCount}/${result.steps.length} page(s) passed (starting from ${escapeHtml(result.previewUrl || "")})</div>
@@ -1795,6 +1847,7 @@ function buildEditsCard(edits, taskProjectPath, review) {
       }
     } catch (err) {
       browserValidateResultsEl.innerHTML = `<div class="verify-none">Browser validation failed to run: ${escapeHtml(err.message)}</div>`;
+      setChecklistStep("Run browser validation", "failed");
     }
     browserValidateBtn.disabled = false;
     browserValidateBtn.textContent = "Run browser validation again";
@@ -1816,6 +1869,7 @@ function buildEditsCard(edits, taskProjectPath, review) {
     if (!currentProjectPath || !cloudBaseUrl || lastFailingSteps.length === 0) return;
     diagnoseBtn.disabled = true;
     diagnoseBtn.textContent = "Diagnosing…";
+    setChecklistStep("Diagnose & Fix", "in_progress");
     const pendingEl = document.createElement("div");
     pendingEl.className = "verify-pending";
     pendingEl.textContent = "Diagnosing the verification failure and drafting a fix…";
@@ -1863,6 +1917,12 @@ function buildEditsCard(edits, taskProjectPath, review) {
       prefix.textContent = `[runner: ${detail.runner}${detail.model ? " / " + detail.model : ""}]${detail.modelNote ? ` — ${detail.modelNote}` : ""}`;
       verifyResultsEl.appendChild(prefix);
       if (detail.edits && detail.edits.length > 0) {
+        // "Completed" here means "a concrete fix was proposed and is ready
+        // to apply", not "the bug is confirmed fixed" -- that confirmation
+        // is the NESTED card's own "Apply changes"/"Run verification" rows
+        // (a fresh checklist instance from the same buildEditsCard()), so
+        // the real proof-of-fix still shows up as its own todo list.
+        setChecklistStep("Diagnose & Fix", "completed");
         const nestedCard = buildEditsCard(detail.edits, detail.projectPath, detail.review);
         verifyResultsEl.appendChild(nestedCard);
         // "auto" autonomy mode (roadmap Phase 22): fetched fresh on every
@@ -1884,9 +1944,11 @@ function buildEditsCard(edits, taskProjectPath, review) {
           ? `No concrete fix was proposed. Runner said: ${detail.output.trim().slice(0, 400)}`
           : "No concrete fix was proposed.";
         verifyResultsEl.appendChild(none);
+        setChecklistStep("Diagnose & Fix", "failed");
       }
     } catch (err) {
       pendingEl.textContent = `Diagnose & Fix failed: ${err.message}`;
+      setChecklistStep("Diagnose & Fix", "failed");
     }
     diagnoseBtn.disabled = false;
     diagnoseBtn.textContent = "Diagnose & Fix";
@@ -2044,6 +2106,14 @@ function createAssistantPanel(container) {
   // different project — a fresh session starts a fresh conversation.
   let historyTurns = [];
   const MAX_HISTORY_TURNS = 12; // keep in sync with promptShared.ts's MAX_HISTORY_TURNS
+  // Token-limit alerts (feature request: "alert the token limits (50%,
+  // 75%, 90% consumed) to the user while working"). Each task's usage
+  // already reflects the whole conversation so far (history grows with
+  // every turn — see historyMessages() on the gateway side), so tracking
+  // the highest threshold already shown IN THIS PANEL is enough to alert
+  // once per threshold as the conversation grows, without re-alerting on
+  // every single message.
+  let maxUsageThresholdShown = 0;
 
   populateModelSelect(modelSelect, { includeAuto: true });
 
@@ -2055,6 +2125,34 @@ function createAssistantPanel(container) {
   function setStreamingIndicator(active) {
     activeStreamCount += active ? 1 : -1;
     titlebarIcon.classList.toggle("spinning", activeStreamCount > 0);
+  }
+
+  // Token-limit alerts. `usage` is TokenUsage from @mobiusx/protocol (see
+  // its doc comment) -- real counts read back from the provider's own
+  // response, never estimated. Silent when contextWindow is unknown (an
+  // Ollama-served local model, or a model this gateway's best-effort
+  // lookup table doesn't recognize) rather than computing a percentage
+  // against a guessed limit -- an honest "can't tell" beats a wrong number.
+  function showUsageAlertIfNeeded(usage) {
+    if (!usage.contextWindow) return;
+    const percent = Math.round((usage.totalTokens / usage.contextWindow) * 100);
+    for (const threshold of [90, 75, 50]) {
+      if (percent >= threshold && maxUsageThresholdShown < threshold) {
+        maxUsageThresholdShown = threshold;
+        const banner = document.createElement("div");
+        banner.className = `usage-alert usage-alert-${threshold}`;
+        const guidance =
+          threshold >= 90
+            ? "Consider starting a fresh task soon — replies can get slower, less accurate, or truncated as a model nears its context limit."
+            : threshold >= 75
+              ? "Getting close to this model's context limit — a fresh task will have more room once this one wraps up."
+              : "Just a heads up as this conversation grows.";
+        banner.innerHTML = `⚠ This conversation has used ~${percent}% of this model's context window (${usage.totalTokens.toLocaleString()} / ${usage.contextWindow.toLocaleString()} tokens). ${escapeHtml(guidance)}`;
+        feed.appendChild(banner);
+        feed.scrollTop = feed.scrollHeight;
+        break; // only the single highest threshold just crossed, not every one at once
+      }
+    }
   }
 
   modeBtns.forEach((btn) => {
@@ -2134,13 +2232,18 @@ function createAssistantPanel(container) {
         for (const step of task.steps) {
           const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "…" : "·";
           const line = document.createElement("div");
-          line.className = "assistant-step-line";
-          line.innerHTML = `<span class="assistant-step-marker ${step.status}">${marker}</span>${escapeHtml(step.label)}`;
+          // .assistant-step-line carries the status class too (not just the
+          // marker span) so CSS can strike through the whole row's label
+          // once it's done -- a live todo list, not just a checkmark log.
+          line.className = `assistant-step-line ${step.status}`;
+          line.innerHTML = `<span class="assistant-step-marker ${step.status}">${marker}</span><span class="assistant-step-label">${escapeHtml(step.label)}</span>`;
           stepsEl.appendChild(line);
         }
 
         const bodyText = task.output || (task.status === "failed" ? (task.error ?? "") : "");
         outputEl.textContent = prefixLines.join("") + bodyText + (task.status === "cancelled" ? "\n[cancelled]" : "");
+
+        if (task.usage) showUsageAlertIfNeeded(task.usage);
 
         if (task.edits?.length && !div.querySelector(".edits-card")) {
           div.appendChild(buildEditsCard(task.edits, taskProjectPath, task.review));
@@ -3796,3 +3899,78 @@ document.getElementById("knowledge-search-btn")?.addEventListener("click", runKn
 document.getElementById("knowledge-search-input")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") runKnowledgeSearch();
 });
+
+// ============================================================
+// Resizable 3-pane Workspace (feature request: "the 3 pane view can be
+// increased or decreased width, user can drag to increase/decreased the
+// width"). tree-panel and assistant-embedded get a drag handle each;
+// center-panel is flex:1 so it always absorbs whatever the other two
+// give up or take. Widths persist across restarts the same way Recent
+// Projects does (localStorage — no cloud sync, this is a per-device UI
+// preference, not project data).
+// ============================================================
+const PANE_WIDTHS_KEY = "mobiusx.workspacePaneWidths";
+const PANE_MIN_WIDTH = 160;
+const PANE_MAX_WIDTH = 640;
+
+function loadPaneWidths() {
+  try {
+    return JSON.parse(localStorage.getItem(PANE_WIDTHS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function savePaneWidth(panelId, width) {
+  const widths = loadPaneWidths();
+  widths[panelId] = width;
+  try {
+    localStorage.setItem(PANE_WIDTHS_KEY, JSON.stringify(widths));
+  } catch {
+    // Best-effort — a failed save just means the width resets to default
+    // next launch, not worth surfacing to the user over a UI preference.
+  }
+}
+
+function initPaneResize() {
+  const saved = loadPaneWidths();
+  for (const [panelId, width] of Object.entries(saved)) {
+    const el = document.getElementById(panelId);
+    if (el) el.style.width = `${width}px`;
+  }
+
+  document.querySelectorAll(".pane-resize-handle").forEach((handle) => {
+    const targetId = handle.dataset.resizeTarget;
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    // tree-panel sits to the LEFT of its handle (dragging right grows it);
+    // assistant-embedded sits to the RIGHT of its handle (dragging LEFT
+    // grows it instead) — data-resize-reverse on that handle flips the sign.
+    const reverse = handle.hasAttribute("data-resize-reverse");
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      handle.classList.add("dragging");
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+      const startX = e.clientX;
+      const startWidth = target.getBoundingClientRect().width;
+      function onMove(moveEvent) {
+        const delta = moveEvent.clientX - startX;
+        const signedDelta = reverse ? -delta : delta;
+        const newWidth = Math.min(PANE_MAX_WIDTH, Math.max(PANE_MIN_WIDTH, startWidth + signedDelta));
+        target.style.width = `${newWidth}px`;
+      }
+      function onUp() {
+        handle.classList.remove("dragging");
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        savePaneWidth(targetId, Math.round(target.getBoundingClientRect().width));
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  });
+}
+initPaneResize();

@@ -155,11 +155,19 @@ export const ollamaRunner: AgentRunner = {
       }
 
       let sawText: boolean;
+      let capturedUsage: { promptTokens: number; completionTokens: number } | undefined;
+      const onUsage = (usage: { promptTokens: number; completionTokens: number }) => {
+        capturedUsage = usage;
+      };
       if (MODES_WITH_STRUCTURED_EDITS.has(input.mode)) {
         let fullText = "";
-        sawText = await streamOllamaNdjson(res.body, (delta) => {
-          fullText += delta;
-        });
+        sawText = await streamOllamaNdjson(
+          res.body,
+          (delta) => {
+            fullText += delta;
+          },
+          onUsage,
+        );
         if (!sawText) {
           emit({ type: "output", delta: "(model returned no text content)" });
         } else {
@@ -189,10 +197,23 @@ export const ollamaRunner: AgentRunner = {
           }
         }
       } else {
-        sawText = await streamOllamaNdjson(res.body, (delta) => emit({ type: "output", delta }));
+        sawText = await streamOllamaNdjson(res.body, (delta) => emit({ type: "output", delta }), onUsage);
         if (!sawText) emit({ type: "output", delta: "(model returned no text content)" });
       }
 
+      if (capturedUsage) {
+        emit({
+          type: "usage",
+          usage: {
+            promptTokens: capturedUsage.promptTokens,
+            completionTokens: capturedUsage.completionTokens,
+            totalTokens: capturedUsage.promptTokens + capturedUsage.completionTokens,
+            // No contextWindow: a local Ollama model's window depends on
+            // the user's own pull/Modelfile, not something this gateway
+            // can look up (see streamOllamaNdjson's comment above).
+          },
+        });
+      }
       emit({ type: "step", step: { ...step, status: "completed", completedAt: new Date().toISOString() } });
       emit({ type: "status", status: "completed" });
       emit({ type: "done" });
@@ -244,7 +265,11 @@ async function callOllamaNonStreamed(model: string, systemPrompt: string, userCo
  * `message.content` chunk until a final line with `"done": true`. Returns
  * whether any text content was seen.
  */
-export async function streamOllamaNdjson(body: ReadableStream<Uint8Array>, onText: (text: string) => void): Promise<boolean> {
+export async function streamOllamaNdjson(
+  body: ReadableStream<Uint8Array>,
+  onText: (text: string) => void,
+  onUsage?: (usage: { promptTokens: number; completionTokens: number }) => void,
+): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -262,7 +287,13 @@ export async function streamOllamaNdjson(body: ReadableStream<Uint8Array>, onTex
         buffer = buffer.slice(newlineIdx + 1);
         if (!line) continue;
 
-        let parsed: { message?: { content?: string }; error?: string; done?: boolean };
+        let parsed: {
+          message?: { content?: string };
+          error?: string;
+          done?: boolean;
+          prompt_eval_count?: number;
+          eval_count?: number;
+        };
         try {
           parsed = JSON.parse(line);
         } catch {
@@ -276,6 +307,20 @@ export async function streamOllamaNdjson(body: ReadableStream<Uint8Array>, onTex
         if (text) {
           onText(text);
           sawText = true;
+        }
+        // Ollama's final NDJSON line (done:true) carries real token counts
+        // for this local generation -- no context-window lookup applies
+        // here though (see contextWindowFor's doc comment: a local model's
+        // window depends on the user's own Modelfile/quantization, which
+        // this gateway has no way to know), so the UI shows raw counts for
+        // Ollama tasks without a percentage.
+        if (
+          parsed.done &&
+          onUsage &&
+          typeof parsed.prompt_eval_count === "number" &&
+          typeof parsed.eval_count === "number"
+        ) {
+          onUsage({ promptTokens: parsed.prompt_eval_count, completionTokens: parsed.eval_count });
         }
       }
     }
