@@ -48,7 +48,7 @@ export async function readProjectFile(projectRoot: string, relPath: string): Pro
   return { path: relPath, content, truncated };
 }
 
-async function pathExists(absPath: string): Promise<boolean> {
+export async function pathExists(absPath: string): Promise<boolean> {
   try {
     await access(absPath, constants.F_OK);
     return true;

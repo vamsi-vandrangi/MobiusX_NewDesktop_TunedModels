@@ -187,8 +187,71 @@ export interface AppliedEditResult {
 
 export interface ApplyEditsResponse {
   results: AppliedEditResult[];
+  /** The checkpoint automatically taken of every touched path's pre-edit state, immediately before this batch was written to disk -- see CheckpointEntry below. Always present (edits is validated non-empty). */
+  checkpointId: string;
   /** Present only when at least one "after-api-change" hook fired for this apply (see HookRule below) -- absent, not [], when no hooks were configured at all. */
   hookResults?: HookRunResult[];
+}
+
+/**
+ * Checkpoints / Rollback (roadmap Phase 15, source requirement §23): "a
+ * real restore-point mechanism... every autonomous phase after this one
+ * benefits from it... builds on audit-log (already tracks what changed;
+ * this phase adds 'and can undo it')."
+ *
+ * Deliberately NOT git-based -- gitOps.ts#isGitRepo already establishes
+ * that an open project is not guaranteed to be a git repo at all, so a
+ * git-only mechanism would leave non-git projects with no safety net,
+ * which defeats the point of "every autonomous phase benefits from it."
+ * Instead this is a dedicated, project-local, file-copy snapshot
+ * mechanism -- see apps/desktop-agent/src/checkpoints.ts for the storage
+ * design (.mobiusx/checkpoints/<id>/manifest.json + files/<relPath>),
+ * following the same project-local `.mobiusx/` convention steering
+ * (Phase 16) and specs (Phase 7) already use.
+ *
+ * One checkpoint is taken automatically for EVERY POST /fs/apply-edits
+ * batch, before applyEdits (fsOps.ts) writes anything -- covering every
+ * edit-producing mode (build/fix/database/architecture/testing/devops/
+ * spec) for free, since they all funnel through that one function. A
+ * checkpoint always covers the WHOLE batch it was taken for (never just
+ * the "destructive" subset), so "restore this checkpoint" has one
+ * consistent meaning: undo this entire apply, including any files it
+ * created.
+ */
+export interface CheckpointEntry {
+  path: string;
+  action: "modify" | "create";
+  /** True only for a "modify" of a file that already existed when the checkpoint was taken -- its pre-edit content is stored at files/<path> and can be restored. A "create" (or a "modify" that, honestly, had no prior file) has no prior content to restore TO -- restoring it means deleting the path instead. */
+  hadPreviousContent: boolean;
+}
+
+export interface CheckpointSummary {
+  id: string;
+  createdAt: string;
+  /** Human-readable label -- caller-supplied, or derived from the edit batch (e.g. "3 file(s): src/App.tsx, src/api.ts, +1 more") when not supplied. */
+  label: string;
+  entryCount: number;
+}
+
+export interface Checkpoint extends CheckpointSummary {
+  entries: CheckpointEntry[];
+}
+
+export interface CheckpointListResponse {
+  checkpoints: CheckpointSummary[];
+}
+
+export interface CheckpointRestoreResult {
+  path: string;
+  status: "restored" | "deleted" | "skipped";
+  /** Present when status is "skipped" -- e.g. "already absent — nothing to undo", or a path-resolution error. */
+  reason?: string;
+}
+
+export interface CheckpointRestoreResponse {
+  results: CheckpointRestoreResult[];
+  /** A checkpoint of the CURRENT state of these same paths, taken automatically before this restore overwrote anything -- restoring is itself always undoable. Null only when the checkpoint being restored had zero entries (nothing to snapshot). */
+  preRestoreCheckpointId: string | null;
 }
 
 /**

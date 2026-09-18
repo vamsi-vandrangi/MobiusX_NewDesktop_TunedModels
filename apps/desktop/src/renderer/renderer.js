@@ -9,7 +9,10 @@ document.querySelectorAll(".view").forEach((el) => (views[el.id.replace("view-",
 function showView(name) {
   for (const [key, el] of Object.entries(views)) el.hidden = key !== name;
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
-  if (name === "changes") loadGit();
+  if (name === "changes") {
+    loadGit();
+    loadCheckpoints();
+  }
   if (name === "tasks") loadTasksList();
   if (name === "settings") loadSettings();
   if (name === "artifacts") loadArtifacts();
@@ -851,6 +854,88 @@ async function loadGit() {
     }
   } catch (err) {
     logEl.textContent = `git log failed: ${err.message}`;
+  }
+}
+
+// ---- Checkpoints / Rollback (roadmap Phase 15, source requirement §23) ----
+// Real, git-independent restore points, taken automatically by the desktop
+// agent before every applied AI edit (see checkpoints.ts). This panel is
+// the read/restore/delete surface over GET/POST/DELETE /checkpoints.
+async function loadCheckpoints() {
+  const listEl = document.getElementById("checkpoints-list");
+  const statusEl = document.getElementById("checkpoints-status");
+  if (!listEl) return;
+  if (statusEl) statusEl.textContent = "";
+
+  if (!currentProjectPath) {
+    listEl.innerHTML = "<div class='recent-empty'>Open a project to see its checkpoints.</div>";
+    return;
+  }
+
+  try {
+    const { checkpoints } = await api("/checkpoints");
+    if (checkpoints.length === 0) {
+      listEl.innerHTML =
+        "<div class='recent-empty'>No checkpoints yet — one is taken automatically the next time the AI Assistant applies edits.</div>";
+      return;
+    }
+    listEl.innerHTML = checkpoints
+      .map(
+        (cp) => `
+      <div class="checkpoint-row" data-id="${escapeHtml(cp.id)}">
+        <div class="checkpoint-row-main">
+          <div class="checkpoint-row-label">${escapeHtml(cp.label)}</div>
+          <div class="checkpoint-row-meta">${new Date(cp.createdAt).toLocaleString()} · ${cp.entryCount} file(s)</div>
+        </div>
+        <div class="checkpoint-row-actions">
+          <button class="refresh-btn checkpoint-restore-btn">Restore</button>
+          <button class="refresh-btn checkpoint-delete-btn">Delete</button>
+        </div>
+      </div>`,
+      )
+      .join("");
+
+    listEl.querySelectorAll(".checkpoint-row").forEach((rowEl) => {
+      const id = rowEl.dataset.id;
+
+      rowEl.querySelector(".checkpoint-restore-btn").addEventListener("click", async () => {
+        const btn = rowEl.querySelector(".checkpoint-restore-btn");
+        btn.disabled = true;
+        btn.textContent = "Restoring…";
+        if (statusEl) statusEl.textContent = "";
+        try {
+          const result = await api(`/checkpoints/${encodeURIComponent(id)}/restore`, { method: "POST" });
+          const restored = result.results.filter((r) => r.status !== "skipped").length;
+          if (statusEl) {
+            statusEl.textContent =
+              `Restored ${restored}/${result.results.length} file(s).` +
+              (result.preRestoreCheckpointId ? " A checkpoint of the prior state was saved first." : "");
+          }
+          btn.textContent = "Restore";
+          btn.disabled = false;
+          await loadCheckpoints();
+          await loadGit();
+        } catch (err) {
+          if (statusEl) statusEl.textContent = `Restore failed: ${err.message}`;
+          btn.textContent = "Restore";
+          btn.disabled = false;
+        }
+      });
+
+      rowEl.querySelector(".checkpoint-delete-btn").addEventListener("click", async () => {
+        const btn = rowEl.querySelector(".checkpoint-delete-btn");
+        btn.disabled = true;
+        try {
+          await api(`/checkpoints/${encodeURIComponent(id)}`, { method: "DELETE" });
+          await loadCheckpoints();
+        } catch (err) {
+          if (statusEl) statusEl.textContent = `Delete failed: ${err.message}`;
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (err) {
+    listEl.innerHTML = `<div class='recent-empty'>Failed to load checkpoints: ${escapeHtml(err.message)}</div>`;
   }
 }
 

@@ -751,6 +751,14 @@ select.model-select option:disabled, #default-model-select option:disabled { col
   font-family: "SF Mono", Menlo, monospace; font-size: 11.5px;
 }
 .steering-file-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+.checkpoint-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: #16171b; border: 1px solid #232429; border-radius: 6px; padding: 8px 12px; margin-bottom: 6px;
+}
+.checkpoint-row-label { font-size: 12.5px; color: #cfd0d4; }
+.checkpoint-row-meta { font-size: 11px; color: #6d6e75; margin-top: 2px; }
+.checkpoint-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .steering-new-row { display: flex; gap: 6px; margin-top: 10px; }
 .steering-new-row input { flex: 0 0 220px; }
 

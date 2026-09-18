@@ -36,8 +36,11 @@ import type {
   KnowledgeIndexResponse,
   KnowledgeSearchResponse,
   ErrorIntelligenceReport,
+  CheckpointListResponse,
+  CheckpointRestoreResponse,
 } from "@mobiusx/protocol";
 import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
+import { createCheckpoint, deleteCheckpoint, listCheckpoints, restoreCheckpoint } from "./checkpoints.js";
 import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
 import { verifyProject } from "./verify.js";
 import { runBrowserValidation } from "./browserOps.js";
@@ -228,6 +231,11 @@ export function buildRouter(): Router {
     }
 
     try {
+      // Checkpoints / Rollback (roadmap Phase 15, source requirement §23):
+      // snapshot every touched path's PRE-edit state before applyEdits
+      // writes anything -- once it runs, the pre-edit content is gone.
+      // See checkpoints.ts's doc comment for the full design.
+      const checkpoint = await createCheckpoint(projectState.path, edits);
       const results = await applyEdits(projectState.path, edits);
       const appliedCount = results.filter((r) => r.status === "applied").length;
       const skippedCount = results.length - appliedCount;
@@ -255,11 +263,56 @@ export function buildRouter(): Router {
         }
       }
 
-      const body: ApplyEditsResponse = { results, ...(hookResults ? { hookResults } : {}) };
+      const body: ApplyEditsResponse = { results, checkpointId: checkpoint.id, ...(hookResults ? { hookResults } : {}) };
       res.json(body);
     } catch (err) {
       res.status(500).json({ error: "apply-edits failed", detail: (err as Error).message });
     }
+  });
+
+  // Checkpoints / Rollback (roadmap Phase 15, source requirement §23) --
+  // see checkpoints.ts's doc comment. Checkpoints themselves are created
+  // automatically inside POST /fs/apply-edits above; these three routes
+  // are the read/restore/delete surface over that same storage.
+  router.get("/checkpoints", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const checkpoints = await listCheckpoints(projectState.path);
+      const body: CheckpointListResponse = { checkpoints };
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "failed to list checkpoints", detail: (err as Error).message });
+    }
+  });
+
+  router.post("/checkpoints/:id/restore", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    try {
+      const { results, preRestoreCheckpointId } = await restoreCheckpoint(projectState.path, req.params.id);
+      const body: CheckpointRestoreResponse = { results, preRestoreCheckpointId };
+      res.json(body);
+    } catch (err) {
+      res.status(404).json({ error: "restore failed", detail: (err as Error).message });
+    }
+  });
+
+  router.delete("/checkpoints/:id", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const ok = await deleteCheckpoint(projectState.path, req.params.id);
+    if (!ok) {
+      res.status(404).json({ error: "checkpoint not found" });
+      return;
+    }
+    res.json({ deleted: true });
   });
 
   // Verification Engine (PRD §22): runs the open project's own build/test/
