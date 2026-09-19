@@ -129,6 +129,110 @@ export async function detectPythonTestSteps(projectRoot: string): Promise<Planne
   return steps;
 }
 
+// Same short candidate-directory list PYTHON_TEST_CANDIDATE_DIRS above
+// uses -- Java/.NET/C++ backends live in the same handful of places a
+// generated project's backend realistically lives.
+const OTHER_LANG_CANDIDATE_DIRS = [".", "backend", "server", "api"];
+
+/**
+ * Java (roadmap follow-up to Testing Engine): only runs when this
+ * directory actually has a Maven or Gradle build file -- same "real
+ * evidence, never invented" rule the Python step follows. Prefers the
+ * project's own wrapper script (mvnw/gradlew) when present, exactly the
+ * way the Python step prefers its own .venv interpreter over a bare
+ * python3 on PATH -- a wrapper pins the exact build-tool version a
+ * generated project was written against, a global install on this
+ * machine might not match.
+ */
+export async function detectJavaTestSteps(projectRoot: string): Promise<PlannedStep[]> {
+  const steps: PlannedStep[] = [];
+  const win = process.platform === "win32";
+  for (const rel of OTHER_LANG_CANDIDATE_DIRS) {
+    const dir = join(projectRoot, rel);
+    const label = rel === "." ? "root" : rel;
+    if (existsSync(join(dir, "pom.xml"))) {
+      const wrapper = join(dir, win ? "mvnw.cmd" : "mvnw");
+      const useWrapper = existsSync(wrapper);
+      steps.push({
+        label: `Test (Maven, ${label}/)`,
+        command: useWrapper ? (win ? ".\mvnw.cmd test -B -q" : "./mvnw test -B -q") : "mvn test -B -q",
+        cwd: dir,
+        spawnCmd: useWrapper ? wrapper : "mvn",
+        spawnArgs: ["test", "-B", "-q"],
+      });
+    } else if (existsSync(join(dir, "build.gradle")) || existsSync(join(dir, "build.gradle.kts"))) {
+      const wrapper = join(dir, win ? "gradlew.bat" : "gradlew");
+      const useWrapper = existsSync(wrapper);
+      steps.push({
+        label: `Test (Gradle, ${label}/)`,
+        command: useWrapper ? (win ? ".\gradlew.bat test" : "./gradlew test") : "gradle test",
+        cwd: dir,
+        spawnCmd: useWrapper ? wrapper : "gradle",
+        spawnArgs: ["test"],
+      });
+    }
+  }
+  return steps;
+}
+
+/**
+ * .NET: runs `dotnet test` from any directory holding a .sln or .csproj --
+ * `dotnet test` itself already resolves which project(s)/test projects
+ * that covers, so (unlike Java/Python) there's no separate "which test
+ * framework" branch needed here; xUnit/NUnit/MSTest all run the same way
+ * through the same `dotnet test` entry point.
+ */
+export async function detectDotNetTestSteps(projectRoot: string): Promise<PlannedStep[]> {
+  const steps: PlannedStep[] = [];
+  for (const rel of OTHER_LANG_CANDIDATE_DIRS) {
+    const dir = join(projectRoot, rel);
+    let hasProject = false;
+    try {
+      const { readdirSync } = await import("node:fs");
+      hasProject = readdirSync(dir).some((e) => e.endsWith(".sln") || e.endsWith(".csproj"));
+    } catch {
+      continue;
+    }
+    if (!hasProject) continue;
+    steps.push({
+      label: `Test (dotnet, ${rel === "." ? "root" : rel}/)`,
+      command: "dotnet test",
+      cwd: dir,
+      spawnCmd: "dotnet",
+      spawnArgs: ["test"],
+    });
+  }
+  return steps;
+}
+
+/**
+ * C/C++ via CMake + CTest: deliberately narrower than the other language
+ * steps above -- only runs when a `build/` directory already exists next
+ * to CMakeLists.txt (i.e. someone already ran `cmake -B build` at least
+ * once), because unlike `npm test`/`pytest`/`mvn test`/`dotnet test`,
+ * CTest needs a configured build directory to exist first and this module
+ * has no business silently kicking off a full CMake configure+build as a
+ * side effect of clicking "Run verification". A project with no `build/`
+ * yet just doesn't get a C/C++ test step, the same as a project with no
+ * declared test framework at all.
+ */
+export async function detectCppTestSteps(projectRoot: string): Promise<PlannedStep[]> {
+  const steps: PlannedStep[] = [];
+  for (const rel of OTHER_LANG_CANDIDATE_DIRS) {
+    const dir = join(projectRoot, rel);
+    if (!existsSync(join(dir, "CMakeLists.txt"))) continue;
+    if (!existsSync(join(dir, "build", "CMakeCache.txt"))) continue; // not configured yet -- nothing to test
+    steps.push({
+      label: `Test (CTest, ${rel === "." ? "root" : rel}/)`,
+      command: "ctest --test-dir build --output-on-failure",
+      cwd: dir,
+      spawnCmd: "ctest",
+      spawnArgs: ["--test-dir", "build", "--output-on-failure"],
+    });
+  }
+  return steps;
+}
+
 /**
  * Runs each planned step in its own directory, sequentially (later steps
  * run regardless of earlier failures — each is independent evidence, not
@@ -239,7 +343,13 @@ function runOne(step: PlannedStep, timeoutMs: number): Promise<VerificationStep>
 
 /** Detects + runs verification for a project in one call, and computes the overall verdict. */
 export async function verifyProject(projectRoot: string, timeoutMs?: number): Promise<VerifyResponse> {
-  const planned = [...(await detectVerificationSteps(projectRoot)), ...(await detectPythonTestSteps(projectRoot))];
+  const planned = [
+    ...(await detectVerificationSteps(projectRoot)),
+    ...(await detectPythonTestSteps(projectRoot)),
+    ...(await detectJavaTestSteps(projectRoot)),
+    ...(await detectDotNetTestSteps(projectRoot)),
+    ...(await detectCppTestSteps(projectRoot)),
+  ];
   if (planned.length === 0) {
     return { projectPath: projectRoot, overall: "no-verification-available", steps: [] };
   }

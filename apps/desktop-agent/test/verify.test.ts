@@ -5,7 +5,14 @@ import { promisify } from "node:util";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectPythonTestSteps, detectVerificationSteps, verifyProject } from "../src/verify.js";
+import {
+  detectPythonTestSteps,
+  detectVerificationSteps,
+  detectJavaTestSteps,
+  detectDotNetTestSteps,
+  detectCppTestSteps,
+  verifyProject,
+} from "../src/verify.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -162,3 +169,70 @@ test(
     assert.equal(pytestStep2!.status, "failed");
   },
 );
+
+test("detectJavaTestSteps finds a root pom.xml and plans a Maven test step", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mobiusx-verify-test-"));
+  await writeFile(join(dir, "pom.xml"), "<project><artifactId>fixture</artifactId></project>");
+  const steps = await detectJavaTestSteps(dir);
+  assert.equal(steps.length, 1);
+  assert.match(steps[0].label, /Maven/);
+  assert.equal(steps[0].spawnCmd, "mvn"); // no mvnw present -- falls back to a global mvn on PATH
+});
+
+test("detectJavaTestSteps prefers the project's own Maven wrapper when present", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mobiusx-verify-test-"));
+  await writeFile(join(dir, "pom.xml"), "<project></project>");
+  await writeFile(join(dir, "mvnw"), "#!/bin/sh\necho wrapper\n");
+  const steps = await detectJavaTestSteps(dir);
+  assert.equal(steps.length, 1);
+  assert.match(steps[0].spawnCmd, /mvnw$/);
+});
+
+test("detectJavaTestSteps finds a backend/ subdirectory with a Gradle build file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mobiusx-verify-test-"));
+  await mkdir(join(dir, "backend"));
+  await writeFile(join(dir, "backend", "build.gradle.kts"), "plugins { }");
+  const steps = await detectJavaTestSteps(dir);
+  assert.equal(steps.length, 1);
+  assert.match(steps[0].label, /Gradle, backend\//);
+  assert.equal(steps[0].spawnCmd, "gradle");
+});
+
+test("detectJavaTestSteps finds nothing for a project with neither pom.xml nor a Gradle build file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mobiusx-verify-test-"));
+  const steps = await detectJavaTestSteps(dir);
+  assert.equal(steps.length, 0);
+});
+
+test("detectDotNetTestSteps finds a root .csproj and plans a dotnet test step", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mobiusx-verify-test-"));
+  await writeFile(join(dir, "Fixture.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>");
+  const steps = await detectDotNetTestSteps(dir);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].command, "dotnet test");
+  assert.equal(steps[0].spawnCmd, "dotnet");
+});
+
+test("detectDotNetTestSteps finds nothing for a project with no .sln or .csproj", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mobiusx-verify-test-"));
+  const steps = await detectDotNetTestSteps(dir);
+  assert.equal(steps.length, 0);
+});
+
+test("detectCppTestSteps finds nothing when CMakeLists.txt exists but the project hasn't been configured yet", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mobiusx-verify-test-"));
+  await writeFile(join(dir, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)");
+  const steps = await detectCppTestSteps(dir);
+  assert.equal(steps.length, 0); // no build/CMakeCache.txt -- nothing to run ctest against yet
+});
+
+test("detectCppTestSteps plans a ctest step once the project has already been configured", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "mobiusx-verify-test-"));
+  await writeFile(join(dir, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)");
+  await mkdir(join(dir, "build"));
+  await writeFile(join(dir, "build", "CMakeCache.txt"), "# fixture cache");
+  const steps = await detectCppTestSteps(dir);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].spawnCmd, "ctest");
+});
+

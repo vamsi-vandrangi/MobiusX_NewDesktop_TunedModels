@@ -77,6 +77,53 @@ const PY_DEP_SIGNALS: Array<[RegExp, ProjectContextCategory, string]> = [
   [/^pytest/i, "testFramework", "pytest"],
 ];
 
+// pom.xml (Maven) / build.gradle(.kts) (Gradle) artifactId -> [category,
+// display name]. Matched against the raw manifest text as a substring --
+// Maven's XML and Gradle's Groovy/Kotlin DSL both end up naming the same
+// artifactId somewhere in a dependency declaration (<artifactId>foo</...>
+// vs. "group:foo:version"), so one signal list covers both build tools
+// without parsing either format properly.
+const JAVA_DEP_SIGNALS: Array<[RegExp, ProjectContextCategory, string]> = [
+  [/spring-boot-starter-web/, "backend", "Spring Boot"],
+  [/quarkus-/, "backend", "Quarkus"],
+  [/micronaut-/, "backend", "Micronaut"],
+  [/spring-boot-starter-data-jpa|hibernate-core/, "orm", "Hibernate / Spring Data JPA"],
+  [/spring-boot-starter-security|spring-security-core/, "auth", "Spring Security"],
+  [/\bpostgresql\b/, "database", "PostgreSQL"],
+  [/mysql-connector/, "database", "MySQL"],
+  [/mongodb-driver/, "database", "MongoDB"],
+  [/junit-jupiter|\bjunit\b/, "testFramework", "JUnit"],
+  [/testng/, "testFramework", "TestNG"],
+];
+
+// .csproj PackageReference Include="..." values (and the Sdk="..." a
+// web project's .csproj itself declares) -> [category, display name].
+const DOTNET_DEP_SIGNALS: Array<[RegExp, ProjectContextCategory, string]> = [
+  [/Microsoft\.NET\.Sdk\.Web|Microsoft\.AspNetCore\.App/, "backend", "ASP.NET Core"],
+  [/Microsoft\.EntityFrameworkCore/, "orm", "Entity Framework Core"],
+  [/Microsoft\.AspNetCore\.Authentication\.JwtBearer/, "auth", "JWT Bearer (ASP.NET)"],
+  [/Npgsql/, "database", "PostgreSQL"],
+  [/MySql(Connector|\.Data)/, "database", "MySQL"],
+  [/Microsoft\.Data\.SqlClient|System\.Data\.SqlClient/, "database", "SQL Server"],
+  [/\bxunit\b/i, "testFramework", "xUnit"],
+  [/\bnunit\b/i, "testFramework", "NUnit"],
+  [/MSTest\.TestFramework/, "testFramework", "MSTest"],
+];
+
+// CMakeLists.txt find_package()/target_link_libraries() text -> [category,
+// display name] -- the same "only report what's really referenced"
+// discipline as the other tables, just read from CMake's own config
+// instead of a dependency-manager manifest (C/C++ mostly doesn't have one).
+const CMAKE_SIGNALS: Array<[RegExp, ProjectContextCategory, string]> = [
+  [/\bDrogon\b/, "backend", "Drogon"],
+  [/\bCrow\b/, "backend", "Crow"],
+  [/\bPistache\b/, "backend", "Pistache"],
+  [/find_package\(\s*Qt[56]?/i, "frontend", "Qt"],
+  [/GTest|gtest/, "testFramework", "Google Test"],
+  [/Catch2/, "testFramework", "Catch2"],
+  [/CppUTest/, "testFramework", "CppUTest"],
+];
+
 // Connection-string patterns checked against a short list of common
 // config/source filenames -- catches the SQLite/Postgres/MySQL/Mongo
 // choice even when it's only visible in code (e.g. SQLModel's
@@ -158,6 +205,81 @@ async function detectDatabaseFromConnectionStrings(dir: string, relDir: string, 
   }
 }
 
+async function detectFromJava(dir: string, relDir: string, found: DetectedComponent[]): Promise<void> {
+  let raw: string | null = null;
+  let sourceFile: string | null = null;
+  for (const name of ["pom.xml", "build.gradle", "build.gradle.kts"]) {
+    if (await fileExists(join(dir, name))) {
+      raw = await readFile(join(dir, name), "utf8").catch(() => null);
+      sourceFile = name;
+      break; // one build tool per directory is the realistic case
+    }
+  }
+  if (!raw || !sourceFile) return;
+  const claimedCategories = new Set<ProjectContextCategory>();
+  for (const [pattern, category, name] of JAVA_DEP_SIGNALS) {
+    if (claimedCategories.has(category)) continue;
+    if (pattern.test(raw)) {
+      found.push({ category, name, location: relDir, evidence: `${relDir}/${sourceFile}: references "${name}"` });
+      claimedCategories.add(category);
+    }
+  }
+}
+
+// .NET solutions commonly nest each project's .csproj one directory below
+// the candidate dir itself (MyApp/MyApp.Api/MyApp.Api.csproj) rather than
+// right at it, so this one specifically does a single shallow (depth-1)
+// listing instead of just checking a fixed filename -- everything else in
+// this module checks for known filenames directly at `dir` since that
+// matches how JS/Python/Java projects are actually laid out.
+async function detectFromDotNet(dir: string, relDir: string, found: DetectedComponent[]): Promise<void> {
+  const { readdir } = await import("node:fs/promises");
+  let entries: string[] = [];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return;
+  }
+  const csprojDirect = entries.filter((e) => e.endsWith(".csproj"));
+  const subDirs = entries.filter((e) => !e.startsWith(".") && e !== "node_modules");
+  const csprojPaths: string[] = csprojDirect.map((e) => join(dir, e));
+  for (const sub of subDirs) {
+    try {
+      const subEntries = await readdir(join(dir, sub));
+      for (const e of subEntries) {
+        if (e.endsWith(".csproj")) csprojPaths.push(join(dir, sub, e));
+      }
+    } catch {
+      // not a directory (or unreadable) -- not a .NET project either way
+    }
+  }
+  if (csprojPaths.length === 0) return;
+  const raw = (await Promise.all(csprojPaths.map((p) => readFile(p, "utf8").catch(() => "")))).join("\n");
+  if (!raw.trim()) return;
+  const claimedCategories = new Set<ProjectContextCategory>();
+  for (const [pattern, category, name] of DOTNET_DEP_SIGNALS) {
+    if (claimedCategories.has(category)) continue;
+    if (pattern.test(raw)) {
+      found.push({ category, name, location: relDir, evidence: `${relDir}/*.csproj: references "${name}"` });
+      claimedCategories.add(category);
+    }
+  }
+}
+
+async function detectFromCmake(dir: string, relDir: string, found: DetectedComponent[]): Promise<void> {
+  if (!(await fileExists(join(dir, "CMakeLists.txt")))) return;
+  const raw = await readFile(join(dir, "CMakeLists.txt"), "utf8").catch(() => "");
+  if (!raw) return;
+  const claimedCategories = new Set<ProjectContextCategory>();
+  for (const [pattern, category, name] of CMAKE_SIGNALS) {
+    if (claimedCategories.has(category)) continue;
+    if (pattern.test(raw)) {
+      found.push({ category, name, location: relDir, evidence: `${relDir}/CMakeLists.txt: references "${name}"` });
+      claimedCategories.add(category);
+    }
+  }
+}
+
 async function detectInfra(projectRoot: string, found: DetectedComponent[]): Promise<void> {
   if (await fileExists(join(projectRoot, "Dockerfile"))) {
     found.push({ category: "infra", name: "Docker", location: ".", evidence: "Dockerfile present at project root" });
@@ -170,6 +292,26 @@ async function detectInfra(projectRoot: string, found: DetectedComponent[]): Pro
   }
   if (await fileExists(join(projectRoot, ".github", "workflows"))) {
     found.push({ category: "infra", name: "GitHub Actions CI", location: ".", evidence: ".github/workflows/ present" });
+  }
+  // C/C++ build systems -- these are as close to a "which language/build
+  // tool" signal as a C/C++ project usually gets, so worth reporting as
+  // infra even with no framework detected in CMAKE_SIGNALS above (plenty
+  // of real C/C++ projects use neither a web framework nor a test
+  // framework this module knows about, but still deserve to show up as
+  // *something* rather than "Not detected" across every category).
+  if (await fileExists(join(projectRoot, "CMakeLists.txt"))) {
+    found.push({ category: "infra", name: "CMake", location: ".", evidence: "CMakeLists.txt present at project root" });
+  } else if (await fileExists(join(projectRoot, "Makefile"))) {
+    found.push({ category: "infra", name: "Make", location: ".", evidence: "Makefile present at project root" });
+  }
+  if (await fileExists(join(projectRoot, "vcpkg.json"))) {
+    found.push({ category: "infra", name: "vcpkg", location: ".", evidence: "vcpkg.json present at project root" });
+  }
+  for (const name of ["conanfile.txt", "conanfile.py"]) {
+    if (await fileExists(join(projectRoot, name))) {
+      found.push({ category: "infra", name: "Conan", location: ".", evidence: `${name} present at project root` });
+      break;
+    }
   }
 }
 
@@ -186,6 +328,9 @@ export async function detectProjectContext(projectRoot: string): Promise<Project
     if (rel !== "." && !(await fileExists(dir))) continue;
     await detectFromPackageJson(dir, rel, found);
     await detectFromPython(dir, rel, found);
+    await detectFromJava(dir, rel, found);
+    await detectFromDotNet(dir, rel, found);
+    await detectFromCmake(dir, rel, found);
     await detectDatabaseFromConnectionStrings(dir, rel, found);
   }
   await detectInfra(projectRoot, found);
