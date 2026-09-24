@@ -776,21 +776,24 @@
   <!-- Real sign-in -- see main.js's device-login block and
        backend/app/api/device_auth.py for the full flow. Shown at launch
        whenever there's no valid stored session; hidden the moment one
-       exists (existing on disk already, or just approved). -->
+       exists (existing on disk already, or just approved). Cursor/VS
+       Code-style: no code to read or type here -- approving in the
+       browser hands the session back automatically (via a mobiusx://
+       deep link, with the poll below as a fallback that always gets
+       there within a few seconds either way). -->
   <div id="signin-overlay" class="signin-overlay">
     <div class="signin-card">
       <img class="signin-logo" src="../../assets/logo.png" alt="MobiusX.ai" />
       <h2>Sign in to MobiusX.ai Desktop</h2>
-      <p class="signin-sub">Approve this device from your browser to continue.</p>
+      <p class="signin-sub">Continue in your browser to sign in or create an account.</p>
 
       <div class="signin-code-box">
-        <div id="signin-code" class="signin-code">........</div>
+        <div class="signin-spinner" aria-hidden="true"></div>
         <div id="signin-status" class="signin-status">Preparing sign-in&hellip;</div>
       </div>
 
       <div class="signin-actions">
         <button id="signin-open-browser-btn" class="signin-btn-primary">Open browser</button>
-        <button id="signin-copy-code-btn" class="signin-btn-secondary">Copy code</button>
       </div>
 
       <button id="signin-retry-btn" class="signin-retry" hidden>Try again</button>

@@ -50,6 +50,52 @@ if (!gotSingleInstanceLock) {
   app.quit();
 }
 
+// Deep-link handoff for sign-in -- see the device-login block below and
+// frontend/app/activate-device/page.tsx. Once the user approves in their
+// browser, that page best-effort redirects to mobiusx://signed-in, which
+// the OS routes back to this app (registered via package.json's
+// build.protocols) instead of leaving the user staring at a browser tab
+// wondering if anything happened. The link itself carries no secret and
+// isn't trusted with anything on its own -- it's just a "come back and
+// check now" nudge. The real session still only ever arrives through
+// /auth/device/poll below (the same call the 3s interval already makes),
+// so a forged or replayed mobiusx:// URL can't hand anyone a session by
+// itself; at worst it just triggers an extra, harmless poll.
+let pendingDeepLinkUrl = null;
+
+function handleDeepLink(rawUrl) {
+  if (typeof rawUrl !== "string" || !rawUrl.startsWith("mobiusx://")) return;
+  if (!mainWindow) {
+    pendingDeepLinkUrl = rawUrl;
+    return;
+  }
+  console.log("[deep-link] received", rawUrl);
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  // If a device-login poll is in flight, check right now instead of
+  // waiting up to 3s for the next scheduled tick -- this is what makes
+  // approving in the browser feel instant rather than laggy.
+  if (deviceLoginPollTimer && currentDeviceLoginDeviceCode) {
+    const deviceCode = currentDeviceLoginDeviceCode;
+    clearInterval(deviceLoginPollTimer);
+    void pollDeviceLoginOnce(deviceCode);
+    deviceLoginPollTimer = setInterval(() => pollDeviceLoginOnce(deviceCode), 3000);
+  }
+}
+
+if (app.isPackaged) {
+  app.setAsDefaultProtocolClient("mobiusx");
+}
+
+// macOS delivers mobiusx:// launches through this event (Windows/Linux use
+// second-instance below instead) -- registered up top, not inside
+// app.whenReady().then(...), since it can fire before that resolves.
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  handleDeepLink(url);
+});
+
 const childProcesses = [];
 let mainWindow = null;
 
@@ -341,11 +387,49 @@ function clearStoredSession() {
 }
 
 let deviceLoginPollTimer = null;
+let currentDeviceLoginDeviceCode = null;
 
 function stopDeviceLoginPoll() {
   if (deviceLoginPollTimer) {
     clearInterval(deviceLoginPollTimer);
     deviceLoginPollTimer = null;
+  }
+  currentDeviceLoginDeviceCode = null;
+}
+
+// Pulled out of the setInterval below so handleDeepLink() can also fire
+// one off-cycle, immediately, instead of only ever running on the 3s
+// clock.
+async function pollDeviceLoginOnce(deviceCode) {
+  let body;
+  try {
+    const res = await fetch(`${MOBIUSX_API_URL}/auth/device/poll`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_code: deviceCode }),
+    });
+    if (!res.ok) {
+      stopDeviceLoginPoll();
+      mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "error", message: `HTTP ${res.status}` });
+      return;
+    }
+    body = await res.json();
+  } catch {
+    // A transient network blip -- keep polling rather than failing the
+    // whole flow over one dropped request.
+    return;
+  }
+
+  if (body.status === "approved") {
+    stopDeviceLoginPoll();
+    saveStoredSession(body.session);
+    mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "approved", session: body.session });
+  } else if (body.status === "pending") {
+    mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "pending" });
+  } else {
+    // expired | denied | consumed
+    stopDeviceLoginPoll();
+    mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: body.status });
   }
 }
 
@@ -381,43 +465,15 @@ ipcMain.handle("auth:startDeviceLogin", async () => {
     };
   }
 
-  // Best-effort -- the code is also shown in the sign-in screen for manual
-  // entry if the browser doesn't open (no default browser configured,
-  // remote/headless machine, etc).
+  // Best-effort, and the URL itself never shows the user_code as anything
+  // they need to read or type -- /activate-device auto-looks it up the
+  // moment the page loads (see that file's docstring). If the browser
+  // doesn't open (no default browser configured, remote/headless machine),
+  // the sign-in overlay's "Open browser" button re-opens the same URL.
   shell.openExternal(`${start.verification_url}?code=${encodeURIComponent(start.user_code)}`).catch(() => {});
 
-  deviceLoginPollTimer = setInterval(async () => {
-    let body;
-    try {
-      const res = await fetch(`${MOBIUSX_API_URL}/auth/device/poll`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device_code: start.device_code }),
-      });
-      if (!res.ok) {
-        stopDeviceLoginPoll();
-        mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "error", message: `HTTP ${res.status}` });
-        return;
-      }
-      body = await res.json();
-    } catch {
-      // A transient network blip -- keep polling rather than failing the
-      // whole flow over one dropped request.
-      return;
-    }
-
-    if (body.status === "approved") {
-      stopDeviceLoginPoll();
-      saveStoredSession(body.session);
-      mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "approved", session: body.session });
-    } else if (body.status === "pending") {
-      mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "pending" });
-    } else {
-      // expired | denied | consumed
-      stopDeviceLoginPoll();
-      mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: body.status });
-    }
-  }, 3000);
+  currentDeviceLoginDeviceCode = start.device_code;
+  deviceLoginPollTimer = setInterval(() => pollDeviceLoginOnce(start.device_code), 3000);
 
   return {
     ok: true,
@@ -472,17 +528,33 @@ app.whenReady().then(() => {
     callback(permission === "media");
   });
   setDockIcon();
-  createWindow().then(() => setupAutoUpdater());
+  createWindow().then(() => {
+    setupAutoUpdater();
+    // Windows/Linux cold launch via a mobiusx:// link (app wasn't already
+    // running): the URL arrives as a plain argv entry rather than through
+    // open-url. macOS's open-url can also fire before this .then() runs,
+    // in which case it's parked in pendingDeepLinkUrl above.
+    const argvDeepLink = process.argv.find((arg) => typeof arg === "string" && arg.startsWith("mobiusx://"));
+    if (argvDeepLink) handleDeepLink(argvDeepLink);
+    else if (pendingDeepLinkUrl) handleDeepLink(pendingDeepLinkUrl);
+  });
 });
 
 // See the requestSingleInstanceLock() call above — a second launch quits
 // itself and instead triggers this on the first instance, which just
-// refocuses the existing window rather than doing nothing silently.
-app.on("second-instance", () => {
+// refocuses the existing window rather than doing nothing silently. On
+// Windows/Linux this is also how a mobiusx:// deep-link click reaches an
+// already-running instance -- the OS relaunches the protocol handler,
+// which immediately hands off to the first instance via this event, with
+// the URL as one of commandLine's argv entries (macOS uses open-url
+// instead, registered up top).
+app.on("second-instance", (_event, commandLine) => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   }
+  const deepLink = commandLine.find((arg) => typeof arg === "string" && arg.startsWith("mobiusx://"));
+  if (deepLink) handleDeepLink(deepLink);
 });
 
 app.on("window-all-closed", () => {

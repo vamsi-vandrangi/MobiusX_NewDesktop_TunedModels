@@ -34,6 +34,14 @@
     "afterSign": "scripts/fix-windows-icon.js",
     "productName": "MobiusX.ai",
     "copyright": "Copyright © CadenceX Technologies",
+    "protocols": [
+      {
+        "name": "MobiusX.ai",
+        "schemes": [
+          "mobiusx"
+        ]
+      }
+    ],
     "directories": {
       "output": "release",
       "buildResources": "assets"

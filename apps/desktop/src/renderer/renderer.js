@@ -4240,10 +4240,8 @@ function applyUserProfile(user) {
 }
 
 const signinOverlay = document.getElementById("signin-overlay");
-const signinCode = document.getElementById("signin-code");
 const signinStatus = document.getElementById("signin-status");
 const signinOpenBrowserBtn = document.getElementById("signin-open-browser-btn");
-const signinCopyCodeBtn = document.getElementById("signin-copy-code-btn");
 const signinRetryBtn = document.getElementById("signin-retry-btn");
 const signoutBtn = document.getElementById("settings-signout-btn");
 const userChipBtn = document.getElementById("user-chip");
@@ -4251,7 +4249,6 @@ const userChipMenu = document.getElementById("user-chip-menu");
 const headerSignoutBtn = document.getElementById("header-signout-btn");
 
 let currentDeviceLoginVerificationUrl = null;
-let currentDeviceLoginCode = null;
 let unsubscribeDeviceLoginUpdates = null;
 
 function setSigninStatus(text, kind) {
@@ -4262,9 +4259,7 @@ function setSigninStatus(text, kind) {
 
 async function beginSignIn() {
   signinRetryBtn.hidden = true;
-  signinCode.textContent = "........";
   signinOpenBrowserBtn.disabled = true;
-  signinCopyCodeBtn.disabled = true;
   setSigninStatus("Preparing sign-in\u2026");
 
   const result = await auth.startDeviceLogin();
@@ -4274,11 +4269,12 @@ async function beginSignIn() {
     return;
   }
 
-  currentDeviceLoginCode = result.userCode;
+  // No code shown here -- the browser tab this opens is already signed
+  // in (or prompts sign-in/signup) and auto-recognizes this request, so
+  // there's nothing for the user to read or type. Approving there hands
+  // the session back to this window automatically.
   currentDeviceLoginVerificationUrl = `${result.verificationUrl}?code=${encodeURIComponent(result.userCode)}`;
-  signinCode.textContent = result.userCode;
   signinOpenBrowserBtn.disabled = false;
-  signinCopyCodeBtn.disabled = false;
   setSigninStatus("Waiting for approval in your browser\u2026");
 
   if (unsubscribeDeviceLoginUpdates) unsubscribeDeviceLoginUpdates();
@@ -4309,21 +4305,6 @@ async function beginSignIn() {
 
 signinOpenBrowserBtn.addEventListener("click", () => {
   if (currentDeviceLoginVerificationUrl) openExternal(currentDeviceLoginVerificationUrl);
-});
-
-signinCopyCodeBtn.addEventListener("click", async () => {
-  if (!currentDeviceLoginCode) return;
-  try {
-    await navigator.clipboard.writeText(currentDeviceLoginCode);
-    const original = signinCopyCodeBtn.textContent;
-    signinCopyCodeBtn.textContent = "Copied!";
-    setTimeout(() => {
-      signinCopyCodeBtn.textContent = original;
-    }, 1500);
-  } catch {
-    // Clipboard access can fail in some sandboxed contexts -- the code is
-    // already visible on screen either way, so this is a soft failure.
-  }
 });
 
 signinRetryBtn.addEventListener("click", () => {
