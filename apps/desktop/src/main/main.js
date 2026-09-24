@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, session, safeStorage } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, session, safeStorage, net } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
@@ -403,10 +403,20 @@ function stopDeviceLoginPoll() {
 async function pollDeviceLoginOnce(deviceCode) {
   let body;
   try {
-    const res = await fetch(`${MOBIUSX_API_URL}/auth/device/poll`, {
+    // net.fetch (Electron's own fetch, routed through Chromium's network
+    // stack -- the same one the renderer/browser uses) rather than the
+    // global Node fetch. Node's fetch makes a direct connection and does
+    // NOT pick up the OS's configured proxy, so on a network that routes
+    // HTTPS through a system/corporate proxy it can hang indefinitely
+    // with no error -- exactly the "stuck on Preparing sign-in..." /
+    // "waiting forever" symptom this was fixed for. net.fetch inherits
+    // Electron's session proxy resolution (which defaults to the system
+    // proxy), matching what a real browser tab on this machine does.
+    const res = await net.fetch(`${MOBIUSX_API_URL}/auth/device/poll`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_code: deviceCode }),
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
       stopDeviceLoginPoll();
@@ -415,8 +425,10 @@ async function pollDeviceLoginOnce(deviceCode) {
     }
     body = await res.json();
   } catch {
-    // A transient network blip -- keep polling rather than failing the
-    // whole flow over one dropped request.
+    // A transient network blip (including a poll that timed out) -- keep
+    // polling rather than failing the whole flow over one dropped
+    // request. The 10s timeout above just guarantees this catch is
+    // reached instead of the call hanging past the next scheduled tick.
     return;
   }
 
@@ -451,17 +463,26 @@ ipcMain.handle("auth:startDeviceLogin", async () => {
 
   let start;
   try {
-    const res = await fetch(`${MOBIUSX_API_URL}/auth/device/start`, {
+    // net.fetch, not the global fetch -- see pollDeviceLoginOnce's comment
+    // below for why (Node's fetch bypasses the OS/session proxy and can
+    // hang indefinitely on some networks). The 15s timeout means a hung
+    // request always resolves into a visible, retryable error rather than
+    // leaving "Preparing sign-in..." spinning forever with no way out
+    // short of force-quitting the app.
+    const res = await net.fetch(`${MOBIUSX_API_URL}/auth/device/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device_name: deviceDisplayName() }),
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     start = await res.json();
   } catch (err) {
     return {
       ok: false,
-      error: `Couldn't reach MobiusX.ai (${err.message}). Check your connection and try again.`,
+      error: err.name === "TimeoutError" || err.name === "AbortError"
+        ? "Couldn't reach MobiusX.ai (timed out). Check your connection and try again."
+        : `Couldn't reach MobiusX.ai (${err.message}). Check your connection and try again.`,
     };
   }
 

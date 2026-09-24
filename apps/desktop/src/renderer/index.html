@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>MobiusX Desktop</title>
-  <link rel="stylesheet" href="../../../../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="vendor/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -800,11 +800,23 @@
     </div>
   </div>
 
-  <script src="../../../../node_modules/@xterm/xterm/lib/xterm.js"></script>
-  <script src="../../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
-  <script src="../../../../node_modules/diff/dist/diff.min.js"></script>
-  <script src="../../../../node_modules/marked/lib/marked.umd.js"></script>
-  <script src="../../../../node_modules/mermaid/dist/mermaid.min.js"></script>
+  <!-- Vendored copies of these libraries (see vendor/README.md), not
+       ../../../../node_modules/... -- that depth only ever resolved
+       correctly when running unpacked from this monorepo checkout via
+       `electron .`. In a packaged build (electron-builder makes
+       apps/desktop itself the asar root) it overshoots by two levels and
+       404s, which throws an uncaught ReferenceError partway through this
+       file and silently kills every script after it -- including the
+       sign-in code at the bottom. That's the actual root cause behind
+       "sign-in never finishes": the renderer crashed before beginSignIn()
+       ever ran, so the UI was just showing its static, unchanging
+       "Preparing sign-in..." placeholder forever, not an app that was
+       genuinely slow or hung. -->
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/diff.min.js"></script>
+  <script src="vendor/marked.umd.js"></script>
+  <script src="vendor/mermaid.min.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
