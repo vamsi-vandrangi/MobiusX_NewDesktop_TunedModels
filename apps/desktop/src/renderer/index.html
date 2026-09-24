@@ -44,17 +44,17 @@
           <button id="open-project-btn">Open Project…</button>
         </div>
         <div id="org-switcher" class="org-switcher" title="Workspace/org switching isn't built yet — visual placeholder for the single-user setup this app runs today">
-          <span class="org-switcher-name">ACME Corp</span>
+          <span class="org-switcher-name" id="org-switcher-name">ACME Corp</span>
           <span class="org-switcher-caret">▾</span>
         </div>
         <button id="notif-btn" class="icon-btn" title="Notifications aren't wired up yet — visual placeholder">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
         </button>
         <div id="user-chip">
-          <span class="avatar">V</span>
+          <span class="avatar" id="header-user-avatar">V</span>
           <div>
-            <div class="user-name">Vamsi</div>
-            <div class="user-role">AI Architect</div>
+            <div class="user-name" id="header-user-name">Vamsi</div>
+            <div class="user-role" id="header-user-role">AI Architect</div>
           </div>
         </div>
       </header>
@@ -518,10 +518,10 @@
             <div class="settings-section">
               <h3>Members <span class="status-text">(preview — single-user app)</span></h3>
               <div class="settings-member-row">
-                <span class="avatar">V</span>
+                <span class="avatar" id="settings-member-avatar">V</span>
                 <div>
-                  <div class="user-name">Vamsi</div>
-                  <div class="user-role">AI Architect</div>
+                  <div class="user-name" id="settings-member-name">Vamsi</div>
+                  <div class="user-role" id="settings-member-role">AI Architect</div>
                 </div>
               </div>
             </div>
@@ -699,6 +699,17 @@
             </div>
 
             <div class="settings-section">
+              <h3>Account</h3>
+              <div class="settings-auth-row">
+                <div>
+                  <div class="user-name" id="settings-account-email">&mdash;</div>
+                  <div class="scope-note-small" id="settings-account-org">&mdash;</div>
+                </div>
+                <button id="settings-signout-btn" class="refresh-btn">Sign out</button>
+              </div>
+            </div>
+
+            <div class="settings-section">
               <h3>Authentication <span class="status-text">(preview — not implemented)</span></h3>
               <div class="settings-auth-row">
                 <div>
@@ -752,6 +763,30 @@
         <button id="new-project-cancel-btn" class="refresh-btn">Cancel</button>
         <button id="new-project-create-btn" class="send-btn">Create</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Real sign-in -- see main.js's device-login block and
+       backend/app/api/device_auth.py for the full flow. Shown at launch
+       whenever there's no valid stored session; hidden the moment one
+       exists (existing on disk already, or just approved). -->
+  <div id="signin-overlay" class="signin-overlay">
+    <div class="signin-card">
+      <img class="signin-logo" src="../../assets/logo.png" alt="MobiusX.ai" />
+      <h2>Sign in to MobiusX.ai Desktop</h2>
+      <p class="signin-sub">Approve this device from your browser to continue.</p>
+
+      <div class="signin-code-box">
+        <div id="signin-code" class="signin-code">........</div>
+        <div id="signin-status" class="signin-status">Preparing sign-in&hellip;</div>
+      </div>
+
+      <div class="signin-actions">
+        <button id="signin-open-browser-btn" class="signin-btn-primary">Open browser</button>
+        <button id="signin-copy-code-btn" class="signin-btn-secondary">Copy code</button>
+      </div>
+
+      <button id="signin-retry-btn" class="signin-retry" hidden>Try again</button>
     </div>
   </div>
 

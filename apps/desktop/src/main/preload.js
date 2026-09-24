@@ -29,4 +29,21 @@ contextBridge.exposeInMainWorld("mobiusx", {
   // See main.js's "shell:openExternal" handler's doc comment -- for a
   // running dev server's URL, not a project-relative file.
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
+
+  // Real device sign-in -- see main.js's device-login block and
+  // backend/app/api/device_auth.py for the full flow.
+  auth: {
+    getStoredSession: () => ipcRenderer.invoke("auth:getStoredSession"),
+    startDeviceLogin: () => ipcRenderer.invoke("auth:startDeviceLogin"),
+    cancelDeviceLogin: () => ipcRenderer.invoke("auth:cancelDeviceLogin"),
+    signOut: () => ipcRenderer.invoke("auth:signOut"),
+    // Polling updates pushed from the main process while a device login is
+    // in progress -- {status: "pending"|"approved"|"denied"|"expired"|
+    // "consumed"|"error", session?, message?}. Returns an unsubscribe fn.
+    onDeviceLoginUpdate: (callback) => {
+      const listener = (_event, update) => callback(update);
+      ipcRenderer.on("auth:deviceLoginUpdate", listener);
+      return () => ipcRenderer.removeListener("auth:deviceLoginUpdate", listener);
+    },
+  },
 });

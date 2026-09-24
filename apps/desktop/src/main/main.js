@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, session } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage, session, safeStorage } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
+const os = require("node:os");
 
 // In dev (`electron .` from this repo), the two sibling services
 // (desktop-agent, cloud-agent-gateway) and their @mobiusx/* dependencies
@@ -277,6 +278,153 @@ ipcMain.handle("shell:openInBrowser", async (_event, projectPath, relativePath) 
   }
   const error = await shell.openPath(abs);
   return error ? { ok: false, error } : { ok: true };
+});
+
+// ------------------------------------------------------------------
+// Device sign-in (see backend/app/api/device_auth.py)
+// ------------------------------------------------------------------
+// Until now this app showed a hardcoded "Vamsi, AI Architect" profile no
+// matter who was actually running it (a tester on Windows reported seeing
+// the same fake identity). This mints a real session through the same
+// device-authorization-grant flow GitHub CLI / Docker Desktop use: the app
+// requests a short code, opens the user's browser to approve it (they must
+// already be signed in to MobiusX.ai there), and polls until that happens.
+// The resulting session is a real backend UserSession -- subject to
+// sign-out, "Active Sessions", and the org's concurrent-session cap like
+// any other login -- not a parallel, app-only credential.
+//
+// Stored encrypted at rest with Electron's safeStorage (OS keychain-backed)
+// rather than plain JSON, since this is a real long-lived credential now,
+// unlike the per-process CLI-flag tokens (agentToken/cloudToken) preload.js
+// hands the renderer for the local agent/cloud-gateway services.
+const MOBIUSX_API_URL = process.env.MOBIUSX_API_URL || "http://localhost:8000";
+const MOBIUSX_FRONTEND_URL = process.env.MOBIUSX_FRONTEND_URL || "http://localhost:3000";
+
+function deviceDisplayName() {
+  const platformLabel =
+    process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux";
+  return `${os.hostname()} (${platformLabel})`;
+}
+
+function sessionFilePath() {
+  return path.join(app.getPath("userData"), "session.enc");
+}
+
+function loadStoredSession() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const encrypted = fs.readFileSync(sessionFilePath());
+    return JSON.parse(safeStorage.decryptString(encrypted));
+  } catch {
+    return null; // no file yet, or it's unreadable -- either way, not signed in
+  }
+}
+
+function saveStoredSession(authSession) {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.error("[auth] OS keychain unavailable -- can't persist the session securely; you'll need to sign in again next launch.");
+      return;
+    }
+    fs.writeFileSync(sessionFilePath(), safeStorage.encryptString(JSON.stringify(authSession)));
+  } catch (err) {
+    console.error("[auth] failed to persist session:", err);
+  }
+}
+
+function clearStoredSession() {
+  try {
+    fs.unlinkSync(sessionFilePath());
+  } catch {
+    // Nothing to remove -- fine.
+  }
+}
+
+let deviceLoginPollTimer = null;
+
+function stopDeviceLoginPoll() {
+  if (deviceLoginPollTimer) {
+    clearInterval(deviceLoginPollTimer);
+    deviceLoginPollTimer = null;
+  }
+}
+
+ipcMain.handle("auth:getStoredSession", () => loadStoredSession());
+
+ipcMain.handle("auth:signOut", () => {
+  stopDeviceLoginPoll();
+  clearStoredSession();
+  return { ok: true };
+});
+
+ipcMain.handle("auth:cancelDeviceLogin", () => {
+  stopDeviceLoginPoll();
+  return { ok: true };
+});
+
+ipcMain.handle("auth:startDeviceLogin", async () => {
+  stopDeviceLoginPoll();
+
+  let start;
+  try {
+    const res = await fetch(`${MOBIUSX_API_URL}/auth/device/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_name: deviceDisplayName() }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    start = await res.json();
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Couldn't reach MobiusX.ai (${err.message}). Check your connection and try again.`,
+    };
+  }
+
+  // Best-effort -- the code is also shown in the sign-in screen for manual
+  // entry if the browser doesn't open (no default browser configured,
+  // remote/headless machine, etc).
+  shell.openExternal(`${start.verification_url}?code=${encodeURIComponent(start.user_code)}`).catch(() => {});
+
+  deviceLoginPollTimer = setInterval(async () => {
+    let body;
+    try {
+      const res = await fetch(`${MOBIUSX_API_URL}/auth/device/poll`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_code: start.device_code }),
+      });
+      if (!res.ok) {
+        stopDeviceLoginPoll();
+        mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "error", message: `HTTP ${res.status}` });
+        return;
+      }
+      body = await res.json();
+    } catch {
+      // A transient network blip -- keep polling rather than failing the
+      // whole flow over one dropped request.
+      return;
+    }
+
+    if (body.status === "approved") {
+      stopDeviceLoginPoll();
+      saveStoredSession(body.session);
+      mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "approved", session: body.session });
+    } else if (body.status === "pending") {
+      mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: "pending" });
+    } else {
+      // expired | denied | consumed
+      stopDeviceLoginPoll();
+      mainWindow?.webContents.send("auth:deviceLoginUpdate", { status: body.status });
+    }
+  }, 3000);
+
+  return {
+    ok: true,
+    userCode: start.user_code,
+    verificationUrl: start.verification_url,
+    expiresAt: start.expires_at,
+  };
 });
 
 // Auto-update (electron-updater), wired to the same GitHub Releases the

@@ -1,4 +1,4 @@
-const { agentBaseUrl, agentWsUrl, agentToken, cloudBaseUrl, cloudWsUrl, cloudToken, openFolderDialog, openInBrowser, openExternal } = window.mobiusx;
+const { agentBaseUrl, agentWsUrl, agentToken, cloudBaseUrl, cloudWsUrl, cloudToken, openFolderDialog, openInBrowser, openExternal, auth } = window.mobiusx;
 
 // ============================================================
 // Nav / view switching
@@ -4191,3 +4191,151 @@ function initPaneResize() {
   });
 }
 initPaneResize();
+
+// ============================================================
+// Real sign-in (see main.js's device-login block and
+// backend/app/api/device_auth.py for the full flow)
+// ============================================================
+// Replaces the app's old hardcoded "Vamsi, AI Architect" placeholder --
+// AuthUser has no display-name field on the backend (see
+// frontend/app/services/authApi.ts), so email + role + org is the real
+// identity data that actually exists, and that's what's shown here.
+function applyUserProfile(user) {
+  const initial = (user.email || "?").charAt(0).toUpperCase();
+  const roleLabel = user.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : "Member";
+  const firstName = (user.email || "").split("@")[0];
+
+  for (const id of ["header-user-avatar", "settings-member-avatar"]) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = initial;
+  }
+  for (const id of ["header-user-name", "settings-member-name"]) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = user.email;
+  }
+  for (const id of ["header-user-role", "settings-member-role"]) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = roleLabel;
+  }
+
+  const orgSwitcherName = document.getElementById("org-switcher-name");
+  if (orgSwitcherName && user.org_name) orgSwitcherName.textContent = user.org_name;
+
+  const greeting = document.getElementById("home-greeting");
+  if (greeting && firstName) {
+    const hour = new Date().getHours();
+    const timeGreeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    greeting.textContent = `${timeGreeting}, ${firstName}`;
+  }
+
+  const acctEmail = document.getElementById("settings-account-email");
+  if (acctEmail) acctEmail.textContent = user.email;
+  const acctOrg = document.getElementById("settings-account-org");
+  if (acctOrg) acctOrg.textContent = user.org_name ? `${roleLabel} at ${user.org_name}` : roleLabel;
+}
+
+const signinOverlay = document.getElementById("signin-overlay");
+const signinCode = document.getElementById("signin-code");
+const signinStatus = document.getElementById("signin-status");
+const signinOpenBrowserBtn = document.getElementById("signin-open-browser-btn");
+const signinCopyCodeBtn = document.getElementById("signin-copy-code-btn");
+const signinRetryBtn = document.getElementById("signin-retry-btn");
+const signoutBtn = document.getElementById("settings-signout-btn");
+
+let currentDeviceLoginVerificationUrl = null;
+let currentDeviceLoginCode = null;
+let unsubscribeDeviceLoginUpdates = null;
+
+function setSigninStatus(text, kind) {
+  signinStatus.textContent = text;
+  signinStatus.classList.toggle("is-error", kind === "error");
+  signinStatus.classList.toggle("is-success", kind === "success");
+}
+
+async function beginSignIn() {
+  signinRetryBtn.hidden = true;
+  signinCode.textContent = "........";
+  signinOpenBrowserBtn.disabled = true;
+  signinCopyCodeBtn.disabled = true;
+  setSigninStatus("Preparing sign-in\u2026");
+
+  const result = await auth.startDeviceLogin();
+  if (!result.ok) {
+    setSigninStatus(result.error || "Couldn't start sign-in.", "error");
+    signinRetryBtn.hidden = false;
+    return;
+  }
+
+  currentDeviceLoginCode = result.userCode;
+  currentDeviceLoginVerificationUrl = `${result.verificationUrl}?code=${encodeURIComponent(result.userCode)}`;
+  signinCode.textContent = result.userCode;
+  signinOpenBrowserBtn.disabled = false;
+  signinCopyCodeBtn.disabled = false;
+  setSigninStatus("Waiting for approval in your browser\u2026");
+
+  if (unsubscribeDeviceLoginUpdates) unsubscribeDeviceLoginUpdates();
+  unsubscribeDeviceLoginUpdates = auth.onDeviceLoginUpdate((update) => {
+    if (update.status === "pending") {
+      setSigninStatus("Waiting for approval in your browser\u2026");
+    } else if (update.status === "approved") {
+      setSigninStatus("Signed in!", "success");
+      applyUserProfile(update.session.user);
+      setTimeout(() => {
+        signinOverlay.hidden = true;
+      }, 500);
+    } else if (update.status === "denied") {
+      setSigninStatus("Sign-in was denied.", "error");
+      signinRetryBtn.hidden = false;
+    } else if (update.status === "expired") {
+      setSigninStatus("This code expired.", "error");
+      signinRetryBtn.hidden = false;
+    } else if (update.status === "consumed") {
+      setSigninStatus("This code was already used.", "error");
+      signinRetryBtn.hidden = false;
+    } else {
+      setSigninStatus(update.message || "Something went wrong.", "error");
+      signinRetryBtn.hidden = false;
+    }
+  });
+}
+
+signinOpenBrowserBtn.addEventListener("click", () => {
+  if (currentDeviceLoginVerificationUrl) openExternal(currentDeviceLoginVerificationUrl);
+});
+
+signinCopyCodeBtn.addEventListener("click", async () => {
+  if (!currentDeviceLoginCode) return;
+  try {
+    await navigator.clipboard.writeText(currentDeviceLoginCode);
+    const original = signinCopyCodeBtn.textContent;
+    signinCopyCodeBtn.textContent = "Copied!";
+    setTimeout(() => {
+      signinCopyCodeBtn.textContent = original;
+    }, 1500);
+  } catch {
+    // Clipboard access can fail in some sandboxed contexts -- the code is
+    // already visible on screen either way, so this is a soft failure.
+  }
+});
+
+signinRetryBtn.addEventListener("click", () => {
+  void beginSignIn();
+});
+
+if (signoutBtn) {
+  signoutBtn.addEventListener("click", async () => {
+    await auth.signOut();
+    location.reload();
+  });
+}
+
+async function initAuth() {
+  const stored = await auth.getStoredSession();
+  if (stored && stored.user) {
+    applyUserProfile(stored.user);
+    signinOverlay.hidden = true;
+    return;
+  }
+  await beginSignIn();
+}
+void initAuth();

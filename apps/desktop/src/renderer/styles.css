@@ -915,3 +915,40 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .debug-static-search { margin-bottom: 22px; }
 .debug-static-search h3 { font-size: 13px; margin-bottom: 6px; }
 
+
+/* ---- Sign-in overlay (real device sign-in) ---- */
+.signin-overlay {
+  position: fixed; inset: 0; background: #0e0f12; z-index: 2000;
+  display: flex; align-items: center; justify-content: center;
+}
+.signin-overlay[hidden] { display: none; }
+.signin-card {
+  background: #18191d; border: 1px solid #2a2b31; border-radius: 12px;
+  padding: 32px 36px; width: 380px; max-width: calc(100vw - 40px);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4); text-align: center;
+}
+.signin-logo { width: 40px; height: 40px; border-radius: 8px; margin-bottom: 14px; object-fit: contain; }
+.signin-card h2 { margin: 0 0 6px; font-size: 16px; color: #e4e5e8; }
+.signin-sub { margin: 0 0 20px; font-size: 12.5px; color: #7a7b81; }
+.signin-code-box {
+  background: #101114; border: 1px solid #2a2b31; border-radius: 8px; padding: 16px; margin-bottom: 18px;
+}
+.signin-code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 24px; font-weight: 600;
+  letter-spacing: 0.15em; color: #cfe0ff;
+}
+.signin-status { margin-top: 8px; font-size: 12px; color: #7a7b81; }
+.signin-status.is-error { color: #e0928f; }
+.signin-status.is-success { color: #7fd99a; }
+.signin-actions { display: flex; gap: 10px; }
+.signin-btn-primary, .signin-btn-secondary {
+  flex: 1; padding: 9px 0; border-radius: 6px; font-size: 12.5px; cursor: pointer;
+}
+.signin-btn-primary { background: #4b6fe0; color: #fff; border: none; }
+.signin-btn-primary:disabled, .signin-btn-secondary:disabled { opacity: 0.5; cursor: default; }
+.signin-btn-secondary { background: transparent; color: #cfd0d4; border: 1px solid #2a2b31; }
+.signin-retry {
+  all: unset; display: block; width: 100%; text-align: center; margin-top: 12px;
+  font-size: 12px; color: #4d5bce; cursor: pointer;
+}
+.signin-retry[hidden] { display: none; }
