@@ -485,26 +485,31 @@
 
           <!-- WORKSPACE SETTINGS — org/team/repo concepts this single-user desktop
                app doesn't actually have yet. Laid out to match the multi-tenant
-               product's settings screen, but every value here is either the one
-               real thing this app knows (the currently open project) or a
-               clearly-labeled, disabled preview — never a fabricated org, repo
-               list, or member roster standing in as if it were real data. -->
+               product's settings screen. Workspace name and Members both come
+               from the signed-in user's real session data (applyUserProfile in
+               renderer.js — the same org_name/email/role already shown in the
+               top bar); Repositories reflects the currently open project.
+               Environments is the one section with no real data behind it yet,
+               so it stays a clearly-labeled preview — never a fabricated org,
+               repo list, or member roster standing in as if it were real. -->
           <div class="settings-tab-panel" id="settings-tab-workspace">
             <p class="scope-note">
-              This app is single-project, single-user today — no multi-tenant workspaces, team
-              members, or centrally-pushed policy exist yet (see <code>docs/ARCHITECTURE.md</code>
-              §12). The sections below preview that future screen's layout; only "Repositories"
-              reflects something real — the project you currently have open.
+              This app is single-project, single-user today — no switching between multiple
+              workspaces, team member management, or centrally-pushed policy exist yet (see
+              <code>docs/ARCHITECTURE.md</code> §12). The sections below preview that future
+              screen's layout; "Workspace" and "Members" show your real account data, and
+              "Repositories" shows the project you currently have open — only "Environments"
+              below is a placeholder with nothing real behind it yet.
             </p>
 
             <div class="settings-section">
               <h3>Workspace</h3>
               <div class="workspace-overview-row">
                 <div>
-                  <div class="workspace-overview-name">ACME Corp <span class="status-text">(preview)</span></div>
-                  <div class="workspace-overview-sub">Multi-tenant workspaces aren't built yet — this name is illustrative</div>
+                  <div class="workspace-overview-name" id="settings-workspace-name">Signing in…</div>
+                  <div class="workspace-overview-sub">Switching workspaces or managing members isn't available from this desktop app yet — do that at mobiusx.ai</div>
                 </div>
-                <button class="refresh-btn" disabled title="Not implemented — visual placeholder">Edit</button>
+                <button class="refresh-btn" disabled title="Not implemented — manage workspace settings at mobiusx.ai">Edit</button>
               </div>
             </div>
 

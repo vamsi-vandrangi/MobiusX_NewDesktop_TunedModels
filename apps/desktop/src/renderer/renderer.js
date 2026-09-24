@@ -4221,6 +4221,13 @@ function applyUserProfile(user) {
   const orgSwitcherName = document.getElementById("org-switcher-name");
   if (orgSwitcherName && user.org_name) orgSwitcherName.textContent = user.org_name;
 
+  // Workspace Settings' "Workspace" card used to show a hardcoded "ACME Corp"
+  // placeholder regardless of who was signed in -- confusing at best (a user
+  // in a real org would see someone else's org name in their own settings).
+  // Same real org_name the top-bar switcher above already uses.
+  const settingsWorkspaceName = document.getElementById("settings-workspace-name");
+  if (settingsWorkspaceName) settingsWorkspaceName.textContent = user.org_name || "—";
+
   const greeting = document.getElementById("home-greeting");
   if (greeting && firstName) {
     const hour = new Date().getHours();
