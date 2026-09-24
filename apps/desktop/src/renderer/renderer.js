@@ -4232,6 +4232,11 @@ function applyUserProfile(user) {
   if (acctEmail) acctEmail.textContent = user.email;
   const acctOrg = document.getElementById("settings-account-org");
   if (acctOrg) acctOrg.textContent = user.org_name ? `${roleLabel} at ${user.org_name}` : roleLabel;
+
+  const menuEmail = document.getElementById("user-chip-menu-email");
+  if (menuEmail) menuEmail.textContent = user.email;
+  const menuOrg = document.getElementById("user-chip-menu-org");
+  if (menuOrg) menuOrg.textContent = user.org_name ? `${roleLabel} at ${user.org_name}` : roleLabel;
 }
 
 const signinOverlay = document.getElementById("signin-overlay");
@@ -4241,6 +4246,9 @@ const signinOpenBrowserBtn = document.getElementById("signin-open-browser-btn");
 const signinCopyCodeBtn = document.getElementById("signin-copy-code-btn");
 const signinRetryBtn = document.getElementById("signin-retry-btn");
 const signoutBtn = document.getElementById("settings-signout-btn");
+const userChipBtn = document.getElementById("user-chip");
+const userChipMenu = document.getElementById("user-chip-menu");
+const headerSignoutBtn = document.getElementById("header-signout-btn");
 
 let currentDeviceLoginVerificationUrl = null;
 let currentDeviceLoginCode = null;
@@ -4322,10 +4330,40 @@ signinRetryBtn.addEventListener("click", () => {
   void beginSignIn();
 });
 
+async function doSignOut() {
+  await auth.signOut();
+  location.reload();
+}
+
 if (signoutBtn) {
-  signoutBtn.addEventListener("click", async () => {
-    await auth.signOut();
-    location.reload();
+  signoutBtn.addEventListener("click", () => {
+    void doSignOut();
+  });
+}
+
+if (headerSignoutBtn) {
+  headerSignoutBtn.addEventListener("click", () => {
+    void doSignOut();
+  });
+}
+
+function closeUserChipMenu() {
+  if (!userChipMenu || userChipMenu.hidden) return;
+  userChipMenu.hidden = true;
+  if (userChipBtn) userChipBtn.setAttribute("aria-expanded", "false");
+}
+
+if (userChipBtn && userChipMenu) {
+  userChipBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const willOpen = userChipMenu.hidden;
+    userChipMenu.hidden = !willOpen;
+    userChipBtn.setAttribute("aria-expanded", String(willOpen));
+  });
+  userChipMenu.addEventListener("click", (event) => event.stopPropagation());
+  document.addEventListener("click", closeUserChipMenu);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeUserChipMenu();
   });
 }
 

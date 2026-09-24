@@ -50,11 +50,18 @@
         <button id="notif-btn" class="icon-btn" title="Notifications aren't wired up yet — visual placeholder">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
         </button>
-        <div id="user-chip">
-          <span class="avatar" id="header-user-avatar">…</span>
-          <div>
-            <div class="user-name" id="header-user-name">Signing in…</div>
-            <div class="user-role" id="header-user-role">—</div>
+        <div id="user-chip-wrap">
+          <button id="user-chip" type="button" aria-haspopup="true" aria-expanded="false">
+            <span class="avatar" id="header-user-avatar">…</span>
+            <div>
+              <div class="user-name" id="header-user-name">Signing in…</div>
+              <div class="user-role" id="header-user-role">—</div>
+            </div>
+          </button>
+          <div id="user-chip-menu" class="user-chip-menu" hidden>
+            <div class="user-chip-menu-email" id="user-chip-menu-email">—</div>
+            <div class="user-chip-menu-org" id="user-chip-menu-org">—</div>
+            <button id="header-signout-btn" class="user-chip-menu-signout">Sign out</button>
           </div>
         </div>
       </header>

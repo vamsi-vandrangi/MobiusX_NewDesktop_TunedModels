@@ -101,7 +101,26 @@ code { background: #1c1d21; padding: 1px 5px; border-radius: 3px; font-size: 12p
   padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 .icon-btn:hover { background: #1c1d22; color: #fff; }
-#user-chip { display: flex; align-items: center; gap: 8px; }
+#user-chip-wrap { position: relative; }
+#user-chip {
+  display: flex; align-items: center; gap: 8px;
+  background: transparent; border: 1px solid transparent; border-radius: 8px;
+  padding: 4px 8px; margin: -4px -8px; cursor: pointer; font: inherit; color: inherit;
+  text-align: left;
+}
+#user-chip:hover, #user-chip[aria-expanded="true"] { background: #1c1d22; border-color: #232429; }
+.user-chip-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 100;
+  background: #18191d; border: 1px solid #2a2b31; border-radius: 10px;
+  padding: 10px 14px; min-width: 200px; box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+}
+.user-chip-menu-email { font-size: 12.5px; color: #e4e5e8; word-break: break-all; }
+.user-chip-menu-org { font-size: 11px; color: #7a7b81; margin: 2px 0 10px; }
+.user-chip-menu-signout {
+  width: 100%; background: #232429; border: 1px solid #2f3038; border-radius: 6px;
+  color: #e4e5e8; font-size: 12px; padding: 6px 0; cursor: pointer;
+}
+.user-chip-menu-signout:hover { background: #2a2b31; }
 .avatar {
   width: 28px; height: 28px; border-radius: 50%;
   background: #2c2d33; display: flex; align-items: center; justify-content: center;
