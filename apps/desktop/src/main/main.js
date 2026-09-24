@@ -297,8 +297,8 @@ ipcMain.handle("shell:openInBrowser", async (_event, projectPath, relativePath) 
 // rather than plain JSON, since this is a real long-lived credential now,
 // unlike the per-process CLI-flag tokens (agentToken/cloudToken) preload.js
 // hands the renderer for the local agent/cloud-gateway services.
-const MOBIUSX_API_URL = process.env.MOBIUSX_API_URL || "http://localhost:8000";
-const MOBIUSX_FRONTEND_URL = process.env.MOBIUSX_FRONTEND_URL || "http://localhost:3000";
+const MOBIUSX_API_URL = process.env.MOBIUSX_API_URL || "https://api.mobiusx.co";
+const MOBIUSX_FRONTEND_URL = process.env.MOBIUSX_FRONTEND_URL || "https://mobiusx.co";
 
 function deviceDisplayName() {
   const platformLabel =
