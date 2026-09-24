@@ -17,7 +17,9 @@
   },
   "devDependencies": {
     "electron": "^33.2.1",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "pe-library": "^2.0.1",
+    "resedit": "^3.1.0"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -29,6 +31,7 @@
   },
   "build": {
     "appId": "ai.mobiusx.desktop",
+    "afterSign": "scripts/fix-windows-icon.js",
     "productName": "MobiusX.ai",
     "copyright": "Copyright © CadenceX Technologies",
     "directories": {
