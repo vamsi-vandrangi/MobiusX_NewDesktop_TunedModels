@@ -17,7 +17,7 @@ function showView(name) {
   if (name === "settings") loadSettings();
   if (name === "artifacts") loadArtifacts();
   if (name === "knowledge") loadKnowledgeView();
-  if (name === "home") loadDashboard();
+  if (name === "search") runGlobalSearch();
 }
 
 document.querySelectorAll(".nav-item").forEach((btn) => {
@@ -224,7 +224,7 @@ async function pickAndOpenProject() {
 }
 
 document.getElementById("open-project-btn").addEventListener("click", pickAndOpenProject);
-document.getElementById("qa-open-project").addEventListener("click", pickAndOpenProject);
+document.getElementById("qa-open-project")?.addEventListener("click", pickAndOpenProject); // Home's quick-action card was removed in the chat-first redesign; guarded rather than deleted in case it comes back
 
 // ============================================================
 // New Project (item 6, phase 1) — create an empty folder on the user's own
@@ -315,7 +315,7 @@ async function createProject() {
 }
 
 document.getElementById("new-project-btn").addEventListener("click", createProject);
-document.getElementById("qa-new-project").addEventListener("click", createProject);
+document.getElementById("qa-new-project")?.addEventListener("click", createProject); // see qa-open-project comment above
 
 function buildNestedTree(nodes) {
   const root = { children: new Map() };
@@ -2241,7 +2241,14 @@ function createAssistantPanel(container) {
         }
 
         const bodyText = task.output || (task.status === "failed" ? (task.error ?? "") : "");
-        outputEl.textContent = prefixLines.join("") + bodyText + (task.status === "cancelled" ? "\n[cancelled]" : "");
+        // Was outputEl.textContent = ... (plain text) -- chat responses are
+        // markdown (the model is instructed accordingly), so this rendered
+        // literal "**bold**"/```code``` fences etc. instead of formatting
+        // them. renderMarkdownWithMermaid is already vendored and used
+        // elsewhere (HLD/LLD docs, artifacts); fire-and-forget is fine here,
+        // same as those call sites -- this fn is explicitly safe to call
+        // repeatedly and streaming already re-renders this element often.
+        renderMarkdownWithMermaid(outputEl, prefixLines.join("") + bodyText + (task.status === "cancelled" ? "\n[cancelled]" : ""));
 
         if (task.usage) showUsageAlertIfNeeded(task.usage);
 
@@ -2554,34 +2561,119 @@ const embeddedAssistantPanel = createAssistantPanel(document.getElementById("ass
 createAssistantPanel(document.getElementById("assistant-full"));
 
 // ============================================================
-// Home "ask" box — routes into the AI Assistant view
+// Chat-first shell wiring (2026 redesign) -- replaces the old Home
+// page's ask-box router (Home itself is gone; #assistant-full is now
+// the default view and has its own real input/mode-picker/model-select).
 // ============================================================
-const homeModelSelectEl = document.getElementById("home-model-select");
-populateModelSelect(homeModelSelectEl, { includeAuto: true });
-document.querySelectorAll(".ask-modes .mode-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".ask-modes .mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
-  });
+
+// ---- Theme (light/dark/system) ----
+// Persisted in localStorage, same lightweight pattern as Recent Projects
+// below -- a cross-process (agent-settings) version can follow later if
+// the theme needs to sync across this app's other surfaces.
+const THEME_KEY = "mobiusx.theme"; // "light" | "dark" | absent = system
+function getThemeChoice() {
+  try {
+    return localStorage.getItem(THEME_KEY) || "system";
+  } catch {
+    return "system";
+  }
+}
+function applyTheme(choice) {
+  const root = document.documentElement;
+  if (choice === "light" || choice === "dark") root.setAttribute("data-theme", choice);
+  else root.removeAttribute("data-theme");
+  document.querySelectorAll(".theme-picker-btn").forEach((b) => b.classList.toggle("active", b.dataset.themeChoice === choice));
+  const toggleBtn = document.getElementById("theme-toggle-btn");
+  if (toggleBtn) toggleBtn.textContent = choice === "light" ? "☀" : choice === "dark" ? "☾" : "◐";
+}
+function setThemeChoice(choice) {
+  try {
+    localStorage.setItem(THEME_KEY, choice);
+  } catch {
+    /* private-mode / quota — non-fatal, theme just won't persist */
+  }
+  applyTheme(choice);
+}
+applyTheme(getThemeChoice());
+document.getElementById("theme-toggle-btn")?.addEventListener("click", () => {
+  const order = ["system", "light", "dark"];
+  const next = order[(order.indexOf(getThemeChoice()) + 1) % order.length];
+  setThemeChoice(next);
 });
-document.getElementById("home-ask-send").addEventListener("click", () => {
-  const val = document.getElementById("home-ask-input").value.trim();
-  showView("assistant");
-  if (val) {
-    document.getElementById("home-ask-input").value = "";
-    const input = document.querySelector("#assistant-full .assistant-input-row input");
-    input.value = val;
-    // Carry the Home page's model choice into the panel that actually
-    // sends the request — this is the whole point of the Home dropdown:
-    // letting the user pick a faster model right where they noticed the lag.
-    const homeModel = homeModelSelectEl.value;
-    const fullModelSelect = document.querySelector("#assistant-full .model-select");
-    if (homeModel && fullModelSelect) fullModelSelect.value = homeModel;
-    document.querySelector("#assistant-full .send-btn").click();
+document.querySelectorAll(".theme-picker-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setThemeChoice(btn.dataset.themeChoice));
+});
+
+// ---- "More" menu (topbar) — bridge to views not yet folded into the
+// chat-first redesign (Workspace, Knowledge, Tasks, Debug, Changes,
+// Artifacts). Reuses the existing [data-view-link] wiring below. ----
+const moreMenuBtn = document.getElementById("more-menu-btn");
+const moreMenuEl = document.getElementById("more-menu");
+moreMenuBtn?.addEventListener("click", () => {
+  moreMenuEl.hidden = !moreMenuEl.hidden;
+});
+document.addEventListener("click", (e) => {
+  if (moreMenuEl && !moreMenuEl.hidden && !moreMenuEl.contains(e.target) && e.target !== moreMenuBtn) {
+    moreMenuEl.hidden = true;
   }
 });
-document.getElementById("home-ask-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") document.getElementById("home-ask-send").click();
+document.querySelectorAll("#more-menu .more-menu-item").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    moreMenuEl.hidden = true;
+  });
 });
+
+// ---- Profile menu's new entries -- Docs/Contact Us are real external
+// links (openExternal is the same IPC call the rest of the app already
+// uses); Create Profile/Shortcuts are marked disabled with an honest
+// reason in index.html rather than wired to nothing silently. ----
+document.getElementById("user-chip-menu-docs")?.addEventListener("click", () => openExternal("https://mobiusx.ai/download"));
+document.getElementById("user-chip-menu-contact")?.addEventListener("click", () => openExternal("mailto:support@mobiusx.ai"));
+
+// ---- Global Search view -- real filter over Recent Projects (local)
+// and live Tasks (GET /tasks, already real); see index.html's view-search
+// for why full chat-history search isn't included here. ----
+async function runGlobalSearch() {
+  const input = document.getElementById("global-search-input");
+  const projectsEl = document.getElementById("global-search-projects");
+  const tasksEl = document.getElementById("global-search-tasks");
+  if (!input || !projectsEl || !tasksEl) return;
+  const render = async () => {
+    const q = input.value.trim().toLowerCase();
+    const projects = getRecents().filter((p) => !q || p.toLowerCase().includes(q));
+    projectsEl.innerHTML = projects.length
+      ? projects
+          .map(
+            (p) =>
+              `<div class="recent-item" data-path="${escapeHtml(p)}"><span>${escapeHtml(p.split("/").filter(Boolean).pop() || p)}</span><span class="recent-item-path">${escapeHtml(p)}</span></div>`,
+          )
+          .join("")
+      : "<div class='recent-empty'>No matching projects.</div>";
+    projectsEl.querySelectorAll(".recent-item").forEach((el) => el.addEventListener("click", () => openProject(el.dataset.path)));
+
+    if (!cloudBaseUrl) {
+      tasksEl.innerHTML = "<div class='debug-empty'>Cloud Agent Gateway is not running.</div>";
+      return;
+    }
+    try {
+      const { tasks } = await cloudApi("/tasks");
+      const matches = tasks.filter((t) => !q || t.prompt.toLowerCase().includes(q) || t.mode.toLowerCase().includes(q));
+      tasksEl.innerHTML = matches.length
+        ? matches
+            .map(
+              (t) =>
+                `<div class="task-row" data-id="${t.id}"><div class="task-row-prompt">${escapeHtml(t.prompt)}</div><div class="task-row-meta"><span class="task-mode-badge">${t.mode}</span><span class="task-status ${t.status}">${t.status}</span></div></div>`,
+            )
+            .join("")
+        : "<div class='debug-empty'>No matching tasks.</div>";
+      tasksEl.querySelectorAll(".task-row").forEach((el) => el.addEventListener("click", () => showTaskDetail(el.dataset.id)));
+    } catch (err) {
+      tasksEl.innerHTML = `<div class="debug-empty">Failed to load tasks: ${escapeHtml(err.message)}</div>`;
+    }
+  };
+  input.oninput = render;
+  render();
+}
 
 // ============================================================
 // Debug (Intelligent Debugger) view — static code search + git history.

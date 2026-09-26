@@ -13,19 +13,30 @@
         <img class="brand-mark" src="../../assets/logo.png" alt="MobiusX.ai" />
         <span class="brand-name">MobiusX</span>
       </div>
+
+      <!-- Cursor-style flat nav (2026 redesign, see docs/ARCHITECTURE.md's
+           note above the nav-projects block below) -- Knowledge, Debug,
+           Tasks, Changes, Artifacts and the classic Workspace/file-tree
+           view aren't gone, they're reachable from "More" in the topbar
+           until they're folded into the chat experience itself (chat
+           @-context, a Debug mode, an inline diff card) in the next
+           phase of this redesign. -->
       <nav id="nav">
-        <button class="nav-item active" data-view="home"><span class="nav-icon">⌂</span>Home</button>
-        <button class="nav-item" data-view="assistant"><span class="nav-icon">✦</span>AI Assistant</button>
-        <button class="nav-item" data-view="workspace"><span class="nav-icon">▤</span>Workspace</button>
-        <button class="nav-item" data-view="repositories"><span class="nav-icon">⌥</span>Repositories</button>
-        <button class="nav-item" data-view="knowledge"><span class="nav-icon">◈</span>Knowledge</button>
-        <button class="nav-item" data-view="agents"><span class="nav-icon">◎</span>Agents</button>
-        <button class="nav-item" data-view="tasks"><span class="nav-icon">☑</span>Tasks</button>
-        <button class="nav-item" data-view="debug"><span class="nav-icon">◐</span>Debug &amp; Fix</button>
-        <button class="nav-item" data-view="changes"><span class="nav-icon">±</span>Changes</button>
-        <button class="nav-item" data-view="artifacts"><span class="nav-icon">▣</span>Artifacts</button>
-        <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Settings</button>
+        <button class="nav-item active" data-view="assistant"><span class="nav-icon">✎</span>New Chat</button>
+        <button class="nav-item" data-view="search"><span class="nav-icon">⌕</span>Search</button>
+        <button class="nav-item" data-view="automations"><span class="nav-icon">⚡</span>Automations</button>
+        <button class="nav-item" data-view="customize"><span class="nav-icon">◫</span>Customize</button>
       </nav>
+
+      <div class="nav-projects">
+        <div class="nav-projects-head">
+          <span class="nav-section-label">Projects</span>
+          <button id="new-project-btn" class="nav-section-action" title="New Project — create a folder and scaffold an app into it">+</button>
+        </div>
+        <button id="open-project-btn" class="nav-projects-open-btn">Open Folder…</button>
+        <div id="recent-projects" class="recent-list nav-recent-list"></div>
+      </div>
+
       <div id="agent-indicator" class="agent-indicator">
         <span id="agent-dot" class="dot"></span>
         <div>
@@ -33,15 +44,50 @@
           <div id="agent-substatus" class="agent-substatus">Connecting…</div>
         </div>
       </div>
+
+      <div class="sidebar-footer">
+        <button id="sidebar-connect-github-btn" class="sidebar-connect-btn" title="Real GitHub/GitLab connect (clone, PAT auth) is coming in a follow-up pass — not wired yet">
+          <span class="nav-icon">⎇</span>Connect GitHub
+        </button>
+        <div class="sidebar-footer-row">
+          <div id="user-chip-wrap">
+            <button id="user-chip" type="button" aria-haspopup="true" aria-expanded="false">
+              <span class="avatar" id="header-user-avatar">…</span>
+              <div>
+                <div class="user-name" id="header-user-name">Signing in…</div>
+                <div class="user-role" id="header-user-role">—</div>
+              </div>
+            </button>
+            <div id="user-chip-menu" class="user-chip-menu" hidden>
+              <div class="user-chip-menu-email" id="user-chip-menu-email">—</div>
+              <div class="user-chip-menu-org" id="user-chip-menu-org">—</div>
+              <button class="user-chip-menu-item" data-view-link="settings">Settings</button>
+              <button class="user-chip-menu-item" id="user-chip-menu-create-profile" disabled title="Not implemented — this app is single-user today">Create Profile</button>
+              <button class="user-chip-menu-item" id="user-chip-menu-docs">Docs</button>
+              <button class="user-chip-menu-item" id="user-chip-menu-shortcuts" disabled title="Not implemented — visual placeholder">Shortcuts</button>
+              <button class="user-chip-menu-item" id="user-chip-menu-contact">Contact Us</button>
+              <button id="header-signout-btn" class="user-chip-menu-signout">Log out</button>
+            </div>
+          </div>
+          <button id="theme-toggle-btn" class="theme-toggle-btn" title="Switch theme" type="button">◐</button>
+        </div>
+      </div>
     </aside>
 
     <div id="main">
       <header id="topbar">
-        <input id="search" placeholder="Search anything…" />
-        <div id="project-chip">
-          <span id="project-chip-label">No project open</span>
-          <button id="new-project-btn">New Project…</button>
-          <button id="open-project-btn">Open Project…</button>
+        <span id="project-chip-label" class="project-chip-label">No project open</span>
+        <div class="topbar-spacer"></div>
+        <div id="more-menu-wrap">
+          <button id="more-menu-btn" class="icon-btn" title="Workspace, Tasks, Debug, Changes, Artifacts, Knowledge">⋯ More</button>
+          <div id="more-menu" class="more-menu" hidden>
+            <button class="more-menu-item" data-view-link="workspace">Workspace</button>
+            <button class="more-menu-item" data-view-link="knowledge">Knowledge</button>
+            <button class="more-menu-item" data-view-link="tasks">Tasks</button>
+            <button class="more-menu-item" data-view-link="debug">Debug &amp; Fix</button>
+            <button class="more-menu-item" data-view-link="changes">Changes</button>
+            <button class="more-menu-item" data-view-link="artifacts">Artifacts</button>
+          </div>
         </div>
         <div id="org-switcher" class="org-switcher" title="Workspace/org switching isn't built yet — visual placeholder for the single-user setup this app runs today">
           <span class="org-switcher-name" id="org-switcher-name">—</span>
@@ -50,92 +96,62 @@
         <button id="notif-btn" class="icon-btn" title="Notifications aren't wired up yet — visual placeholder">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
         </button>
-        <div id="user-chip-wrap">
-          <button id="user-chip" type="button" aria-haspopup="true" aria-expanded="false">
-            <span class="avatar" id="header-user-avatar">…</span>
-            <div>
-              <div class="user-name" id="header-user-name">Signing in…</div>
-              <div class="user-role" id="header-user-role">—</div>
-            </div>
-          </button>
-          <div id="user-chip-menu" class="user-chip-menu" hidden>
-            <div class="user-chip-menu-email" id="user-chip-menu-email">—</div>
-            <div class="user-chip-menu-org" id="user-chip-menu-org">—</div>
-            <button id="header-signout-btn" class="user-chip-menu-signout">Sign out</button>
-          </div>
-        </div>
       </header>
 
       <main id="content">
-        <!-- HOME -->
-        <section class="view" id="view-home">
-          <h1 id="home-greeting">Welcome</h1>
-          <p class="subtitle">Your AI engineering workspace</p>
-
-          <div class="ask-box">
-            <input id="home-ask-input" placeholder="Ask anything, or describe what you want to build…" />
-            <div class="ask-modes">
-              <button class="mode-btn active" data-mode="ask">Ask</button>
-              <button class="mode-btn" data-mode="plan">Plan</button>
-              <button class="mode-btn" data-mode="build">Build</button>
-              <button class="mode-btn" data-mode="spec">Spec</button>
-              <select id="home-model-select" class="model-select" title="Which AI model handles this — pick a specific one here if the default feels slow"></select>
-              <button id="home-ask-send" class="send-btn">→</button>
-            </div>
-          </div>
-
-          <section id="dashboard-section" hidden>
-            <div class="dashboard-header">
-              <h3 class="section-title" style="margin-bottom:0">Project health — <span id="dashboard-project-name"></span></h3>
-              <button id="dashboard-refresh-btn" class="refresh-btn" title="Refresh">&#8635; Refresh</button>
-            </div>
-            <div class="dashboard-grid">
-              <div class="dashboard-col">
-                <div class="dashboard-col-title">Build / test / security</div>
-                <div id="dashboard-completion"></div>
-              </div>
-              <div class="dashboard-col">
-                <div class="dashboard-col-title">Artifacts</div>
-                <div id="dashboard-artifacts" class="recent-list"></div>
-              </div>
-              <div class="dashboard-col">
-                <div class="dashboard-col-title">Recent agent activity</div>
-                <div id="dashboard-activity" class="audit-log"></div>
-              </div>
-            </div>
-          </section>
-
-          <h3 class="section-title">Quick actions</h3>
-          <div class="quick-actions">
-            <button class="quick-action" id="qa-new-project">
-              <div class="qa-title">New Project</div>
-              <div class="qa-sub">Create a project folder and scaffold an app into it</div>
-            </button>
-            <button class="quick-action" id="qa-open-project">
-              <div class="qa-title">Open Project</div>
-              <div class="qa-sub">Select or create a workspace</div>
-            </button>
-            <button class="quick-action" data-view-link="knowledge">
-              <div class="qa-title">Search Knowledge</div>
-              <div class="qa-sub">Search enterprise knowledge</div>
-            </button>
-            <button class="quick-action" data-view-link="tasks">
-              <div class="qa-title">Create Task</div>
-              <div class="qa-sub">Start an AI agent task</div>
-            </button>
-            <button class="quick-action" data-view-link="changes">
-              <div class="qa-title">View Changes</div>
-              <div class="qa-sub">Review pending changes</div>
-            </button>
-          </div>
-
-          <h3 class="section-title">Recent projects</h3>
-          <div id="recent-projects" class="recent-list"></div>
+        <!-- AI ASSISTANT / CHAT — the app's front door as of the 2026 redesign.
+             Home's old ask-box was a thin router onto this same panel (see
+             renderer.js); Home's Quick Actions/Recent Projects moved into the
+             sidebar's Projects section above; its Project Health dashboard
+             was dropped in this pass (loadDashboard() is now dead code, left
+             in place rather than deleted — revisit if it's wanted back). -->
+        <section class="view" id="view-assistant">
+          <div class="assistant-panel assistant-panel--full" id="assistant-full"></div>
         </section>
 
-        <!-- AI ASSISTANT (full page) -->
-        <section class="view" id="view-assistant" hidden>
-          <div class="assistant-panel assistant-panel--full" id="assistant-full"></div>
+        <!-- SEARCH — real, not a stub: filters Recent Projects + live Tasks
+             (GET /tasks, already real) by text. Full chat-history search
+             isn't built (there's no persisted chat history yet, see
+             createAssistantPanel's own doc comment on historyTurns being
+             in-memory only) -- labeled honestly below rather than faked. -->
+        <section class="view" id="view-search" hidden>
+          <h2>Search</h2>
+          <input id="global-search-input" type="text" placeholder="Search projects and tasks…" class="global-search-input" />
+          <h3 class="section-title">Projects</h3>
+          <div id="global-search-projects" class="recent-list"></div>
+          <h3 class="section-title">Tasks</h3>
+          <div id="global-search-tasks" class="recent-list"></div>
+        </section>
+
+        <!-- AUTOMATIONS -->
+        <section class="view placeholder-view" id="view-automations" hidden>
+          <h2>Automations</h2>
+          <div class="placeholder-card">
+            <div class="placeholder-card-icon">⚡</div>
+            <div class="placeholder-card-body">
+              <div class="placeholder-card-title">Not built yet <span class="status-text">(future phase)</span></div>
+              <p>Scheduled/triggered agent runs (e.g. "run Testing mode on every git push") aren't implemented yet. Multitask — running several modes at once on demand — lands in the next pass of this redesign; see the mode picker in New Chat.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- CUSTOMIZE -->
+        <section class="view" id="view-customize" hidden>
+          <h2>Customize</h2>
+          <div class="settings-section">
+            <h3>Appearance</h3>
+            <div class="workspace-overview-row">
+              <div>
+                <div class="workspace-overview-name">Theme</div>
+                <div class="workspace-overview-sub">Follows your system by default; pick one to override it.</div>
+              </div>
+              <div class="theme-picker" id="customize-theme-picker">
+                <button class="theme-picker-btn" data-theme-choice="system">System</button>
+                <button class="theme-picker-btn" data-theme-choice="light">Light</button>
+                <button class="theme-picker-btn" data-theme-choice="dark">Dark</button>
+              </div>
+            </div>
+          </div>
         </section>
 
         <!-- WORKSPACE -->
