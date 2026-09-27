@@ -1561,6 +1561,13 @@ select.model-select option:disabled, #default-model-select option:disabled { col
   padding: 6px; min-width: 160px; box-shadow: 0 12px 30px rgba(0,0,0,0.4);
   display: flex; flex-direction: column; gap: 1px;
 }
+/* The unconditional `display: flex` above has the same specificity as the
+   browser's default `[hidden] { display: none }` rule and comes later in
+   the cascade, so it silently wins and the hidden attribute never actually
+   hides the menu -- this, not the JS toggle logic, was the real reason the
+   More menu never closed. Restate display:none for the hidden case at
+   matching specificity so the attribute takes effect again. */
+.more-menu[hidden] { display: none; }
 .more-menu-item {
   all: unset; box-sizing: border-box; width: 100%; cursor: pointer;
   padding: 7px 10px; border-radius: 6px; font-size: 12.5px; color: var(--gray-41);
