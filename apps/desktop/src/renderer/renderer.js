@@ -2606,20 +2606,38 @@ document.querySelectorAll(".theme-picker-btn").forEach((btn) => {
 
 // ---- "More" menu (topbar) — bridge to views not yet folded into the
 // chat-first redesign (Workspace, Knowledge, Tasks, Debug, Changes,
-// Artifacts). Reuses the existing [data-view-link] wiring below. ----
+// Artifacts). Reuses the existing [data-view-link] wiring below.
+//
+// Mirrors the user-chip-menu pattern below: the toggle button and the
+// menu itself both stopPropagation() so a single click can never race
+// against the document-level outside-click closer (the earlier version
+// relied only on a hidden-state check in that closer, which is fragile
+// -- the toggle button's own click also bubbles to document, and any
+// re-render or timing quirk could leave hidden state stale so the menu
+// never closes). ----
 const moreMenuBtn = document.getElementById("more-menu-btn");
 const moreMenuEl = document.getElementById("more-menu");
-moreMenuBtn?.addEventListener("click", () => {
-  moreMenuEl.hidden = !moreMenuEl.hidden;
-});
-document.addEventListener("click", (e) => {
-  if (moreMenuEl && !moreMenuEl.hidden && !moreMenuEl.contains(e.target) && e.target !== moreMenuBtn) {
-    moreMenuEl.hidden = true;
-  }
-});
+function closeMoreMenu() {
+  if (!moreMenuEl || moreMenuEl.hidden) return;
+  moreMenuEl.hidden = true;
+  moreMenuBtn?.setAttribute("aria-expanded", "false");
+}
+if (moreMenuBtn && moreMenuEl) {
+  moreMenuBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const willOpen = moreMenuEl.hidden;
+    moreMenuEl.hidden = !willOpen;
+    moreMenuBtn.setAttribute("aria-expanded", String(willOpen));
+  });
+  moreMenuEl.addEventListener("click", (event) => event.stopPropagation());
+  document.addEventListener("click", closeMoreMenu);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMoreMenu();
+  });
+}
 document.querySelectorAll("#more-menu .more-menu-item").forEach((btn) => {
   btn.addEventListener("click", () => {
-    moreMenuEl.hidden = true;
+    closeMoreMenu();
   });
 });
 
