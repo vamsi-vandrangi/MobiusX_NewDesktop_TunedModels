@@ -560,13 +560,16 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
 .nav-item.active .nav-icon { color: var(--blue-13); }
 
 .agent-indicator {
+  /* Nested inside .sidebar-footer now (below the user chip row), which
+     already supplies 16px horizontal padding -- no horizontal padding
+     of its own here, just a divider line above and breathing room
+     below since it's the last thing in the footer. */
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px 0;
-  margin-top: 8px;
+  margin-top: 4px;
+  padding: 12px 0;
   border-top: 1px solid var(--gray-16);
-  padding-top: 12px;
 }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray-28); flex-shrink: 0; }
 .dot.ok { background: var(--green-6); box-shadow: 0 0 6px var(--green-7); }
