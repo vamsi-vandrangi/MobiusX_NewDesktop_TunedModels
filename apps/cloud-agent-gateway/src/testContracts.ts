@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { TestApplicationTopology } from "./testTopology.js";
+import type { GenerationCheckpoint, ProposedEdit } from "@mobiusx/protocol";
+import type { TestApplicationTopology, TestTopologyFile } from "./testTopology.js";
 
 export type TestLayer = "api" | "database" | "browser";
 export type TestExpectation = { status?: number; persistedState?: string; auditAction?: string; rejected?: boolean };
@@ -32,6 +33,27 @@ export interface TestOperationMetadata {
   content: string;
 }
 
+/** Preserve previously executed test-slice artifacts when a later test-stage
+ * attempt resumes. A newer proposal cannot silently overwrite passing tests. */
+export function reuseValidatedTestSliceArtifacts(
+  generated: ProposedEdit[],
+  slices: NonNullable<GenerationCheckpoint["testSubtasks"]>,
+  architectureHash: string,
+): ProposedEdit[] {
+  const output = [...generated];
+  for (const slice of slices.filter((item) => item.architectureHash === architectureHash)) {
+    for (const artifact of slice.artifacts) {
+      const index = output.findIndex((edit) => edit.path.toLowerCase() === artifact.path.toLowerCase());
+      if (index >= 0 && output[index].content !== artifact.content) {
+        output[index] = { path: artifact.path, action: artifact.action, content: artifact.content };
+      } else if (index < 0) {
+        output.push({ path: artifact.path, action: artifact.action, content: artifact.content });
+      }
+    }
+  }
+  return output;
+}
+
 export interface TestPromptBudget {
   promptBytes: number;
   promptSha256: string;
@@ -42,6 +64,17 @@ export interface TestPromptBudget {
   contextTokens: number;
   estimatedTotalTokens: number;
   fits: boolean;
+}
+
+export interface TestEnvironmentContract {
+  schemaVersion: "1.0";
+  architectureHash: string;
+  topologyHash: string;
+  operationHashes: Record<string, string>;
+  backend: { entrypoint: string; databaseSessionModule: string; databaseUrlEnv: string; userModel: string; customerModel: string; auditModel: string; passwordHasher: string; modelModules: Record<string, string> };
+  authentication: { module: string; method: string; path: string; usernameField: string; passwordField: string; tokenField: string; roleField: string; passwordHashField: string; allowedRoles: string[] };
+  registration: { method: string; path: string; statusCode: number; requestSchema: string; requestFields: string[]; responseIdField: string; responseOwnerField: string; ownerField: string; statusField: string; initialState: string; auditAction: string; actorRole: string };
+  frontend: { baseUrlEnv: string; identitiesFileEnv: string; loginRoute: string; dashboardRoute: string; usernameLabel: string; passwordLabel: string; submitLabel: string; dashboardHeading: string; recordField: string };
 }
 
 /** Conservative pre-dispatch budget; matches the Ollama adapter's char/token heuristic. */
@@ -308,4 +341,484 @@ export function testImplementationPrompt(
     ...(topologySummary ? ["Discovered application topology (authoritative paths/routes/selectors; do not infer a conventional layout):", topologySummary] : []),
     "Return complete file contents in structured file-edit format. Restrict edits to backend/tests/**, frontend/e2e/**, pytest/playwright configuration, and test commands in README.md.",
   ].join("\n");
+}
+
+function sourceModuleForClass(files: TestTopologyFile[], className: string): { moduleName: string; body: string } | undefined {
+  for (const file of files) {
+    const path = file.path.replaceAll("\\", "/").replace(/^\.\//, "");
+    if (!/\.py$/i.test(path)) continue;
+    const lines = file.content.split(/\r?\n/);
+    const classIndex = lines.findIndex((line) => new RegExp(`^class\\s+${className}\\b[^\\n]*:`).test(line));
+    if (classIndex < 0) continue;
+    let end = classIndex + 1;
+    while (end < lines.length && !/^(?:class|def|async\s+def|@)\b/.test(lines[end])) end++;
+    const body = lines.slice(classIndex + 1, end).join("\n");
+    return { moduleName: path.replace(/\.py$/i, "").replaceAll("/", ".").replace(/\.__init__$/, ""), body };
+  }
+  return undefined;
+}
+
+function pythonFields(body: string, orm = false): Set<string> {
+  const pattern = orm
+    ? /^\s{4}([A-Za-z_]\w*)\s*=\s*(?:Column|mapped_column)\s*\(/gm
+    : /^\s{4}([A-Za-z_]\w*)\s*:/gm;
+  return new Set([...body.matchAll(pattern)].map((match) => match[1]));
+}
+
+/** Bind a small executable registration test to actual modules, schemas and ORM fields. */
+export function deriveTestEnvironmentContract(
+  topology: TestApplicationTopology,
+  files: TestTopologyFile[],
+  registrationRecord: TestOperationMetadata,
+  loginRecord: TestOperationMetadata,
+  operations: TestOperationMetadata[],
+): { contract?: TestEnvironmentContract; issues: string[] } {
+  const issues: string[] = [];
+  const registration = parseOperation(registrationRecord);
+  const login = parseOperation(loginRecord);
+  if (!registration || registration.operationKind !== "entity-create") issues.push("registration operation contract is missing or is not an entity-create operation");
+  if (!login || login.operationKind !== "authentication-login") issues.push("login operation contract is missing or is not an authentication-login operation");
+  const entrypoint = topology.backend.entrypoint;
+  if (!entrypoint || !topology.backend.modules.includes(entrypoint.split(":")[0])) issues.push("FastAPI entrypoint is not present in discovered topology");
+  if (!topology.backend.databaseSessionModule || !topology.backend.modules.includes(topology.backend.databaseSessionModule)) issues.push("database session module is not present in discovered topology");
+  if (!registration || !login || !entrypoint || !topology.backend.databaseSessionModule) return { issues };
+
+  const registerRoute = registration.route as { method?: string; path?: string } | undefined;
+  const loginRoute = login.route as { method?: string; path?: string } | undefined;
+  for (const [label, route] of [["registration", registerRoute], ["login", loginRoute]] as const) {
+    if (!route?.method || !route.path || !topology.backend.routes.some((item) => item.method === route.method?.toUpperCase() && item.path === route.path)) issues.push(`${label} operation route is absent from discovered API topology`);
+  }
+
+  const entityName = String(registration.output?.entity ?? "");
+  const auditEntityName = String(registration.audit?.entity ?? "");
+  const principalName = String(login.principal?.entity ?? registration.actor?.entity ?? "");
+  const entity = sourceModuleForClass(files, entityName);
+  const auditEntity = sourceModuleForClass(files, auditEntityName);
+  const principal = sourceModuleForClass(files, principalName);
+  if (!entity) issues.push(`registration ORM entity ${entityName || "<missing>"} is absent from source files`);
+  if (!auditEntity) issues.push(`audit ORM entity ${auditEntityName || "<missing>"} is absent from source files`);
+  if (!principal) issues.push(`authentication principal ${principalName || "<missing>"} is absent from source files`);
+  if (!entity || !auditEntity || !principal) return { issues };
+
+  const input = registration.input as Record<string, any> | undefined;
+  const output = registration.output as Record<string, any> | undefined;
+  const authRequest = (login.request ?? {}) as Record<string, any>;
+  const authInput = (login.input ?? {}) as Record<string, any>;
+  const requestSchema = String(input?.bodySchema ?? "");
+  const responseSchema = String(output?.responseSchema ?? "");
+  const schema = sourceModuleForClass(files, requestSchema);
+  const response = sourceModuleForClass(files, responseSchema);
+  if (!schema) issues.push(`registration request schema ${requestSchema || "<missing>"} is absent from source files`);
+  if (!response) issues.push(`registration response schema ${responseSchema || "<missing>"} is absent from source files`);
+  const bodyMappings = (input?.fieldMappings ?? []).filter((item: any) => item?.source === "body");
+  const requestFields = bodyMappings.map((item: any) => String(item.sourceField ?? item.targetField)).filter(Boolean);
+  const schemaFieldSet = schema ? pythonFields(schema.body) : new Set<string>();
+  const entityFieldSet = pythonFields(entity.body, true);
+  const auditFieldSet = pythonFields(auditEntity.body, true);
+  const principalFieldSet = pythonFields(principal.body, true);
+  if (!requestFields.length) issues.push("registration operation has no request-body field mappings");
+  for (const field of requestFields) {
+    if (!schemaFieldSet.has(field)) issues.push(`registration request field ${field} is absent from ${requestSchema}`);
+    if (!entityFieldSet.has(field)) issues.push(`registration ORM entity ${entityName} has no mapped field ${field}`);
+  }
+
+  const ownerMapping = (input?.fieldMappings ?? []).find((item: any) => item?.source === "actor");
+  const statusMapping = (input?.fieldMappings ?? []).find((item: any) => item?.source === "state");
+  const ownerField = String(ownerMapping?.targetField ?? "");
+  const statusField = String(statusMapping?.targetField ?? "");
+  const initialState = String(statusMapping?.value ?? "");
+  const auditAction = String(registration.audit?.action ?? "");
+  const responseFields = response ? pythonFields(response.body) : new Set<string>();
+  const responseIdField = responseFields.has("id") ? "id" : "";
+  const responseOwnerField = responseFields.has(ownerField) ? ownerField : "";
+  if (!ownerField || !entityFieldSet.has(ownerField) || !responseOwnerField) issues.push("registration owner mapping is not represented by the ORM and response schema");
+  if (!statusField || !entityFieldSet.has(statusField) || !initialState) issues.push("registration initial state mapping is not represented by the ORM entity");
+  if (!auditAction || !auditFieldSet.has(String(registration.audit?.actionField ?? "action"))) issues.push("registration audit action is not represented by the audit ORM entity");
+  if (!responseIdField) issues.push("registration response schema does not expose the generated id field");
+
+  const authFields = Array.isArray(authRequest.fields) ? authRequest.fields : [];
+  const usernameField = String(authInput.usernameField ?? "");
+  const passwordField = String(authInput.passwordField ?? "");
+  const tokenField = String(login.response?.fields?.find((field: any) => field.name === "access_token")?.name ?? "");
+  const authModule = topology.authentication.module;
+  const authSource = authModule ? files.find((file) => file.path.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\.py$/i, "").replaceAll("/", ".") === authModule)?.content ?? "" : "";
+  const hasher = authSource.match(/^([A-Za-z_]\w*)\s*=\s*CryptContext\s*\(/m)?.[1] ?? "";
+  const usernameHashField = [...principalFieldSet].find((field) => field === usernameField) ?? "";
+  const passwordHashField = [...principalFieldSet].find((field) => /password.*hash|hashed.*password/i.test(field)) ?? "";
+  const roleField = [...principalFieldSet].find((field) => field === "role") ?? "";
+  if (!usernameField || !passwordField || !tokenField || !authFields.some((field: any) => field.name === usernameField) || !authFields.some((field: any) => field.name === passwordField)) issues.push("login operation request/response contract is incomplete");
+  if (!authModule || !hasher || !usernameHashField || !passwordHashField || !roleField) issues.push("authentication principal password hashing bindings cannot be resolved from source");
+  for (const field of ["user_id", "customer_id", "action"]) if (!auditFieldSet.has(field)) issues.push(`audit ORM entity ${auditEntityName} has no required mapped field ${field}`);
+
+  let uiContract: Record<string, any> | undefined;
+  const uiFile = files.find((file) => /(^|\/)ui-contract(?:\.v\d+)?\.json$/i.test(file.path.replaceAll("\\", "/")));
+  if (uiFile) {
+    try { uiContract = JSON.parse(uiFile.content) as Record<string, any>; }
+    catch { issues.push("saved UI contract is not valid JSON"); }
+  }
+  const screens = Array.isArray(uiContract?.routes) ? uiContract!.routes as Array<Record<string, any>> : [];
+  const actorRole = String(registration.actor?.role ?? "");
+  const loginScreen = screens.find((screen) => screen.loginRole === actorRole && screen.form?.operationId === loginRecord.operationId);
+  const dashboardScreen = screens.find((screen) => Array.isArray(screen.roles) && screen.roles.includes(actorRole) && screen.table?.entity === entityName);
+  const usernameLabel = loginScreen?.form?.fields?.find((field: any) => field.name === usernameField)?.label;
+  const passwordLabel = loginScreen?.form?.fields?.find((field: any) => field.name === passwordField)?.label;
+  const dashboardRoute = String(dashboardScreen?.route ?? "");
+  const loginPath = String(loginScreen?.route ?? "");
+  const dashboardHeading = String(dashboardScreen?.title ?? "");
+  const recordField = (dashboardScreen?.table?.columns ?? []).find((field: string) => requestFields.includes(field));
+  const submitLabel = topology.frontend.actions.find((action) => action === "Continue") ?? "";
+  if (!uiContract || !loginScreen || !dashboardScreen || !usernameLabel || !passwordLabel || !submitLabel || !recordField) issues.push("saved UI contract does not bind a customer login form and persisted-record dashboard");
+  if (loginPath && !topology.frontend.routes.includes(loginPath)) issues.push(`customer login route ${loginPath} is absent from discovered frontend topology`);
+  if (dashboardRoute && !topology.frontend.routes.includes(dashboardRoute)) issues.push(`customer dashboard route ${dashboardRoute} is absent from discovered frontend topology`);
+
+  if (issues.length) return { issues: [...new Set(issues)] };
+  const roleSet = new Set<string>();
+  for (const record of operations) {
+    const operation = parseOperation(record);
+    for (const value of [operation?.actor?.role, operation?.actor?.customerRole, operation?.actor?.managerRole, operation?.actor?.privilegedRole]) if (typeof value === "string") roleSet.add(value);
+  }
+  const contract: TestEnvironmentContract = {
+    schemaVersion: "1.0",
+    architectureHash: registration.architectureHash,
+    topologyHash: sha256(JSON.stringify(topology)),
+    operationHashes: { [registrationRecord.operationId]: registrationRecord.sha256, [loginRecord.operationId]: loginRecord.sha256 },
+    backend: {
+      entrypoint,
+      databaseSessionModule: topology.backend.databaseSessionModule,
+      databaseUrlEnv: "DATABASE_URL",
+      userModel: principalName,
+      customerModel: entityName,
+      auditModel: auditEntityName,
+      passwordHasher: hasher,
+      modelModules: { [principalName]: principal.moduleName, [entityName]: entity.moduleName, [auditEntityName]: auditEntity.moduleName },
+    },
+    authentication: {
+      module: authModule!,
+      method: String(loginRoute?.method).toUpperCase(),
+      path: String(loginRoute?.path),
+      usernameField,
+      passwordField,
+      tokenField,
+      roleField,
+      passwordHashField,
+      allowedRoles: [...roleSet].sort(),
+    },
+    registration: {
+      method: String(registerRoute?.method).toUpperCase(),
+      path: String(registerRoute?.path),
+      statusCode: Number(output?.statusCode ?? 201),
+      requestSchema,
+      requestFields,
+      responseIdField,
+      responseOwnerField,
+      ownerField,
+      statusField,
+      initialState,
+      auditAction,
+      actorRole: String(registration.actor?.role ?? ""),
+    },
+    frontend: {
+      baseUrlEnv: "E2E_BASE_URL",
+      identitiesFileEnv: "MOBIUSX_PW_IDENTITIES_FILE",
+      loginRoute: loginPath,
+      dashboardRoute,
+      usernameLabel: String(usernameLabel),
+      passwordLabel: String(passwordLabel),
+      submitLabel,
+      dashboardHeading,
+      recordField: String(recordField),
+    },
+  };
+  return { contract, issues: [] };
+}
+
+/** Render topology-bound pytest fixtures and one real registration/persistence integration test. */
+export function renderRegistrationPytestVerticalSlice(contract: TestEnvironmentContract): Array<{ path: string; action: "create"; content: string }> {
+  const literal = JSON.stringify(JSON.stringify(contract));
+  const [appModule, appSymbol = "app"] = contract.backend.entrypoint.split(":");
+  const userModuleName = contract.backend.modelModules[contract.backend.userModel] ?? "";
+  const customerModuleName = contract.backend.modelModules[contract.backend.customerModel] ?? "";
+  const auditModuleName = contract.backend.modelModules[contract.backend.auditModel] ?? "";
+  if (!userModuleName || !customerModuleName || !auditModuleName) throw new Error("test environment contract is missing resolved ORM module bindings");
+  const databaseModule = contract.backend.databaseSessionModule;
+  const authModule = contract.authentication.module;
+  const schemaFields = contract.registration.requestFields;
+  const payloadLines = schemaFields.map((field) => {
+    const lower = field.toLowerCase();
+    const expression = /email/.test(lower)
+      ? `f"${field.replace(/"/g, "\\\"")}-{suffix}@example.test"`
+      : /reference|code|number/.test(lower)
+        ? `f"${field.replace(/"/g, "\\\"")}-{suffix}"`
+        : `f"${field.replace(/"/g, "\\\"").replaceAll("_", " ").replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())} {suffix}"`;
+    return `        ${JSON.stringify(field)}: ${expression},`;
+  }).join("\n");
+  const roles = contract.authentication.allowedRoles;
+  const roleFixtures = roles.map((role) => {
+    const fixtureName = `${role.replace(/[^A-Za-z0-9_]/g, "_")}_identity`;
+    return `@pytest.fixture\ndef ${fixtureName}(identity_factory):\n    return identity_factory(${JSON.stringify(role)})`;
+  }).join("\n\n");
+  const conftest = [
+    '"""Generated test fixtures bound to the validated TestEnvironmentContract."""',
+    "import asyncio",
+    "import json",
+    "import os",
+    "import uuid",
+    "from pathlib import Path",
+    "from typing import Any, Awaitable, Callable",
+    "import pytest",
+    "from fastapi.testclient import TestClient",
+    "from sqlalchemy import delete, select",
+    "from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine",
+    "from sqlalchemy.pool import NullPool",
+    `from ${appModule} import ${appSymbol}`,
+    `from ${databaseModule} import get_db`,
+    `from ${userModuleName} import ${contract.backend.userModel}`,
+    `from ${customerModuleName} import ${contract.backend.customerModel}`,
+    `from ${auditModuleName} import ${contract.backend.auditModel}`,
+    `from ${authModule} import ${contract.backend.passwordHasher}`,
+    "",
+    `TEST_ENVIRONMENT = json.loads(${literal})`,
+    "_URL_ENV = TEST_ENVIRONMENT['backend']['databaseUrlEnv']",
+    "if not os.environ.get(_URL_ENV):",
+    "    raise RuntimeError(f\"Set {_URL_ENV} to an isolated PostgreSQL test database before running generated tests\")",
+    "",
+    "@pytest.fixture(scope='session')",
+    "def client():",
+    "    with TestClient(app) as test_client:",
+    "        yield test_client",
+    "",
+    "@pytest.fixture",
+    "def database_operation():",
+    "    def run(operation: Callable[[AsyncSession], Awaitable[Any]]) -> Any:",
+    "        async def execute() -> Any:",
+    "            engine = create_async_engine(os.environ[_URL_ENV], poolclass=NullPool)",
+    "            factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)",
+    "            try:",
+    "                async with factory() as session:",
+    "                    return await operation(session)",
+    "            finally:",
+    "                await engine.dispose()",
+    "        return asyncio.run(execute())",
+    "    return run",
+    "",
+    "@pytest.fixture",
+    "def identity_factory(client, database_operation):",
+    "    created_user_ids: list[int] = []",
+    "    user_model = getattr(__import__(TEST_ENVIRONMENT['backend']['modelModules'][TEST_ENVIRONMENT['backend']['userModel']], fromlist=[TEST_ENVIRONMENT['backend']['userModel']]), TEST_ENVIRONMENT['backend']['userModel'])",
+    "    password_hasher = getattr(__import__(TEST_ENVIRONMENT['authentication']['module'], fromlist=[TEST_ENVIRONMENT['backend']['passwordHasher']]), TEST_ENVIRONMENT['backend']['passwordHasher'])",
+    "    auth = TEST_ENVIRONMENT['authentication']",
+    "    def create(role: str) -> dict[str, Any]:",
+    "        if role not in auth['allowedRoles']:",
+    "            raise ValueError(f'Role is not defined by the approved operation contracts: {role}')",
+    "        suffix = uuid.uuid4().hex",
+    "        username = f\"test-{role}-{suffix}\"",
+    "        password = f\"Test-{suffix}-Aa9!\"",
+    "        user = user_model(**{",
+    "            auth['usernameField']: username,",
+    "            auth['passwordHashField']: password_hasher.hash(password),",
+    "            auth['roleField']: role,",
+    "        })",
+    "        async def insert_user(session: AsyncSession) -> int:",
+    "            session.add(user)",
+    "            await session.flush()",
+    "            user_id = int(user.id)",
+    "            await session.commit()",
+    "            return user_id",
+    "        user_id = database_operation(insert_user)",
+    "        created_user_ids.append(user_id)",
+    "        response = client.post(auth['path'], json={auth['usernameField']: username, auth['passwordField']: password})",
+    "        assert response.status_code == 200, f\"Provisioned identity could not authenticate: {response.status_code} {response.text}\"",
+    "        token = response.json()[auth['tokenField']]",
+    "        return {'id': user_id, 'username': username, 'password': password, 'token': token, 'headers': {'Authorization': f'Bearer {token}'}}",
+    "    yield create",
+    "    if created_user_ids:",
+    "        async def cleanup(session: AsyncSession) -> None:",
+    `            customer_model = getattr(__import__(TEST_ENVIRONMENT['backend']['modelModules'][TEST_ENVIRONMENT['backend']['customerModel']], fromlist=[TEST_ENVIRONMENT['backend']['customerModel']]), TEST_ENVIRONMENT['backend']['customerModel'])`,
+    `            audit_model = getattr(__import__(TEST_ENVIRONMENT['backend']['modelModules'][TEST_ENVIRONMENT['backend']['auditModel']], fromlist=[TEST_ENVIRONMENT['backend']['auditModel']]), TEST_ENVIRONMENT['backend']['auditModel'])`,
+    "            customer_ids = list((await session.scalars(select(customer_model.id).where(getattr(customer_model, TEST_ENVIRONMENT['registration']['ownerField']).in_(created_user_ids)))).all())",
+    "            if customer_ids:",
+    "                await session.execute(delete(audit_model).where(audit_model.customer_id.in_(customer_ids)))",
+    "                await session.execute(delete(customer_model).where(customer_model.id.in_(customer_ids)))",
+    "            await session.execute(delete(audit_model).where(audit_model.user_id.in_(created_user_ids)))",
+    "            await session.execute(delete(user_model).where(user_model.id.in_(created_user_ids)))",
+    "            await session.commit()",
+    "        database_operation(cleanup)",
+    "",
+    roleFixtures,
+    "",
+  ].join("\n");
+  const test = [
+    '"""One generated customer registration integration test with independent SQL assertions."""',
+    "import json",
+    "import uuid",
+    "from pathlib import Path",
+    "from sqlalchemy import select",
+    `from ${userModuleName} import ${contract.backend.userModel}`,
+    `from ${customerModuleName} import ${contract.backend.customerModel}`,
+    `from ${auditModuleName} import ${contract.backend.auditModel}`,
+    "",
+    "CONTRACT = json.loads(Path(__file__).with_name('test_environment.v1.json').read_text(encoding='utf-8'))",
+    "",
+    "def test_customer_registration_persists_for_authenticated_owner(client, customer_identity, database_operation):",
+    "    registration = CONTRACT['registration']",
+    "    suffix = uuid.uuid4().hex",
+    "    payload = {",
+    payloadLines,
+    "    }",
+    "    response = client.request(registration['method'], registration['path'], json=payload, headers=customer_identity['headers'])",
+    "    assert response.status_code == registration['statusCode'], response.text",
+    "    body = response.json()",
+    "    customer_id = body[registration['responseIdField']]",
+    "    assert body[registration['responseOwnerField']] == customer_identity['id']",
+    "    async def inspect_persisted_state(session):",
+    `        customer = await session.scalar(select(${contract.backend.customerModel}).where(${contract.backend.customerModel}.id == customer_id))`,
+    "        assert customer is not None, 'registration response must correspond to a persisted row'",
+    "        status_value = getattr(getattr(customer, registration['statusField']), 'value', getattr(customer, registration['statusField']))",
+    "        events = list((await session.scalars(select(" + contract.backend.auditModel + ").where(" + contract.backend.auditModel + ".customer_id == customer_id).order_by(" + contract.backend.auditModel + ".created_at.asc(), " + contract.backend.auditModel + ".id.asc()))).all())",
+    "        return {'owner_id': getattr(customer, registration['ownerField']), 'status': status_value, 'events': [(event.user_id, event.action) for event in events]}",
+    "    persisted = database_operation(inspect_persisted_state)",
+    "    assert persisted['owner_id'] == customer_identity['id']",
+    "    assert persisted['status'] == registration['initialState']",
+    "    assert (customer_identity['id'], registration['auditAction']) in persisted['events']",
+    "",
+  ].join("\n");
+  return [
+    { path: "backend/tests/test_environment.v1.json", action: "create", content: JSON.stringify(contract, null, 2) + "\n" },
+    { path: "backend/tests/conftest.py", action: "create", content: conftest },
+    { path: "backend/tests/test_customer_registration_vertical_slice.py", action: "create", content: test },
+  ];
+}
+
+/** Render one browser ownership/reload test and disposable DB identity provisioner from verified bindings. */
+export function renderCustomerDashboardPlaywrightSlice(contract: TestEnvironmentContract): Array<{ path: string; action: "create"; content: string }> {
+  const literal = JSON.stringify(JSON.stringify(contract));
+  const fixture = [
+    '"""Seed short-lived browser identities and records in the isolated generated-app database."""',
+    "import asyncio",
+    "import json",
+    "import os",
+    "import uuid",
+    "from pathlib import Path",
+    "from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine",
+    "from sqlalchemy.pool import NullPool",
+    "",
+    `TEST_ENVIRONMENT = json.loads(${literal})`,
+    "",
+    "def _sample_value(field: str, suffix: str) -> str:",
+    "    lowered = field.lower()",
+    "    if 'email' in lowered:",
+    "        return f'{field}-{suffix}@example.test'",
+    "    if any(token in lowered for token in ('reference', 'code', 'number')):",
+    "        return f'{field}-{suffix}'",
+    "    return f'{field.replace(\"_\", \" \").title()} {suffix}'",
+    "",
+    "async def _provision() -> dict:",
+    "    import importlib",
+    "    backend = TEST_ENVIRONMENT['backend']",
+    "    auth = TEST_ENVIRONMENT['authentication']",
+    "    registration = TEST_ENVIRONMENT['registration']",
+    "    user_model = getattr(importlib.import_module(backend['modelModules'][backend['userModel']]), backend['userModel'])",
+    "    customer_model = getattr(importlib.import_module(backend['modelModules'][backend['customerModel']]), backend['customerModel'])",
+    "    password_hasher = getattr(importlib.import_module(auth['module']), backend['passwordHasher'])",
+    "    engine = create_async_engine(os.environ[backend['databaseUrlEnv']], poolclass=NullPool)",
+    "    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)",
+    "    result = {}",
+    "    try:",
+    "        async with sessions() as session:",
+    "            records = []",
+    "            for label in ('customer', 'other'):",
+    "                suffix = uuid.uuid4().hex",
+    "                username = f\"browser-{label}-{suffix}\"",
+    "                password = f\"Browser-{suffix}-Aa9!\"",
+    "                owner = user_model(**{auth['usernameField']: username, auth['passwordHashField']: password_hasher.hash(password), auth['roleField']: registration['actorRole']})",
+    "                session.add(owner)",
+    "                await session.flush()",
+    "                values = {field: _sample_value(field, suffix) for field in registration['requestFields']}",
+    "                values[registration['ownerField']] = owner.id",
+    "                values[registration['statusField']] = registration['initialState']",
+    "                customer = customer_model(**values)",
+    "                session.add(customer)",
+    "                await session.flush()",
+    "                if label == 'customer':",
+    "                    result['customer'] = {'username': username, 'password': password, 'record': getattr(customer, TEST_ENVIRONMENT['frontend']['recordField'])}",
+    "                else:",
+    "                    result['otherCustomerRecord'] = getattr(customer, TEST_ENVIRONMENT['frontend']['recordField'])",
+    "            await session.commit()",
+    "    finally:",
+    "        await engine.dispose()",
+    "    return result",
+    "",
+    "def main() -> None:",
+    "    output = os.environ.get(TEST_ENVIRONMENT['frontend']['identitiesFileEnv'])",
+    "    if not output:",
+    "        raise RuntimeError(f\"Set {TEST_ENVIRONMENT['frontend']['identitiesFileEnv']} to a temporary credentials-file path\")",
+    "    path = Path(output)",
+    "    path.parent.mkdir(parents=True, exist_ok=True)",
+    "    path.write_text(json.dumps(asyncio.run(_provision())), encoding='utf-8')",
+    "    path.chmod(0o600)",
+    "",
+    "if __name__ == '__main__':",
+    "    main()",
+    "",
+  ].join("\n");
+  // The field used in the dashboard is bound into the fixture's JSON contract, not a guessed route or selector.
+  const provisioner = fixture.replace("registration['frontendRecordField']", "TEST_ENVIRONMENT['frontend']['recordField']");
+  const spec = [
+    'import { expect, test } from "@playwright/test";',
+    'import { readFileSync } from "node:fs";',
+    'import { resolve } from "node:path";',
+    "",
+    `const contract = ${JSON.stringify(contract, null, 2)};`,
+    "const identityPath = process.env[contract.frontend.identitiesFileEnv];",
+    "if (!identityPath) throw new Error(`Set ${contract.frontend.identitiesFileEnv} to the provisioned temporary identity file`);",
+    "const identities = JSON.parse(readFileSync(resolve(identityPath), 'utf8')) as { customer: { username: string; password: string; record: string }; otherCustomerRecord: string };",
+    "",
+    "test('customer sees only persisted owned records after reload', async ({ page }) => {",
+    "  const pageErrors: string[] = [];",
+    "  const failedRequests: string[] = [];",
+    "  page.on('pageerror', (error) => pageErrors.push(error.message));",
+    "  page.on('requestfailed', (request) => {",
+    "    if (/^https?:/.test(request.url())) failedRequests.push(`${request.url()} ${request.failure()?.errorText ?? ''}`);",
+    "  });",
+    "  await page.goto(contract.frontend.loginRoute);",
+    "  await page.getByLabel(contract.frontend.usernameLabel).fill(identities.customer.username);",
+    "  await page.getByLabel(contract.frontend.passwordLabel).fill(identities.customer.password);",
+    "  await page.getByRole('button', { name: contract.frontend.submitLabel }).click();",
+    "  await expect(page).toHaveURL(new RegExp(`${contract.frontend.dashboardRoute.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}/?$`));",
+    "  await expect(page.getByRole('heading', { name: contract.frontend.dashboardHeading })).toBeVisible();",
+    "  await expect(page.getByRole('cell', { name: identities.customer.record, exact: true })).toBeVisible();",
+    "  await expect(page.getByRole('cell', { name: identities.otherCustomerRecord, exact: true })).toHaveCount(0);",
+    "  await page.reload();",
+    "  await expect(page.getByRole('heading', { name: contract.frontend.dashboardHeading })).toBeVisible();",
+    "  await expect(page.getByRole('cell', { name: identities.customer.record, exact: true })).toBeVisible();",
+    "  await expect(page.getByRole('cell', { name: identities.otherCustomerRecord, exact: true })).toHaveCount(0);",
+    "  expect(pageErrors).toEqual([]);",
+    "  expect(failedRequests).toEqual([]);",
+    "});",
+    "",
+  ].join("\n");
+  const config = [
+    'import { defineConfig } from "@playwright/test";',
+    "",
+    "export default defineConfig({",
+    "  testDir: './e2e',",
+    "  testMatch: '**/*.spec.ts',",
+    "  fullyParallel: false,",
+    "  workers: 1,",
+    "  reporter: 'list',",
+    "  use: {",
+    `    baseURL: process.env.${contract.frontend.baseUrlEnv} ?? 'http://127.0.0.1:3000',`,
+    "    browserName: 'chromium',",
+    "    headless: true,",
+    "    trace: 'retain-on-failure',",
+    "    screenshot: 'only-on-failure',",
+    "  },",
+    "});",
+    "",
+  ].join("\n");
+  return [
+    { path: "backend/tests/provision_browser_identity.py", action: "create", content: provisioner },
+    { path: "frontend/playwright.config.ts", action: "create", content: config },
+    { path: "frontend/e2e/customer-dashboard-owner-isolation.spec.ts", action: "create", content: spec },
+  ];
 }

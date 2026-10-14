@@ -177,3 +177,35 @@ export function activeCheckpointArtifacts(checkpoint: GenerationCheckpoint): Gen
     return { ...artifact, path };
   });
 }
+
+/** Validate independently executed test slices without claiming that the
+ * complete tests stage passed. Their artifacts are restricted to test-owned
+ * paths and are safe to reuse after a restart. */
+export function validateTestSubtaskCheckpoint(checkpoint: GenerationCheckpoint): string[] {
+  const issues: string[] = [];
+  const ids = new Set<string>();
+  for (const slice of checkpoint.testSubtasks ?? []) {
+    if (!slice.id || ids.has(slice.id)) issues.push(`duplicate or empty test subtask id: ${slice.id}`);
+    ids.add(slice.id);
+    if (slice.architectureHash !== checkpoint.projectArchitecture?.contractHash) issues.push(`test subtask ${slice.id} belongs to a different PAC`);
+    if (!/^[a-f0-9]{64}$/.test(slice.topologyHash)) issues.push(`test subtask ${slice.id} has an invalid topology hash`);
+    for (const [key, value] of Object.entries(slice.validation)) {
+      if (!Number.isInteger(value) || value < 0) issues.push(`test subtask ${slice.id} has invalid ${key} count`);
+    }
+    if (slice.validation.pytestFailed || slice.validation.pytestSkipped || slice.validation.playwrightFailed || slice.validation.playwrightSkipped) issues.push(`test subtask ${slice.id} contains failed or skipped acceptance tests`);
+    const executed = slice.validation.pytestPassed + slice.validation.playwrightPassed;
+    if (executed < 1) issues.push(`test subtask ${slice.id} has no passed executable test`);
+    if (slice.validation.pytestCollected !== slice.validation.pytestPassed + slice.validation.pytestFailed + slice.validation.pytestSkipped) issues.push(`test subtask ${slice.id} pytest counts do not reconcile`);
+    if (slice.validation.playwrightCollected !== slice.validation.playwrightPassed + slice.validation.playwrightFailed + slice.validation.playwrightSkipped) issues.push(`test subtask ${slice.id} Playwright counts do not reconcile`);
+    if (!slice.artifacts.length) issues.push(`test subtask ${slice.id} has no checkpointed artifacts`);
+    const paths = new Set<string>();
+    for (const artifact of slice.artifacts) {
+      const normalized = normalizeArtifactPath(artifact.path);
+      if (!normalized || normalized !== artifact.path || !stageMayReplacePath("tests", normalized)) issues.push(`unsafe or unauthorized test subtask artifact path: ${artifact.path}`);
+      else if (paths.has(keyOf(normalized))) issues.push(`duplicate test subtask target path: ${normalized}`);
+      else paths.add(keyOf(normalized));
+      if (digest(artifact.content) !== artifact.sha256) issues.push(`test subtask checksum mismatch: ${artifact.path}`);
+    }
+  }
+  return issues;
+}

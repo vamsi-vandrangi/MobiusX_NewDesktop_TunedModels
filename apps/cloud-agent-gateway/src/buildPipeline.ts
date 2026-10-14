@@ -15,9 +15,9 @@ import { ollamaContextTokens } from "./runners/ollamaRunner.js";
 import { alignCustomerRegistrationRole, appendCustomerPageResponseSchema, appendEntityCollectionReadOperation, appendEntityCreateOperation, appendEntityHistoryReadOperation, appendEntityRecordReadOperation, appendOperationRoute, businessOperationPrompt, createAuthenticationLoginOperationSpec, createCustomerReadOperationContracts, createEntityCreateOperationSpec, deriveComplementaryDecisionOperation, extractBusinessDomainCatalog, reconcileEntityHistoryReadOperation, renderAuthenticationLoginOperation, upgradeAuthenticationLoginCheckpoint, validateAuthenticationLoginOperationSpec, validateBusinessOperationSpec, validateEntityCreateOperationSpec, validateEntityCreateRenderedOperation, validateEntityHistoryReadOperationSpec, type AuthenticationLoginOperationSpec, type BusinessOperationSpec, type EntityCollectionReadOperationSpec, type EntityCreateOperationSpec, type EntityHistoryReadOperationSpec, type EntityRecordReadOperationSpec } from "./businessOperations.js";
 import { createUiContractSkeleton, mergeUiContractContribution, uiContributionPrompt, validateUiContract, validateUiContractContribution, type UiContract, type UiContractContribution, type UiOperation } from "./uiContract.js";
 import { renderReactUi } from "./reactUiRenderer.js";
-import { deriveTestSpecification, estimateTestPromptBudget, mergeTestContribution, renderTestContractArtifacts, testContributionPrompt, testImplementationPrompt, validateTestContribution, validateTestSpecification, type TestOperationMetadata, type TestSpecification } from "./testContracts.js";
+import { deriveTestSpecification, estimateTestPromptBudget, mergeTestContribution, renderTestContractArtifacts, reuseValidatedTestSliceArtifacts, testContributionPrompt, testImplementationPrompt, validateTestContribution, validateTestSpecification, type TestOperationMetadata, type TestSpecification } from "./testContracts.js";
 import { discoverTestApplicationTopology, testTopologyPromptSummary, validateGeneratedTestsAgainstTopology } from "./testTopology.js";
-import { activeCheckpointArtifacts, buildArtifactOwnershipManifest, validateStageArtifactOwnership } from "./artifactOwnership.js";
+import { activeCheckpointArtifacts, buildArtifactOwnershipManifest, validateStageArtifactOwnership, validateTestSubtaskCheckpoint } from "./artifactOwnership.js";
 
 // Local inference can take tens of minutes across six structured generations
 // and bounded repairs. Keep a finite two-hour task deadline so a CPU model can
@@ -880,6 +880,8 @@ function validateResumeCheckpoint(
     if (record.contribution && record.contributionSha256 !== createHash("sha256").update(record.contribution).digest("hex")) return "model test contribution checksum mismatch";
     if (record.requestMetadata && (record.requestMetadata.requestId !== record.modelRequestId || record.requestMetadata.modelId !== record.modelId || !/^[a-f0-9]{64}$/.test(record.requestMetadata.promptSha256))) return "test contribution request metadata is inconsistent";
   }
+  const testSubtaskIssues = validateTestSubtaskCheckpoint(checkpoint);
+  if (testSubtaskIssues.length) return testSubtaskIssues.join("; ");
   const count = checkpoint.completedStageIds.length;
   if (count < 0 || (count === 0 && !checkpoint.projectArchitecture) || count >= stages.length || checkpoint.completedStageIds.some((id, index) => stages[index]?.id !== id)) return "completed stage sequence is invalid or already complete";
   const hasCompleteStageSnapshots = checkpoint.stages.length === count && checkpoint.stages.every((stage, index) => stage.id === checkpoint.completedStageIds[index] && stage.artifacts !== undefined);
@@ -2759,6 +2761,7 @@ export function createBuildPipelineRunner(selected: AgentRunner, timeoutMs = DEF
       let businessOperationHistory = [...(resume?.businessOperationHistory ?? [])];
       let uiContracts = [...(resume?.uiContracts ?? [])];
       let testSpecifications = [...(resume?.testSpecifications ?? [])];
+      let testSubtasks = [...(resume?.testSubtasks ?? [])];
       if (resume) {
         for (let index = 0; index < resumeStartIndex; index += 1) {
           const prefix = replayStageSnapshots(resume.stages, index + 1);
@@ -3041,6 +3044,7 @@ export function createBuildPipelineRunner(selected: AgentRunner, timeoutMs = DEF
               ...(databaseSubtasks.length ? { databaseSubtasks: [...databaseSubtasks] } : {}),
               ...(uiContracts.length ? { uiContracts: [...uiContracts] } : {}),
               ...(testSpecifications.length ? { testSpecifications: [...testSpecifications] } : {}),
+              ...(testSubtasks.length ? { testSubtasks: [...testSubtasks] } : {}),
               completedStageIds: [...checkpointBase.completedStageIds, stage.id],
               stages: [...checkpointBase.stages, { id: stage.id, completedAt, artifactPaths, artifacts: snapshotStageDelta(previousArtifacts, accumulated, originalPaths), validation: "passed" }],
               artifacts: accumulated.map((edit) => ({ path: edit.path, action: edit.action, content: edit.content, sha256: createHash("sha256").update(edit.content).digest("hex") })),
@@ -4015,6 +4019,7 @@ export function createBuildPipelineRunner(selected: AgentRunner, timeoutMs = DEF
             const renderedContracts = renderTestContractArtifacts(specification, operationRecords, topology);
             const rendererPaths = new Set(renderedContracts.map((edit) => edit.path.toLowerCase()));
             result.edits = [...result.edits.filter((edit) => !rendererPaths.has(edit.path.toLowerCase())), ...renderedContracts];
+            result.edits = reuseValidatedTestSliceArtifacts(result.edits, testSubtasks, architecture.contractHash);
             emit({ type: "output", delta: `\nMobiusX rendered the deterministic operation/OpenAPI test contract: ${renderedContracts.map((edit) => edit.path).join(", " )}.` });
           }
         } else {
@@ -4418,6 +4423,7 @@ export function createBuildPipelineRunner(selected: AgentRunner, timeoutMs = DEF
               ...(businessOperationHistory.length ? { businessOperationHistory: [...businessOperationHistory] } : {}),
               ...(uiContracts.length ? { uiContracts: [...uiContracts] } : {}),
               ...(testSpecifications.length ? { testSpecifications: [...testSpecifications] } : {}),
+              ...(testSubtasks.length ? { testSubtasks: [...testSubtasks] } : {}),
               attemptedStages,
               baseFiles: latestCheckpoint?.baseFiles ?? (input.projectContext?.relevantFiles ?? []).map((file) => ({
                 path: file.relPath,
@@ -4475,6 +4481,7 @@ export function createBuildPipelineRunner(selected: AgentRunner, timeoutMs = DEF
           ...(businessOperationHistory.length ? { businessOperationHistory: [...businessOperationHistory] } : {}),
           ...(uiContracts.length ? { uiContracts: [...uiContracts] } : {}),
           ...(testSpecifications.length ? { testSpecifications: [...testSpecifications] } : {}),
+          ...(testSubtasks.length ? { testSubtasks: [...testSubtasks] } : {}),
           projectArchitecture: architecture,
           baseFiles: resumeState?.baseFiles ?? (input.projectContext?.relevantFiles ?? []).map((file) => ({
             path: file.relPath,

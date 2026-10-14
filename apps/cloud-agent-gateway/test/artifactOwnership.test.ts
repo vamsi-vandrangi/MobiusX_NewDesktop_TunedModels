@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import type { GenerationCheckpoint, ProposedEdit } from "@mobiusx/protocol";
-import { activeCheckpointArtifacts, buildArtifactOwnershipManifest, normalizeArtifactPath, validateStageArtifactOwnership } from "../src/artifactOwnership.js";
+import { activeCheckpointArtifacts, buildArtifactOwnershipManifest, normalizeArtifactPath, validateStageArtifactOwnership, validateTestSubtaskCheckpoint } from "../src/artifactOwnership.js";
 
 const sha = (content: string) => createHash("sha256").update(content).digest("hex");
 const artifact = (path: string, content: string): GenerationCheckpoint["artifacts"][number] => ({ path, action: "create", content, sha256: sha(content) });
@@ -56,4 +56,27 @@ test("aggregate content conflicting with successful stage owner is rejected", ()
   const aggregate = artifact("backend/main.py", "different aggregate content");
   const cp = checkpoint([aggregate], [{ id: "backend", completedAt: "t1", artifactPaths: [stage.path], artifacts: [stage], validation: "passed" }]);
   assert.throws(() => buildArtifactOwnershipManifest(cp), /conflicts with its last validated stage owner/);
+});
+
+test("validated test slices persist independently without asserting full test-stage completion", () => {
+  const cp = checkpoint([], [], []);
+  cp.projectArchitecture = { schemaVersion: "1.0", contractHash: "a".repeat(64), stack: { backend: "fastapi", orm: "sqlalchemy", migrations: "alembic", database: "postgresql", frontend: "react", e2e: "playwright" }, modules: [] };
+  const file = artifact("backend/tests/test_vertical_slice.py", "def test_real_case():\n    assert 1 == 1\n");
+  cp.testSubtasks = [{
+    id: "customer-registration-browser-vertical-slice",
+    architectureHash: cp.projectArchitecture.contractHash,
+    topologyHash: "b".repeat(64),
+    completedAt: "2026-10-14T00:00:00.000Z",
+    artifacts: [file],
+    validation: { pytestCollected: 1, pytestPassed: 1, pytestFailed: 0, pytestSkipped: 0, playwrightCollected: 1, playwrightPassed: 1, playwrightFailed: 0, playwrightSkipped: 0 },
+    modelContributionRequestId: "reused-request",
+  }];
+  assert.deepEqual(validateTestSubtaskCheckpoint(cp), []);
+  assert.deepEqual(cp.completedStageIds, [], "a passing slice does not mark the complete tests stage as passed");
+  const corrupted = structuredClone(cp);
+  corrupted.testSubtasks![0].artifacts[0].content += "# changed\n";
+  assert.ok(validateTestSubtaskCheckpoint(corrupted).some((issue) => issue.includes("checksum mismatch")));
+  const unsafe = structuredClone(cp);
+  unsafe.testSubtasks![0].artifacts[0].path = "docker-compose.yml";
+  assert.ok(validateTestSubtaskCheckpoint(unsafe).some((issue) => issue.includes("unauthorized")));
 });

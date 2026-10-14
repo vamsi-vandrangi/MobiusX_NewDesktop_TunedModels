@@ -1,0 +1,1170 @@
+{
+  "schemaVersion": "1.0",
+  "milestone": "P0.6b.2e",
+  "sourceInventory": {
+    "path": "/Users/vamsimohan/Documents/CredenceX_CODEX_WDC/evals/p0-evidence/p0.6b2-test-specification.json",
+    "sha256": "173d1f888c9658e8b2cc20561e1d8c4ca27cca328a918810c10b54f0a8348e9b",
+    "cases": 42
+  },
+  "checkpointInventory": {
+    "source": "p0.6b2d-checkpoint.json testSpecifications[0]",
+    "sha256": "3557fe91e281cade01269a8dd261f02df9f5f5c67b24b3a87e1769a2df8db638",
+    "caseCount": 43,
+    "sourceCasesPreserved": 42
+  },
+  "summary": {
+    "mandatoryApplicable": 39,
+    "duplicateCoverage": 3,
+    "notApplicable": 0,
+    "blocked": 0,
+    "allApplicableAssertionsExecuted": true,
+    "modelContributionSupplemental": "rejected-for-execution"
+  },
+  "contractReconciliations": {
+    "customer.listOwn.ownership": {
+      "originalExpected": {
+        "status": 404
+      },
+      "contractExpected": {
+        "status": 200,
+        "foreignRecord": "absent"
+      },
+      "reason": "Collection reads return the authorized owner-scoped page with foreign rows filtered out; 404 is a record-read expectation."
+    },
+    "manager.listReviewQueue.authorized": {
+      "originalRole": "customer",
+      "contractRole": "manager",
+      "reason": "The API contract models both customer list and manager queue on GET /customers; this inventory case is manager-specific."
+    },
+    "manager.listReviewQueue.ownership": {
+      "originalExpected": {
+        "status": 404
+      },
+      "contractExpected": {
+        "status": 200,
+        "foreignSubmittedRecord": "visible",
+        "unsubmittedRecord": "absent"
+      },
+      "reason": "The approved manager queue is global over submitted pending records; the original case is a customer collection case duplicated by customer.listOwn.ownership."
+    },
+    "manager.getReviewable.authorized": {
+      "originalRole": "customer",
+      "contractRole": "manager",
+      "reason": "Actor role corrected to the manager operation declared by the saved operation contract."
+    },
+    "manager.getReviewable.ownership": {
+      "reason": "The case role is customer, so it duplicates customer.getOwn.ownership on the shared GET /customers/{customer_id} route; manager access is global by the approved operation contract."
+    }
+  },
+  "cases": [
+    {
+      "id": "customer.register.audit-persistence",
+      "layer": "database",
+      "operationId": "customer.register",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "verify the operation audit row is committed with the business change",
+      "expected": {
+        "status": 201,
+        "auditAction": "created"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_registration_persists_owner_pending_and_created_audit",
+        "artifact": "backend/tests/test_p062e_batch2_registration_submission.py"
+      }
+    },
+    {
+      "id": "customer.register.atomic-rollback",
+      "layer": "database",
+      "operationId": "customer.register",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "inject a controlled failure and verify the operation leaves no partial mutation",
+      "expected": {
+        "status": 500,
+        "persistedState": "unchanged",
+        "auditAction": "absent"
+      },
+      "negative": {
+        "status": 500,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_audit_insert_failure_rolls_back_customer_registration",
+        "artifact": "backend/tests/test_p062e_batch4_transactions.py"
+      }
+    },
+    {
+      "id": "customer.register.create",
+      "layer": "api",
+      "operationId": "customer.register",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "create one entity using the declared request schema",
+      "expected": {
+        "status": 201
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_registration_persists_for_authenticated_owner",
+        "artifact": "backend/tests/test_customer_registration_vertical_slice.py"
+      }
+    },
+    {
+      "id": "customer.register.required-fields",
+      "layer": "api",
+      "operationId": "customer.register",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "omit one required request field",
+      "expected": {
+        "status": 422
+      },
+      "negative": {
+        "status": 422,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_registration_requires_all_contract_fields",
+        "artifact": "backend/tests/test_p062e_batch2_registration_submission.py"
+      }
+    },
+    {
+      "id": "customer.register.duplicate",
+      "layer": "database",
+      "operationId": "customer.register",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "repeat the same unique request",
+      "expected": {
+        "status": 409
+      },
+      "negative": {
+        "status": 409,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_duplicate_registration_returns_conflict_without_duplicate_rows",
+        "artifact": "backend/tests/test_p062e_batch2_registration_submission.py"
+      }
+    },
+    {
+      "id": "customer.submit.audit-persistence",
+      "layer": "database",
+      "operationId": "customer.submit",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "verify the operation audit row is committed with the business change",
+      "expected": {
+        "status": 200,
+        "auditAction": "submitted"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_submission_persists_pending_and_submitted_audit",
+        "artifact": "backend/tests/test_p062e_batch2_registration_submission.py"
+      }
+    },
+    {
+      "id": "customer.submit.atomic-rollback",
+      "layer": "database",
+      "operationId": "customer.submit",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "inject a controlled failure and verify the operation leaves no partial mutation",
+      "expected": {
+        "status": 500,
+        "persistedState": "unchanged",
+        "auditAction": "absent"
+      },
+      "negative": {
+        "status": 500,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_audit_insert_failure_rolls_back_submission",
+        "artifact": "backend/tests/test_p062e_batch4_transactions.py"
+      }
+    },
+    {
+      "id": "customer.submit.authorized",
+      "layer": "api",
+      "operationId": "customer.submit",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "perform the declared pending to pending transition",
+      "expected": {
+        "status": 200,
+        "persistedState": "pending",
+        "auditAction": "submitted"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_submission_persists_pending_and_submitted_audit",
+        "artifact": "backend/tests/test_p062e_batch2_registration_submission.py"
+      }
+    },
+    {
+      "id": "customer.submit.unauthorized",
+      "layer": "api",
+      "operationId": "customer.submit",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "attempt the decision without the required permission",
+      "expected": {
+        "status": 403
+      },
+      "negative": {
+        "status": 403,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_submission_rejects_another_customers_record",
+        "artifact": "backend/tests/test_p062e_batch2_registration_submission.py"
+      }
+    },
+    {
+      "id": "customer.submit.invalid-transition",
+      "layer": "api",
+      "operationId": "customer.submit",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "repeat a completed decision",
+      "expected": {
+        "status": 409
+      },
+      "negative": {
+        "status": 409,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_repeated_submission_returns_conflict_without_duplicate_audit",
+        "artifact": "backend/tests/test_p062e_batch2_registration_submission.py"
+      }
+    },
+    {
+      "id": "manager.approve.audit-persistence",
+      "layer": "database",
+      "operationId": "manager.approve",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "verify the operation audit row is committed with the business change",
+      "expected": {
+        "status": 200,
+        "auditAction": "approved"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_manager_approval_commits_state_and_audit",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      }
+    },
+    {
+      "id": "manager.approve.atomic-rollback",
+      "layer": "database",
+      "operationId": "manager.approve",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "inject a controlled failure and verify the operation leaves no partial mutation",
+      "expected": {
+        "status": 500,
+        "persistedState": "unchanged",
+        "auditAction": "absent"
+      },
+      "negative": {
+        "status": 500,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_audit_insert_failure_rolls_back_manager_decision",
+        "artifact": "backend/tests/test_p062e_batch4_transactions.py"
+      }
+    },
+    {
+      "id": "manager.approve.concurrent-decisions",
+      "layer": "database",
+      "operationId": "manager.approve",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "race incompatible decisions and verify exactly one transition commits",
+      "expected": {
+        "persistedState": "one-winner",
+        "auditAction": "one-decision"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "duplicate coverage",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_concurrent_approve_reject_has_one_winner_with_no_contradictory_audit",
+        "artifact": "backend/tests/test_p062e_batch4_transactions.py"
+      },
+      "coveredBy": "manager.reject.concurrent-decisions"
+    },
+    {
+      "id": "manager.approve.authorized",
+      "layer": "api",
+      "operationId": "manager.approve",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "perform the declared pending to approved transition",
+      "expected": {
+        "status": 200,
+        "persistedState": "approved",
+        "auditAction": "approved"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_manager_approval_commits_state_and_audit",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      }
+    },
+    {
+      "id": "manager.approve.unauthorized",
+      "layer": "api",
+      "operationId": "manager.approve",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "attempt the decision without the required permission",
+      "expected": {
+        "status": 403
+      },
+      "negative": {
+        "status": 403,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_cannot_make_manager_decision",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      }
+    },
+    {
+      "id": "manager.approve.invalid-transition",
+      "layer": "api",
+      "operationId": "manager.approve",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "repeat a completed decision",
+      "expected": {
+        "status": 409
+      },
+      "negative": {
+        "status": 409,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_repeated_decision_is_rejected_without_second_decision_event;test_opposite_decision_after_resolution_is_rejected",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      }
+    },
+    {
+      "id": "browser.manager.approve",
+      "layer": "browser",
+      "operationId": "manager.approve",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "complete the approved action and verify persisted state and history",
+      "expected": {
+        "status": 200,
+        "persistedState": "approved",
+        "auditAction": "approved"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "customer registration/submission, manager decisions, audit, reload, expiry and logout",
+        "artifact": "frontend/e2e/customer-manager-workflow.spec.ts"
+      }
+    },
+    {
+      "id": "manager.reject.audit-persistence",
+      "layer": "database",
+      "operationId": "manager.reject",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "verify the operation audit row is committed with the business change",
+      "expected": {
+        "status": 200,
+        "auditAction": "rejected"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_manager_rejection_commits_state_and_audit_on_separate_record",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      }
+    },
+    {
+      "id": "manager.reject.atomic-rollback",
+      "layer": "database",
+      "operationId": "manager.reject",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "inject a controlled failure and verify the operation leaves no partial mutation",
+      "expected": {
+        "status": 500,
+        "persistedState": "unchanged",
+        "auditAction": "absent"
+      },
+      "negative": {
+        "status": 500,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_audit_insert_failure_rolls_back_rejection",
+        "artifact": "backend/tests/test_p062e_batch4_transactions.py"
+      }
+    },
+    {
+      "id": "manager.reject.concurrent-decisions",
+      "layer": "database",
+      "operationId": "manager.reject",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "race incompatible decisions and verify exactly one transition commits",
+      "expected": {
+        "persistedState": "one-winner",
+        "auditAction": "one-decision"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_concurrent_approve_reject_has_one_winner_with_no_contradictory_audit",
+        "artifact": "backend/tests/test_p062e_batch4_transactions.py"
+      }
+    },
+    {
+      "id": "manager.reject.authorized",
+      "layer": "api",
+      "operationId": "manager.reject",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "perform the declared pending to rejected transition",
+      "expected": {
+        "status": 200,
+        "persistedState": "rejected",
+        "auditAction": "rejected"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_manager_rejection_commits_state_and_audit_on_separate_record",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      }
+    },
+    {
+      "id": "manager.reject.unauthorized",
+      "layer": "api",
+      "operationId": "manager.reject",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "attempt the decision without the required permission",
+      "expected": {
+        "status": 403
+      },
+      "negative": {
+        "status": 403,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_cannot_make_manager_decision",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      }
+    },
+    {
+      "id": "manager.reject.invalid-transition",
+      "layer": "api",
+      "operationId": "manager.reject",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "repeat a completed decision",
+      "expected": {
+        "status": 409
+      },
+      "negative": {
+        "status": 409,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_opposite_decision_after_resolution_is_rejected",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      }
+    },
+    {
+      "id": "browser.manager.reject",
+      "layer": "browser",
+      "operationId": "manager.reject",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "complete the rejected action and verify persisted state and history",
+      "expected": {
+        "status": 200,
+        "persistedState": "rejected",
+        "auditAction": "rejected"
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "customer registration/submission, manager decisions, audit, reload, expiry and logout",
+        "artifact": "frontend/e2e/customer-manager-workflow.spec.ts"
+      }
+    },
+    {
+      "id": "customer.listOwn.unauthenticated",
+      "layer": "api",
+      "operationId": "customer.listOwn",
+      "preconditions": [],
+      "testData": [],
+      "action": "call the protected operation without an authentication token",
+      "expected": {
+        "status": 401
+      },
+      "negative": {
+        "status": 401,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_and_manager_lists_are_authentication_protected",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      }
+    },
+    {
+      "id": "customer.listOwn.authorized",
+      "layer": "api",
+      "operationId": "customer.listOwn",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "read a resource permitted by the operation policy",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_list_is_owner_scoped_and_manager_queue_is_review_scoped",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      }
+    },
+    {
+      "id": "customer.listOwn.ownership",
+      "layer": "api",
+      "operationId": "customer.listOwn",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "read a resource owned by a different principal",
+      "expected": {
+        "status": 404
+      },
+      "negative": {
+        "status": 404,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_list_is_owner_scoped_and_manager_queue_is_review_scoped",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      },
+      "contractReconciliation": {
+        "originalExpected": {
+          "status": 404
+        },
+        "contractExpected": {
+          "status": 200,
+          "foreignRecord": "absent"
+        },
+        "reason": "Collection reads return the authorized owner-scoped page with foreign rows filtered out; 404 is a record-read expectation."
+      }
+    },
+    {
+      "id": "manager.listReviewQueue.unauthenticated",
+      "layer": "api",
+      "operationId": "manager.listReviewQueue",
+      "preconditions": [],
+      "testData": [],
+      "action": "call the protected operation without an authentication token",
+      "expected": {
+        "status": 401
+      },
+      "negative": {
+        "status": 401,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "duplicate coverage",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_and_manager_lists_are_authentication_protected",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      },
+      "coveredBy": "customer.listOwn.unauthenticated"
+    },
+    {
+      "id": "manager.listReviewQueue.authorized",
+      "layer": "api",
+      "operationId": "manager.listReviewQueue",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "read a resource permitted by the operation policy",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_list_is_owner_scoped_and_manager_queue_is_review_scoped",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      },
+      "contractReconciliation": {
+        "originalRole": "customer",
+        "contractRole": "manager",
+        "reason": "The API contract models both customer list and manager queue on GET /customers; this inventory case is manager-specific."
+      }
+    },
+    {
+      "id": "manager.listReviewQueue.ownership",
+      "layer": "api",
+      "operationId": "manager.listReviewQueue",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "read a resource owned by a different principal",
+      "expected": {
+        "status": 404
+      },
+      "negative": {
+        "status": 404,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_list_is_owner_scoped_and_manager_queue_is_review_scoped",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      },
+      "contractReconciliation": {
+        "originalExpected": {
+          "status": 404
+        },
+        "contractExpected": {
+          "status": 200,
+          "foreignSubmittedRecord": "visible",
+          "unsubmittedRecord": "absent"
+        },
+        "reason": "The approved manager queue is global over submitted pending records; the original case is a customer collection case duplicated by customer.listOwn.ownership."
+      }
+    },
+    {
+      "id": "customer.getOwn.authorized",
+      "layer": "api",
+      "operationId": "customer.getOwn",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "read a resource permitted by the operation policy",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_can_read_owned_record",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      }
+    },
+    {
+      "id": "customer.getOwn.ownership",
+      "layer": "api",
+      "operationId": "customer.getOwn",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "read a resource owned by a different principal",
+      "expected": {
+        "status": 404
+      },
+      "negative": {
+        "status": 404,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_cannot_read_another_customers_record",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      }
+    },
+    {
+      "id": "manager.getReviewable.authorized",
+      "layer": "api",
+      "operationId": "manager.getReviewable",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "read a resource permitted by the operation policy",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_manager_global_read_access_spans_owners",
+        "artifact": "backend/tests/test_p062e_batch3_manager_decisions.py"
+      },
+      "contractReconciliation": {
+        "originalRole": "customer",
+        "contractRole": "manager",
+        "reason": "Actor role corrected to the manager operation declared by the saved operation contract."
+      }
+    },
+    {
+      "id": "manager.getReviewable.ownership",
+      "layer": "api",
+      "operationId": "manager.getReviewable",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "read a resource owned by a different principal",
+      "expected": {
+        "status": 404
+      },
+      "negative": {
+        "status": 404,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "duplicate coverage",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_cannot_read_another_customers_record",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      },
+      "coveredBy": "customer.getOwn.ownership",
+      "contractReconciliation": {
+        "reason": "The case role is customer, so it duplicates customer.getOwn.ownership on the shared GET /customers/{customer_id} route; manager access is global by the approved operation contract."
+      }
+    },
+    {
+      "id": "customer.audit.read.authorized",
+      "layer": "api",
+      "operationId": "customer.audit.read",
+      "preconditions": [],
+      "testData": [],
+      "role": "manager",
+      "action": "read a resource permitted by the operation policy",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_manager_can_read_audit_history_across_customer_owners",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      }
+    },
+    {
+      "id": "customer.audit.read.ownership",
+      "layer": "api",
+      "operationId": "customer.audit.read",
+      "preconditions": [],
+      "testData": [],
+      "action": "read a resource owned by a different principal",
+      "expected": {
+        "status": 404
+      },
+      "negative": {
+        "status": 404,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_customer_cannot_read_another_customers_record",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      }
+    },
+    {
+      "id": "auth.login.valid",
+      "layer": "api",
+      "operationId": "auth.login",
+      "preconditions": [],
+      "testData": [],
+      "action": "authenticate with a valid credential pair",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "customer_identity and manager_identity fixture authentication assertions",
+        "artifact": "backend/tests/conftest.py"
+      }
+    },
+    {
+      "id": "auth.login.invalid-credentials",
+      "layer": "api",
+      "operationId": "auth.login",
+      "preconditions": [],
+      "testData": [],
+      "action": "authenticate with invalid credentials",
+      "expected": {
+        "status": 401
+      },
+      "negative": {
+        "status": 401,
+        "rejected": true
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_invalid_credentials_are_rejected",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py"
+      }
+    },
+    {
+      "id": "browser.auth-session",
+      "layer": "browser",
+      "operationId": "auth.login",
+      "preconditions": [],
+      "testData": [],
+      "action": "authenticate, reload a protected page, and end the session",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "customer login, manager login, and logout",
+        "artifact": "frontend/e2e/customer-manager-workflow.spec.ts"
+      }
+    },
+    {
+      "id": "browser.session-expiration",
+      "layer": "browser",
+      "operationId": "auth.login",
+      "preconditions": [],
+      "testData": [],
+      "action": "expire the configured session and verify protected navigation returns to authentication",
+      "expected": {
+        "status": 401
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "test_expired_session_is_rejected; browser protected route redirects",
+        "artifact": "backend/tests/test_p062e_batch1_auth_authorization.py;frontend/e2e/customer-manager-workflow.spec.ts"
+      }
+    },
+    {
+      "id": "browser.entity-create",
+      "layer": "browser",
+      "operationId": "customer.register",
+      "preconditions": [],
+      "testData": [],
+      "action": "create an entity through the rendered application form",
+      "expected": {
+        "status": 201
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "customer creates two persisted applications in Chromium",
+        "artifact": "frontend/e2e/customer-manager-workflow.spec.ts"
+      }
+    },
+    {
+      "id": "browser.persisted-reload",
+      "layer": "browser",
+      "operationId": "customer.submit",
+      "preconditions": [],
+      "testData": [],
+      "action": "reload and verify server-backed entity state",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "contract",
+      "classification": "mandatory and applicable",
+      "executionStatus": "passed",
+      "executionEvidence": {
+        "testOrAssertion": "customer dashboard owner isolation/reload and workflow detail reload",
+        "artifact": "frontend/e2e/customer-dashboard-owner-isolation.spec.ts;frontend/e2e/customer-manager-workflow.spec.ts"
+      }
+    }
+  ],
+  "supplementalModelContribution": {
+    "id": "customer.register.success",
+    "origin": "previously accepted checkpoint model contribution",
+    "sha256": "41966d1f07e29d8a3d975ed9dfaa0004d4247d01757eef6bf6c1d3103df3f4dd",
+    "checkpointCase": {
+      "id": "customer.register.success",
+      "layer": "api",
+      "operationId": "customer.register",
+      "preconditions": [],
+      "testData": [],
+      "role": "customer",
+      "action": "Register a new customer with valid data and verify the creation of the customer record.",
+      "expected": {
+        "status": 200
+      },
+      "cleanup": [
+        "delete created test records"
+      ],
+      "origin": "model"
+    },
+    "executionStatus": "rejected-for-execution",
+    "reason": "Expected HTTP 200 conflicts with the verified registration contract and actual endpoint status 201. Contribution preserved; no model request was made and no incorrect assertion was executed.",
+    "requestId": "ec651158-f1aa-4722-8786-0daa278508be"
+  },
+  "authorizationPolicy": "Original PAC unchanged. Customers are owner-scoped; managers have global access for manager queue (submitted pending only), record-read and audit-read operations as declared by saved operation contracts. No review-scope relation introduced.",
+  "execution": {
+    "database": "PostgreSQL 16.15 (isolated Docker image postgres:16.15; existing local image)",
+    "backend": {
+      "pytestCollected": 30,
+      "pytestPassed": 30,
+      "pytestFailed": 0,
+      "pytestSkipped": 0,
+      "log": "/private/tmp/p0.6b2e-generated-pytest-pg16.log"
+    },
+    "browser": {
+      "playwrightCollected": 2,
+      "playwrightPassed": 2,
+      "playwrightFailed": 0,
+      "playwrightSkipped": 0,
+      "log": "/private/tmp/p0.6b2e-playwright-pg16.log"
+    },
+    "concurrency": {
+      "overlapSeconds": 0.5856426829705015,
+      "httpStatuses": [
+        200,
+        409
+      ],
+      "databaseStatus": "approved",
+      "decisionAuditActions": [
+        "approved"
+      ]
+    }
+  }
+}

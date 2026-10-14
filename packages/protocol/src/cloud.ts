@@ -723,6 +723,27 @@ export interface GenerationCheckpoint {
       responseCharacters?: number;
     };
   }>;
+  /** Independently executed, resumable test slices. These do not mark the
+   * overall tests stage complete; they preserve verified work for incremental
+   * test generation and reruns. */
+  testSubtasks?: Array<{
+    id: string;
+    architectureHash: string;
+    topologyHash: string;
+    completedAt: string;
+    artifacts: Array<{ path: string; action: ProposedEdit["action"]; content: string; sha256: string }>;
+    validation: {
+      pytestCollected: number;
+      pytestPassed: number;
+      pytestFailed: number;
+      pytestSkipped: number;
+      playwrightCollected: number;
+      playwrightPassed: number;
+      playwrightFailed: number;
+      playwrightSkipped: number;
+    };
+    modelContributionRequestId?: string;
+  }>;
   /** Immutable, versioned project architecture approved before staged code generation. Optional only for checkpoints created before P0.5. */
   projectArchitecture?: ProjectArchitectureContract;
   updatedAt: string;

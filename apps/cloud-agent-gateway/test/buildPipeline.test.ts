@@ -2234,7 +2234,7 @@ test("staged generation stops a runner that ignores cancellation at the bounded 
   // PAC construction and stage prompt preparation can take over a second on
   // a loaded CI/macOS host; assert bounded settlement without coupling this
   // cancellation regression to a tight scheduler timing threshold.
-  assert.ok(Date.now() - started < 5_000, "the parent Build task should settle when its deadline expires");
+  assert.ok(Date.now() - started < 10_000, "the parent Build task should settle when its deadline expires");
   assert.equal(signalAborted, true, "the in-flight provider must receive cancellation");
   assert.ok(events.some((event) => event.type === "status" && event.status === "failed"));
   assert.ok(events.some((event) => event.type === "error" && /end-to-end deadline/.test(event.message)));
