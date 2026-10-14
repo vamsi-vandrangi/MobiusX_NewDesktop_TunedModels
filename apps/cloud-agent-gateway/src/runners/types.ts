@@ -1,10 +1,12 @@
-import type { AgentMode, HistoryTurn, ModelOption, ProjectContext, TaskEvent } from "@mobiusx/protocol";
+import type { AgentMode, AppArchitectureMode, GenerationCheckpoint, HistoryTurn, ModelOption, ProjectContext, TaskEvent } from "@mobiusx/protocol";
 
 export interface RunnerInput {
   taskId: string;
   mode: AgentMode;
   prompt: string;
   projectContext?: ProjectContext;
+  /** See AppArchitectureMode's doc comment in @mobiusx/protocol and archModeGuidanceBlock in promptShared.ts. Copied straight from CreateTaskRequest.archMode — undefined for any call site that doesn't expose the toggle. */
+  archMode?: AppArchitectureMode;
   /** Prior turns from the same AI Assistant panel session — see HistoryTurn's doc comment in @mobiusx/protocol. A chat-style runner should prepend these as real messages (see promptShared.ts#historyMessages) so a follow-up like "show me the output" isn't answered as if it were a fresh, contextless request. Absent or empty for a task with no prior turns (or from a runner/caller that doesn't support it). */
   history?: HistoryTurn[];
   /**
@@ -15,6 +17,12 @@ export interface RunnerInput {
    * Ignored by demoRunner, which has no real model behind it.
    */
   modelId?: string;
+  /** The caller selected Cloud Auto, so recoverable provider failures may be retried elsewhere. */
+  autoCloud?: boolean;
+  /** Internal staged-build metadata; never changes the chosen provider/model. */
+  stagedBuild?: { index: number; total: number; id: string; final: boolean; repair?: boolean; subtask?: { id: string; targetPaths: string[]; acceptanceCriteria: string[]; targetFileOperations?: Array<{ path: string; action: "create" | "modify"; expectedContentSha256?: string }> } };
+  /** Verified server-side checkpoint provided only by POST /tasks/:id/resume. */
+  resumeCheckpoint?: GenerationCheckpoint;
   /** Aborts when the task is cancelled (see taskEngine.ts's cancelTask). Runners should pass this to any cancellable work (fetch calls, timers) and treat an AbortError as a clean cancellation, not a failure. */
   signal?: AbortSignal;
 }

@@ -1,4 +1,5 @@
-import type { ProposedEdit } from "@mobiusx/protocol";
+import { createHash } from "node:crypto";
+import { BUILD_RESPONSE_CONTRACT_VERSION, type BuildResponseEnvelope, type ParsedBuildResponse, type ProposedEdit } from "@mobiusx/protocol";
 import type { RunnerInput } from "./types.js";
 
 /**
@@ -15,6 +16,58 @@ import type { RunnerInput } from "./types.js";
 /** Marks the boundary between the model's human-readable summary and the machine-readable edits JSON block in a build/spec-mode response. Never shown to the user. */
 export const EDITS_MARKER = "===MOBIUSX_EDITS===";
 
+/** Shared semantic contract injected into every runner's structured-edit prompt. Provider adapters may differ in transport format, but must normalize to this schema before proposing files. */
+export const BUILD_RESPONSE_CONTRACT_RULES = [
+  "MOBIUSX BUILD RESPONSE CONTRACT v1: return a concise user-facing summary and one edits array. Each edit has exactly a project-relative path, action ('create' or 'modify'), and the complete new file content. Never return diffs, partial snippets, placeholders, or claim a build/test passed without actual tool output.",
+  "Use 'modify' only for an existing file whose complete contents were included in the supplied project context. Use 'create' only for a genuinely new path. Do not use absolute paths, parent-directory traversal, duplicate paths, or paths outside the project. If a necessary decision is genuinely unclear, ask up to three concise questions and return an empty edits array; otherwise implement with reasonable defaults.",
+].join("\n");
+
+/** Streams only the user-facing prose preceding the structured edit bundle.
+ * Code/JSON after EDITS_MARKER stays buffered until it can be parsed and
+ * shown in the review card; the model's separate reasoning channel is never
+ * passed here. The small suffix buffer handles the marker split across SSE
+ * chunks without leaking any of it into the visible prose. */
+export function createStructuredProseStreamer(emit: (delta: string) => void): { push: (delta: string) => void; finish: () => string } {
+  let pending = "";
+  let visible = "";
+  let sawMarker = false;
+  const write = (text: string) => {
+    if (!text) return;
+    visible += text;
+    emit(text);
+  };
+  return {
+    push(delta) {
+      if (sawMarker) return;
+      pending += delta;
+      const markerIndex = pending.indexOf(EDITS_MARKER);
+      if (markerIndex !== -1) {
+        write(pending.slice(0, markerIndex));
+        pending = "";
+        sawMarker = true;
+        return;
+      }
+      const safeLength = Math.max(0, pending.length - EDITS_MARKER.length + 1);
+      if (safeLength > 0) {
+        write(pending.slice(0, safeLength));
+        pending = pending.slice(safeLength);
+      }
+    },
+    finish() {
+      if (!sawMarker) write(pending);
+      pending = "";
+      return visible;
+    },
+  };
+}
+
+/**
+ * Private model scratchpads are not user-facing telemetry. Across every
+ * mode, expose concise conclusions and observable task/tool progress only.
+ */
+export const PUBLIC_PROGRESS_RULE =
+  "Keep private chain-of-thought, hidden reasoning, and internal scratchpads private. Give concise user-facing explanations and conclusions, and report only observable progress or tool actions; never present hidden reasoning traces as status updates.";
+
 /**
  * Standing quality rule appended to every mode that actually writes
  * application code (build, fix, database, testing, devops, auth) — feature
@@ -28,6 +81,10 @@ export const EDITS_MARKER = "===MOBIUSX_EDITS===";
  */
 export const DEBUGGABLE_CODE_RULE =
   "Write code a human engineer can actually debug: clear, descriptive names (no single-letter variables outside trivial loop counters), small functions with a single obvious purpose, comments on non-obvious logic (why, not what), consistent formatting/style with the rest of this project, and explicit error handling with informative messages instead of silently swallowing failures. Prefer the straightforward, readable approach over a clever one-liner — this code will be read, run, and fixed by a person, not just executed.";
+
+/** Keeps authenticated binary downloads usable across browser navigation. */
+export const AUTHENTICATED_FILE_DOWNLOADS_RULE =
+  "AUTHENTICATED FILE DOWNLOADS: when an API endpoint (for example, a payslip PDF, report export, or attachment) requires JWT/Bearer authentication, do not link to it with a plain <a href> or window.open because those requests cannot attach the Authorization header. Use a button that fetches the endpoint with the active bearer token, checks response.ok, reports API/network errors in the page, reads the successful response as a Blob, and downloads it via a temporary object URL that is revoked afterward. A direct link is acceptable only when the app uses a secure cookie session that the browser sends automatically; never put access tokens in query strings. Keep binary-download handling separate from JSON API helpers so a PDF is not parsed as JSON.";
 
 /** Modes whose response is buffered and parsed for a structured ProposedEdit[] block, rather than streamed live token-by-token. */
 export const MODES_WITH_STRUCTURED_EDITS = new Set<RunnerInput["mode"]>(["build", "spec", "fix", "database", "architecture", "testing", "devops", "auth"]);
@@ -91,40 +148,141 @@ function repairOverEscapedContent(content: string): string {
   });
 }
 
+/**
+ * Candidate ways to pull the JSON object out of the text that follows
+ * EDITS_MARKER, tried in order until one actually parses.
+ *
+ * Real, observed failure mode (Oct 2026 regression: a Claude build task
+ * with a genuinely large multi-file response -- 14647 completion tokens,
+ * comfortably under the max_tokens ceiling, so NOT a truncation case --
+ * produced editsCount 0 despite the marker being present). Root cause: the
+ * previous single strategy used a NON-GREEDY fence match
+ * (```` ```(?:json)?\s*([\s\S]*?)``` ````), which stops at the FIRST ``` it
+ * finds after the opening fence. For a large build this is routinely a
+ * nested code fence inside one of the proposed files' own content -- most
+ * commonly a generated README.md or any markdown file whose content legitimately
+ * contains ``` for its own example code blocks -- which truncates the
+ * extracted text mid-JSON and makes it unparseable. The larger and more
+ * complete a build response is (exactly what the COMPLETENESS/FIRST-RUN
+ * CONTENT prompt additions push models toward), the more likely it is to
+ * contain such a nested fence, so this bug got MORE likely to fire, not
+ * less, as build quality improved -- worth stating explicitly since it's
+ * counterintuitive.
+ *
+ * Fix: prefer anchoring to the LAST ``` in the remainder as the real
+ * closing fence (correct whenever the model closes the fence at the very
+ * end of its response, as instructed -- the overwhelmingly common case),
+ * falling back to the old first-fence behavior and then the raw
+ * unstripped remainder, so a response that doesn't fit the common shape
+ * still gets a real parse attempt instead of silently losing every edit.
+ */
+function candidateJsonTexts(rest: string): string[] {
+  const trimmed = rest.trim();
+  const candidates: string[] = [];
+
+  const leadingFence = trimmed.match(/^```(?:json)?\s*/i);
+  if (leadingFence) {
+    const body = trimmed.slice(leadingFence[0].length);
+    const lastFenceIdx = body.lastIndexOf("```");
+    candidates.push((lastFenceIdx === -1 ? body : body.slice(0, lastFenceIdx)).trim());
+  }
+
+  // Old behavior: first fence pair found anywhere (non-greedy) -- kept as a
+  // fallback for a response shaped differently than the common case above.
+  const firstFenceMatch = rest.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (firstFenceMatch) candidates.push(firstFenceMatch[1].trim());
+
+  candidates.push(trimmed);
+  return [...new Set(candidates)]; // de-dupe -- often the same string from two strategies
+}
+
 export function parseBuildResponse(
   fullText: string,
   input: RunnerInput,
-): { prose: string; edits: ProposedEdit[]; droppedCount: number; hadMarker: boolean } {
+): ParsedBuildResponse & { prose: string } {
   const markerIdx = fullText.indexOf(EDITS_MARKER);
-  if (markerIdx === -1) return { prose: fullText, edits: [], droppedCount: 0, hadMarker: false };
-
-  const prose = fullText.slice(0, markerIdx).trim();
-  const rest = fullText.slice(markerIdx + EDITS_MARKER.length);
-
-  // Strip a ```json ... ``` (or bare ``` ... ```) fence if present; otherwise use the raw remainder.
-  const fenceMatch = rest.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const jsonText = (fenceMatch ? fenceMatch[1] : rest).trim();
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch {
-    return { prose, edits: [], droppedCount: 0, hadMarker: true };
+  if (markerIdx === -1) {
+    const trimmed = fullText.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+    try {
+      const envelope = JSON.parse(trimmed) as Partial<BuildResponseEnvelope>;
+      if (envelope && typeof envelope === "object" && "edits" in envelope) {
+        if (Object.keys(envelope).some((key) => key !== "summary" && key !== "edits")) {
+          return { contractVersion: BUILD_RESPONSE_CONTRACT_VERSION, summary: "", prose: "", edits: [], droppedCount: 0, hadMarker: true, parseFailed: true };
+        }
+        if (Array.isArray(envelope.edits)) {
+          const summary = typeof envelope.summary === "string" ? envelope.summary : "";
+          return parseBuildResponse(`${summary}\n${EDITS_MARKER}\n${JSON.stringify({ edits: envelope.edits })}`, input);
+        }
+        return { contractVersion: BUILD_RESPONSE_CONTRACT_VERSION, summary: "", prose: "", edits: [], droppedCount: 0, hadMarker: true, parseFailed: true };
+      }
+    } catch {
+      if (/^\s*(?:```(?:json)?\s*)?\{[\s\S]*["']edits["']\s*:/i.test(fullText)) {
+        return { contractVersion: BUILD_RESPONSE_CONTRACT_VERSION, summary: "", prose: "", edits: [], droppedCount: 0, hadMarker: true, parseFailed: true };
+      }
+    }
+    return { contractVersion: BUILD_RESPONSE_CONTRACT_VERSION, summary: "", prose: fullText, edits: [], droppedCount: 0, hadMarker: false, parseFailed: false };
   }
 
-  const rawEdits =
-    parsed && typeof parsed === "object" && Array.isArray((parsed as { edits?: unknown }).edits)
-      ? (parsed as { edits: unknown[] }).edits
-      : [];
+  let prose = fullText.slice(0, markerIdx).trim();
+  const rest = fullText.slice(markerIdx + EDITS_MARKER.length);
 
-  const modifiableRelPaths = new Set(
-    (input.projectContext?.relevantFiles ?? []).filter((f) => f.content !== undefined).map((f) => f.relPath),
+  let parsed: unknown;
+  let didParse = false;
+  for (const candidate of candidateJsonTexts(rest)) {
+    try {
+      parsed = JSON.parse(candidate);
+      didParse = true;
+      break;
+    } catch {
+      continue; // try the next extraction strategy
+    }
+  }
+  if (!didParse) {
+    // Real, observed failure mode (Oct 2026, this exact session): a live
+    // Claude build task streamed for 2+ minutes, ended with EDITS_MARKER
+    // present, and STILL produced zero files on disk -- with no warning
+    // shown anywhere. Root cause traced by reading this function: when
+    // every candidateJsonTexts() strategy fails to JSON.parse (the classic
+    // cause is the response hitting max_tokens mid-JSON, so the edits
+    // block is cut off mid-string/mid-array, not malformed-but-complete
+    // JSON), this used to return droppedCount: 0 -- identical to the
+    // "model deliberately proposed zero edits" case below -- so every
+    // caller's `if (droppedCount > 0)` check stayed silent and some
+    // callers (openAiCompatibleRunner.ts) actively mislabeled it as "the
+    // model asked a clarifying question." parseFailed distinguishes this
+    // case so callers can tell a human-readable truth and retry, instead
+    // of quietly discarding a real (if truncated) generation.
+    return { contractVersion: BUILD_RESPONSE_CONTRACT_VERSION, summary: prose, prose, edits: [], droppedCount: 0, hadMarker: true, parseFailed: true };
+  }
+
+  if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { edits?: unknown }).edits)) {
+    return { contractVersion: BUILD_RESPONSE_CONTRACT_VERSION, summary: prose, prose, edits: [], droppedCount: 0, hadMarker: true, parseFailed: true };
+  }
+  const envelope = parsed as { summary?: unknown; edits: unknown[] };
+  if (Object.keys(parsed as object).some((key) => key !== "summary" && key !== "edits")) {
+    return { contractVersion: BUILD_RESPONSE_CONTRACT_VERSION, summary: prose, prose, edits: [], droppedCount: 0, hadMarker: true, parseFailed: true };
+  }
+  if (!prose && typeof envelope.summary === "string") prose = envelope.summary.trim();
+  const rawEdits = envelope.edits;
+
+  const modifiableRelPaths = new Map(
+    (input.projectContext?.relevantFiles ?? [])
+      .filter((f) => f.content !== undefined)
+      .map((f) => [f.relPath.replaceAll("\\", "/").toLocaleLowerCase("en-US"), f.relPath.replaceAll("\\", "/")]),
   );
+  const expectedActions = new Map((input.stagedBuild?.subtask?.targetFileOperations ?? [])
+    .map((target) => [target.path.replaceAll("\\", "/").toLocaleLowerCase("en-US"), target]));
 
   const edits: ProposedEdit[] = [];
+  const seenPaths = new Set<string>();
+  const rejectedEditPaths: string[] = [];
   let droppedCount = 0;
   for (const raw of rawEdits) {
     if (!raw || typeof raw !== "object") {
+      droppedCount++;
+      continue;
+    }
+    if (Object.keys(raw).some((key) => !["path", "action", "content"].includes(key))) {
       droppedCount++;
       continue;
     }
@@ -137,20 +295,54 @@ export function parseBuildResponse(
       droppedCount++;
       continue;
     }
-    // Cheap sanity check — the desktop agent's resolveWithinProject is the real guard,
-    // but there's no reason to even propose something this obviously wrong.
-    if (e.path.startsWith("/") || e.path.split("/").includes("..")) {
+    // Common contract validation runs before the desktop agent's independent
+    // resolveWithinProject guard. Normalize Windows separators, then reject
+    // absolute paths, traversal, NUL bytes, and duplicate destinations.
+    const normalizedPath = e.path.replaceAll("\\", "/");
+    if (/\0/.test(normalizedPath) || normalizedPath.startsWith("/") || /^[A-Za-z]:\//.test(normalizedPath) || normalizedPath.split("/").includes("..")) {
       droppedCount++;
       continue;
     }
-    if (e.action === "modify" && !modifiableRelPaths.has(e.path)) {
+    const pathKey = normalizedPath.toLocaleLowerCase("en-US");
+    if (seenPaths.has(pathKey)) {
       droppedCount++;
       continue;
     }
-    edits.push({ path: e.path, action: e.action, content: repairOverEscapedContent(e.content) });
+    const canonicalExistingPath = modifiableRelPaths.get(pathKey);
+    const expectedTarget = expectedActions.get(pathKey);
+    // Staged Build knows whether each exact target is new or an existing,
+    // checkpointed file. Correct a model that labels a complete new-file
+    // replacement as "modify" only when the stage contract explicitly says
+    // create. The desktop agent still enforces create-must-not-exist at the
+    // actual workspace boundary, so this cannot overwrite an unreported file.
+    if (expectedTarget?.action === "create" && e.action === "modify") {
+      seenPaths.add(pathKey);
+      edits.push({ path: normalizedPath, action: "create", content: repairOverEscapedContent(e.content) });
+      continue;
+    }
+    if (e.action === "modify" && !canonicalExistingPath) {
+      droppedCount++;
+      rejectedEditPaths.push(normalizedPath);
+      continue;
+    }
+    if (expectedTarget?.action === "modify" && e.action === "create") {
+      droppedCount++;
+      rejectedEditPaths.push(normalizedPath);
+      continue;
+    }
+    if (e.action === "modify" && expectedTarget?.expectedContentSha256) {
+      const contextFile = (input.projectContext?.relevantFiles ?? []).find((file) => file.relPath.replaceAll("\\", "/").toLocaleLowerCase("en-US") === pathKey && file.content !== undefined);
+      if (!contextFile || createHash("sha256").update(contextFile.content!).digest("hex") !== expectedTarget.expectedContentSha256) {
+        droppedCount++;
+        rejectedEditPaths.push(normalizedPath);
+        continue;
+      }
+    }
+    seenPaths.add(pathKey);
+    edits.push({ path: e.action === "modify" ? canonicalExistingPath! : normalizedPath, action: e.action, content: repairOverEscapedContent(e.content) });
   }
 
-  return { prose, edits, droppedCount, hadMarker: true };
+  return { contractVersion: BUILD_RESPONSE_CONTRACT_VERSION, summary: prose, prose, edits, droppedCount, hadMarker: true, parseFailed: false, ...(rejectedEditPaths.length ? { rejectedEditPaths } : {}) };
 }
 
 /**
@@ -175,16 +367,109 @@ ${steering}
 `;
 }
 
+/**
+ * Assistant Memory (Oct 2026 addition — see MemoryFile's doc comment in
+ * @mobiusx/protocol's agent.ts for the full feature background). Prepended
+ * BEFORE steeringContextBlock above, not after: memory is standing context
+ * about the USER (who they are, how they like to work) that holds across
+ * every project, whereas steering is THIS project's own conventions — the
+ * natural reading order is "who you're working with" then "the rules of
+ * this particular codebase". Like steering, intentionally not scoped to
+ * any one mode: a real colleague who knows your preferences brings that
+ * knowledge to a quick question exactly as much as to a big build.
+ */
+function assistantMemoryBlock(input: RunnerInput): string {
+  const memory = input.projectContext?.assistantMemoryContext;
+  if (!memory) return "";
+  return `You have standing memory of this user from past sessions — real facts they stated or confirmed, not assumptions. Use it to tailor your response; never recite it back verbatim or mention that you "remember" it unless the user asks:
+${memory}
+
+---
+
+`;
+}
+
+/**
+ * Web App / Enterprise / Core / Embedded app style mode (Oct 2026 addition) — a
+ * per-task toggle in the Assistant panel's header (see renderer.js's
+ * `archMode` state in createAssistantPanel), threaded through
+ * CreateTaskRequest -> RunnerInput unchanged. Like steeringContextBlock
+ * above, this is intentionally NOT scoped to build-like modes only: Ask
+ * and Plan should answer in the same register as whatever Build would
+ * actually produce, so a developer asking "how should I structure this
+ * endpoint" in Ask mode gets lean-prototype advice or layered-architecture
+ * advice consistent with what a follow-up Build task would generate.
+ *
+ * Deliberately absent (input.archMode undefined) for every call site that
+ * doesn't expose the toggle -- the Verify panel's "Diagnose & Fix" button
+ * and the Debug & Fix ticket-to-fix flow both create mode:"fix" tasks
+ * directly, outside the Assistant panel, with no toggle in their UI to set
+ * this from. Returning "" for undefined (rather than defaulting to either
+ * mode) keeps those call sites' prompts byte-for-byte unchanged.
+ */
+function archModeGuidanceBlock(input: RunnerInput): string {
+  if (input.archMode === "core") {
+    return `APPLICATION STYLE: Core App (general-purpose software development). This request is about creating, extending, or debugging an application. Work in the language and ecosystem requested or already used by the project, including C, C++, Java, Python, C#, JavaScript/TypeScript, Go, Rust, and other languages you can handle. Inspect the supplied files first; preserve the existing framework/runtime version, architecture, package manager, toolchain, naming, and conventions. Do not convert the project or add an unrelated stack unless explicitly requested. For debugging, trace supplied errors and failing commands to the smallest supported fix and preserve unrelated behavior. Follow the repository's actual build, run, and test commands when available; never claim a command succeeded unless its output confirms that. Add focused regression coverage when the project has an appropriate test setup. State capability or tooling limits plainly rather than fabricating details.
+
+---
+
+`;
+  }
+  if (input.archMode === "embedded") {
+    return `APPLICATION STYLE: Embedded Apps (embedded, bare-metal, and RTOS development). Apply this guidance only to projects or requests that identify an MCU, SoC, RTOS, bare-metal target, embedded Linux system, or hardware interface. Work in the existing/requested language and toolchain, including C, Embedded C++, Rust (including no_std where appropriate), and HDL such as Verilog/SystemVerilog for hardware verification. First inspect the project and identify the exact board/chip, core, SDK/toolchain, RTOS and version, clock configuration, memory limits, pin/peripheral assignments, and relevant datasheet/evidence. Do not invent register addresses, bit masks, pin mappings, interrupt numbers, clock rates, hardware capabilities, or vendor API signatures. If required details are missing, ask focused questions or label assumptions clearly; do not present guessed hardware code as ready to flash. Distinguish bare-metal, RTOS, and embedded-Linux designs, and use the existing HAL/BSP/vendor SDK.
+
+MISSION-CRITICAL RELIABILITY: Treat safety and failure requirements as constraints, not as proof generated code is safe. Identify hazards, safe states, fault-detection paths, recovery behavior, and degraded modes supported by the requirements. Use watchdogs, brownout/hardware-fault handling, redundancy, and recovery only when supported by the target and system design; ensure recovery cannot repeat unsafe actions or conceal persistent faults. Never promise failure is impossible or code is certified. For medical, automotive, aviation, industrial-control, or other safety-critical use, surface the need for hazard analysis, traceability, independent review, target-hardware verification, and applicable certification; never recommend deploying AI-generated code directly to a live safety-critical system.
+
+REAL-TIME AND CONCURRENCY: Do not invent microsecond deadlines or claim deterministic timing without a stated budget and target measurements. Distinguish hard from soft deadlines; reason about worst-case execution time, interrupt latency, priorities, scheduling, stack sizes, and blocking. Keep ISRs short and bounded; never block or do unbounded work in an ISR, and defer processing to tasks/queues when appropriate. Use tasks, queues, semaphores, and mutexes according to the project's FreeRTOS, Zephyr, VxWorks, QNX, or other RTOS version. Address priority inversion, races, atomicity, and inter-core ownership when relevant. Separate time-critical control from UI, logging, telemetry, and connectivity work.
+
+HARDWARE AND RESOURCE CONSTRAINTS: Use peripherals/protocols such as GPIO, timers, ADC, I2C, SPI, UART, CAN, BLE, PCIe, and DMA only when supported by the target and requirements. Respect DMA buffer lifetime/alignment, cache coherency, memory barriers, MMIO semantics, and concurrency; volatile alone is not thread safety. Meet explicit RAM, Flash, stack, and latency budgets. For constrained or deterministic targets, prefer bounded/static allocation, fixed-size buffers or pools, and no heap/GC in time-critical paths when compatible with the runtime and requirements. Make buffer bounds and failure behavior explicit.
+
+DEBUGGING AND VERIFICATION: Trace logs, crash dumps, fault registers, map files, stack/heap evidence, and race symptoms to the smallest supported fix. Consider stack overflow, memory corruption, pointer/lifetime errors, data races, deadlocks, priority inversion, and timing overruns when relevant. Use actual compiler, linker, build, test, simulator, and flashing commands; never claim verification without confirming output. Prefer host-side tests for portable logic plus target-appropriate simulation, hardware-in-the-loop, fault-injection, and hardware testbench verification. State what could not be verified without target hardware or instrumentation. Preserve the project's conventions and unrelated behavior.
+
+---
+
+`;
+  }
+  if (input.archMode === "enterprise") {
+    return `ARCHITECTURE MODE: Enterprise Application (Robust, Secure, and Maintainable). Design for clear ownership, integration boundaries, operability, and safe change over time. First inspect the repository and the user's requested scope. Follow its existing language, framework, deployment model, and conventions; use suitable enterprise frameworks when starting a new component or when explicitly requested (for example Spring Boot, ASP.NET Core, Django, or Quarkus). Do not add distributed infrastructure just to make a design look enterprise-grade.
+
+ARCHITECTURE AND APIs: Split responsibilities into cohesive layers or modules appropriate to the project (for example MVC, Clean Architecture, DDD, or ports-and-adapters); explain the choice briefly when it affects structure. Keep domain rules separate from transport and persistence where the scope justifies it. For service boundaries, define versionable REST endpoints and request/response contracts; use GraphQL or gRPC only when requested or supported by clear project requirements. For multiple services, identify ownership, dependencies, failure boundaries, and communication needs. Prefer asynchronous/event-driven communication only when it improves decoupling or reliability for a real workflow; never assume a broker exists.
+
+PATTERNS AND OPERABILITY: Apply SOLID and established patterns (dependency injection, Strategy, Factory, Observer, and Singleton) where they solve an evidenced problem; avoid pattern-for-pattern's-sake and never use a process-wide Singleton for mutable request/user state. Add consistent structured logging, centralized error handling, validated configuration, and clear service boundaries appropriate to the framework. Keep modules cohesive and changes reviewable; a small feature does not require scaffolding unrelated tiers.
+
+DATA AND PERSISTENCE: Follow the existing database and ORM (including Hibernate, Entity Framework, Prisma, Django ORM, or the project's equivalent). Keep schema/model/migration changes consistent, use parameterized queries, and preserve transaction boundaries for multi-step writes. Consider indexes from actual query/filter/order patterns and data volume; do not add speculative indexes or silently change database engines. Make transaction isolation and concurrency assumptions explicit when they affect correctness.
+
+SECURITY AND RESILIENCE: Treat authentication and authorization as separate concerns. Use the project's established JWT, OAuth2/OIDC, or secure-session approach; enforce least privilege and resource-level RBAC/ABAC checks on protected operations. Validate and constrain untrusted input, encode output, use CSRF protections for cookie-authenticated state changes, and prevent SQL injection through parameterized access. Never hard-code secrets. Handle errors without leaking credentials or sensitive data. For remote dependencies, apply explicit timeouts and bounded retries with backoff only for safe/idempotent operations; use circuit breakers or bulkheads only where the stack supports them and a real failure boundary warrants them. Do not swallow errors or retry non-idempotent writes blindly.
+
+TESTING AND DELIVERY: Add or update focused unit/integration tests for changed behavior and security-sensitive paths, following the repository's existing test setup. When requested or supported by project evidence, generate production-conscious containers, Compose wiring, and CI/CD workflows for the actual stack (GitHub Actions, GitLab CI, or Jenkins); use Terraform or Kubernetes manifests only when requested or clearly part of the existing deployment. Ground every service, port, command, environment variable, and deployment artifact in the repository or the user's requirements. Use non-root containers, minimal runtime images, health checks, pinned/reproducible dependencies, secret injection, and least-privilege permissions where applicable. Do not invent infrastructure or claim builds, tests, scans, or deployments succeeded without output confirming it.
+
+---
+
+`;
+  }
+  if (input.archMode === "web") {
+    return `ARCHITECTURE MODE: Web Application (Lean & Agile). Prioritize speed-to-market, a clean UI, and a modern developer/user experience over heavyweight process. Favor modern frameworks already common in this ecosystem (Next.js/React/Vue/Svelte-style component patterns), utility-first styling, light client or server state management, and the simplest database that fits (lightweight SQL or NoSQL) over introducing new infrastructure. Favor component modularity, client-side routing, and rapid, working prototypes. Skip enterprise scaffolding this request doesn't need — no multi-layer DI containers, no message brokers, no speculative abstraction — unless the user actually asks for it. "Lean" governs process and infrastructure only, never visual finish — this mode's whole point is a product a real user would judge on sight, so the VISUAL QUALITY and DEPENDENCY VERSION SAFETY rules below (when this task is in Build mode) are not optional extras to trim for speed; a fast, under-designed result is not actually lean, it's just unfinished.
+
+---
+
+`;
+  }
+  return "";
+}
+
 export function systemPromptFor(input: RunnerInput): string {
+  const editContract = input.mode === "ask" || input.mode === "plan" ? "" : `${BUILD_RESPONSE_CONTRACT_RULES}\n\n`;
+  const memory = `${PUBLIC_PROGRESS_RULE}\n\n${editContract}${assistantMemoryBlock(input)}`;
   const steering = steeringContextBlock(input);
+  const archGuidance = archModeGuidanceBlock(input);
   if (input.mode === "ask") {
     return (
-      steering + "You are the MobiusX Desktop AI Assistant, answering a developer's question." + relevantFilesContext(input, false)
+      memory + steering + archGuidance + "You are the MobiusX Desktop AI Assistant, answering a developer's question." + relevantFilesContext(input, false)
     );
   }
   if (input.mode === "plan") {
     return (
-      steering + "You are the MobiusX Desktop AI Assistant. Draft a concrete, numbered implementation plan — do not write full code." +
+      memory + steering + archGuidance + "You are the MobiusX Desktop AI Assistant. Draft a concrete, numbered implementation plan — do not write full code." +
       relevantFilesContext(input, false)
     );
   }
@@ -198,7 +483,7 @@ export function systemPromptFor(input: RunnerInput): string {
     // UI can render a real checklist instead of parsing prose. The
     // markdown doc remains the human-facing artifact; the JSON is never
     // meant to be read standalone.
-    return steering + [
+    return memory + steering + archGuidance + [
       "You are the MobiusX Desktop AI Assistant in SPEC mode — a Requirements Engineering assistant (not a coder in this mode).",
       "Given the user's natural-language request, write a structured requirements specification as a single markdown document with EXACTLY these sections, in this order: '## Overview', '## Functional Requirements' (numbered), '## Non-Functional Requirements' (numbered), '## Constraints & Assumptions', '## Risks', '## Acceptance Criteria'.",
       "EVERY requirement in '## Functional Requirements' and '## Non-Functional Requirements' must be prefixed with a stable id in the form 'REQ-001', 'REQ-002', ... — numbered continuously across both sections in the order they appear (do not restart numbering for non-functional requirements). Example line: '1. **REQ-001** — The system shall let a user reset their password via emailed link.'",
@@ -234,9 +519,10 @@ export function systemPromptFor(input: RunnerInput): string {
             .join("\n\n")}`
         : "\n\nNo specific failing-step evidence was attached to this task -- diagnose from the project context below as best you can, and say so plainly in your summary.";
 
-    return steering + [
+    return memory + steering + archGuidance + [
       "You are the MobiusX Desktop AI Assistant in FIX mode (Autonomous Build/Test/Fix Loop, roadmap Phase 6) -- diagnosing and repairing a REAL verification failure, not responding to a free-form feature request.",
     DEBUGGABLE_CODE_RULE,
+      AUTHENTICATED_FILE_DOWNLOADS_RULE,
       "Your job is to propose the MINIMAL set of file edits that fix the failing step(s) below. Do not refactor, rename, reformat, or \"improve\" anything unrelated to the failure -- a fix that changes more than it needs to makes the next verification pass harder to trust, not easier.",
       "If the evidence below is insufficient to diagnose a real fix (e.g. the output doesn't point at a specific file or line), say so plainly in your prose summary and propose your best-supported hypothesis rather than guessing silently.",
       "CRITICAL OUTPUT FORMAT -- follow this exactly, even for a multi-file fix:",
@@ -272,7 +558,7 @@ export function systemPromptFor(input: RunnerInput): string {
     const dbFullContentPaths = (input.projectContext?.relevantFiles ?? [])
       .filter((f) => f.content !== undefined)
       .map((f) => f.relPath);
-    return steering + [
+    return memory + steering + archGuidance + [
       "You are the MobiusX Desktop AI Assistant in DATABASE mode (Database Engineering, roadmap Phase 8) -- proposing a schema, its forward migration, and ORM model changes as ONE coherent set, not scattered files inside a generic build request.",
     DEBUGGABLE_CODE_RULE,
       "First, inspect the files shown to you below (if any) for an EXISTING database/ORM convention already used in this project -- an ORM's model classes (e.g. SQLModel/SQLAlchemy/Prisma/Sequelize/TypeORM/Mongoose), an existing schema file, or a migrations directory. If you find one, follow that exact convention and file layout. If you find none, default to plain SQL DDL for PostgreSQL under \"db/schema.sql\" and a matching forward migration under \"db/migrations/<NNN>_<slug>.sql\" (zero-padded 3-digit NNN, incrementing from the highest existing migration number you were shown, or 001 if none) -- and say so explicitly in your prose summary (e.g. \"No existing ORM or schema convention was found, so this assumes plain PostgreSQL.\"). Never silently switch technology away from what the project already evidently uses.",
@@ -319,7 +605,7 @@ export function systemPromptFor(input: RunnerInput): string {
     const architectureFullContentPaths = (input.projectContext?.relevantFiles ?? [])
       .filter((f) => f.content !== undefined)
       .map((f) => f.relPath);
-    return steering + [
+    return memory + steering + archGuidance + [
       "You are the MobiusX Desktop AI Assistant in ARCHITECTURE mode (Architecture Generation, roadmap Phase 9) -- producing a High-Level Design doc and a Low-Level Design doc, each with real Mermaid diagrams grounded strictly in the evidence bundle below, not generic or invented architecture.",
       "",
       "THE #1 RULE, non-negotiable: every box, arrow, table, route, and external system you draw MUST trace back to a specific field in the JSON evidence bundle below. Do not add a generic \"Load Balancer\", \"Cache\", \"Message Queue\", \"Auth Service\", or any other component that isn't actually evidenced -- these are exactly the kind of boilerplate-textbook boxes a beta tester flagged as \"very basic level\" and low quality. If the evidence bundle doesn't show it, it doesn't go in the diagram.",
@@ -377,7 +663,7 @@ export function systemPromptFor(input: RunnerInput): string {
     const testingFullContentPaths = (input.projectContext?.relevantFiles ?? [])
       .filter((f) => f.content !== undefined)
       .map((f) => f.relPath);
-    return steering + [
+    return memory + steering + archGuidance + [
       "You are the MobiusX Desktop AI Assistant in TESTING mode (Testing Engine, roadmap Phase 10) -- writing real, runnable test file(s) for the code shown to you below.",
     DEBUGGABLE_CODE_RULE,
       "",
@@ -446,7 +732,7 @@ export function systemPromptFor(input: RunnerInput): string {
       .filter((f) => f.content !== undefined)
       .map((f) => f.relPath);
     const dbComponents = (devopsEvidence?.projectContext.components ?? []).filter((c) => c.category === "database");
-    return steering + [
+    return memory + steering + archGuidance + [
       "You are the MobiusX Desktop AI Assistant in DEVOPS mode (DevOps/Infrastructure Generation, roadmap Phase 14) -- proposing a Dockerfile per real detected service, a root docker-compose.yml wiring them together, and a CI pipeline file, all grounded strictly in the evidence bundle below.",
     DEBUGGABLE_CODE_RULE,
       "",
@@ -513,7 +799,7 @@ export function systemPromptFor(input: RunnerInput): string {
       .filter((f) => f.content !== undefined)
       .map((f) => f.relPath);
     const hasBackend = (authEvidence?.backendComponents.length ?? 0) > 0;
-    return steering + [
+    return memory + steering + archGuidance + [
       "You are the MobiusX Desktop AI Assistant in AUTH mode (Auth/RBAC Engineering, roadmap Phase 19) -- adding or extending JWT-based authentication and role-based authorization for this project's real detected backend, grounded strictly in the evidence bundle below.",
     DEBUGGABLE_CODE_RULE,
       "",
@@ -557,8 +843,10 @@ export function systemPromptFor(input: RunnerInput): string {
   const fullContentPaths = (input.projectContext?.relevantFiles ?? [])
     .filter((f) => f.content !== undefined)
     .map((f) => f.relPath);
+  const commercePrompt = /\b(shop|store|storefront|e-?commerce|sell|selling|products?|catalog|cart|checkout)\b/i.test(input.prompt);
+  const gardenPrompt = /\b(garden|gardening|plants?|flowers?|pots?|planters?|nursery)\b/i.test(input.prompt);
 
-  return steering + [
+  return memory + steering + archGuidance + [
     "You are the MobiusX Desktop AI Assistant in BUILD mode.",
     DEBUGGABLE_CODE_RULE,
     // Optional pre-flight clarification (feature request: "MobiusX.ai
@@ -592,11 +880,12 @@ export function systemPromptFor(input: RunnerInput): string {
     // shown this problem; free/open-weight models via Groq/OpenRouter are
     // the ones this is aimed at.
     "CRITICAL OUTPUT FORMAT — follow this exactly, even for a project with many files:",
-    "1. First write a brief prose summary (2-4 sentences) of what you're building. Do NOT describe individual files in prose, and do NOT put any file's contents in a markdown code fence in this summary.",
+    "1. First write a brief prose summary (2-4 short sentences, at most 80 words total) of what you're building. Do NOT include an architecture diagram, long design explanation, file tree, individual file descriptions, or any file contents in this summary. Put requested run instructions in a concise README file.",
     `2. Then, on its own line by itself, output exactly ${EDITS_MARKER}`,
     "3. Then exactly ONE fenced json code block containing EVERY file you're creating or changing — however many files the project needs — as entries in a single \"edits\" array, in this exact shape:",
     '{"edits": [{"path": "relative/path.ts", "action": "modify" | "create", "content": "COMPLETE new file content"}, {"path": "another/relative/path.py", "action": "create", "content": "COMPLETE new file content"}]}',
     "Do not split files across multiple json blocks, and do not write any file's content anywhere except inside this one \"edits\" array (not in prose, not in a separate markdown code fence). A 10-file project means 10 entries in this one array, not 10 separate code blocks in your response.",
+    "OUTPUT-BUDGET DISCIPLINE: prioritize complete, runnable source files over explanatory prose and unrequested boilerplate. Use a compact architecture that still implements the user's core requested flows; do not add speculative enterprise modules, duplicate examples, or multiple layers of wrappers. Preserve every explicitly requested core feature while keeping code direct and concise.",
     '"content" must be the entire new file content, never a diff, patch, or partial snippet.',
     "When a file's content spans multiple lines, each line break must be encoded as exactly ONE JSON escape sequence: \\n (a single backslash followed by n). Do NOT double it to \\\\n (two backslashes) -- that writes literal backslash-n text into the file instead of a real line break, and has been observed to corrupt files like requirements.txt.",
     // Reinforced Sept 2026 after real evidence (openai/gpt-oss-120b via
@@ -614,8 +903,62 @@ export function systemPromptFor(input: RunnerInput): string {
     // multi-module FastAPI apps, so it's called out explicitly rather than
     // trusted to Python general knowledge.
     "If you are writing a Python/FastAPI backend split across multiple files in the same directory (e.g. main.py, models.py, database.py all directly under backend/), import sibling modules with PLAIN top-level names -- \"from database import ...\", \"from models import ...\" -- never with a leading dot (\"from .database import ...\"). This app runs the backend as \"uvicorn main:app\" from inside that directory, not as a Python package, so a dotted relative import will crash on startup with an ImportError.",
-    "If that FastAPI backend will be called from a separately-hosted frontend (e.g. a Next.js dev server on a different port, as in a typical frontend/ + backend/ project layout), add CORS support in main.py -- import and add fastapi.middleware.cors.CORSMiddleware with allow_origins including at least \"http://localhost:3000\" (and ideally \"*\" for local dev) -- otherwise the browser will block every request the frontend makes to it.",
+    "PYTHON ASYNC SYNTAX: any function that contains or directly calls await must be declared with `async def`; this includes FastAPI route handlers that await ORM/database operations. Before returning Python edits, mentally compile them and verify there is no `await` in a synchronous `def` or at module scope.",
+    "If that FastAPI backend will be called from a separately-hosted frontend (e.g. a Next.js dev server on a different port, as in a typical frontend/ + backend/ project layout), add CORS support in main.py -- import fastapi.middleware.cors.CORSMiddleware and configure it with allow_origin_regex=r\"^http://(localhost|127\\.0\\.0\\.1):\\d+$\" (NOT a hardcoded allow_origins=[\"http://localhost:3000\"], which breaks the moment the frontend's dev server lands on a different port -- a real, common occurrence, not a hypothetical) plus allow_credentials=True, allow_methods=[\"*\"], allow_headers=[\"*\"] -- this covers every local dev port without the security hole a bare allow_origins=[\"*\"] would open, and without the port-fragility of a single hardcoded origin.",
     buildModeTestingBlock(input.projectContext?.testingEvidence),
+    // Added Oct 2026 after a direct quality comparison against Cursor on
+    // the exact same "build me a website for my gardening business"
+    // prompt: this gateway's build mode had no instruction either way
+    // about application scope, so a model left to its own judgment (seen
+    // concretely on openai/gpt-oss-120b via Groq) defaulted to the
+    // smallest thing that technically satisfies the request -- one
+    // index page, a product list endpoint, and an empty database with no
+    // way to see real content without manually POSTing rows first. Cursor
+    // (a different product, backed by a different/stronger model by
+    // default) produced multiple pages and a populated database for the
+    // identical prompt. Rather than assume a bigger/paid model is the only
+    // fix, this closes the actual gap that's in this gateway's own
+    // control: explicit scope and first-run-content guidance, so build
+    // mode asks for a genuinely usable first version regardless of which
+    // model runs it.
+    "COMPLETENESS: when the request describes a real application or business site (a shop, dashboard, portal, booking flow, etc.) rather than a single trivial snippet, build a genuinely usable first version, not the smallest skeleton that technically satisfies the prompt. For a typical storefront/listing-style app in particular, that normally means more than one page -- e.g. a listing/home page AND at least one detail page (an individual item's own page) or other secondary page the request implies (cart, about, contact) -- with real navigation between them, not just one page with everything crammed in. Do not pad with pages or features the request doesn't call for, but match the scope a competent engineer would actually ship for this request, not the minimum that compiles.",
+    "EMPLOYEE ONBOARDING APPS: when the request describes employee onboarding, implement a useful operational portal with clearly reachable Employee Details, Departments, Onboarding, and Reports views. The employee list and detail view should show realistic identity/contact, role, department, manager, start date, and onboarding status; detail should show onboarding tasks/checklist and progress. Departments should be a real browsable view with department leads and employee counts, and navigation or filters should connect departments to their employees. Reports should contain useful, data-backed summaries such as total employees, active onboarding, completion rate, and employees by department/status, with a readable table or chart and sensible date/status filtering where supported. Back these views with consistent API response schemas and persisted database records; seed a small, realistic, idempotent set of employees, departments, and onboarding tasks so the first run demonstrates all views. Keep summaries derived from the same records shown in the portal, validate API response shapes before rendering, and show loading, empty, and error states. Treat names such as Infosys as the requested organization context and visual direction, but do not invent claims of official affiliation or use fabricated credentials.",
+    /\b(payroll|pay slip|payslip|salary calculation|salary processing)\b/i.test(input.prompt)
+      ? "PAYROLL APPLICATIONS: preserve the requested frontend/backend/database as separate components (for Next.js + FastAPI + PostgreSQL, use frontend/ and backend/ with separate package.json and requirements.txt; never put Python packages such as fastapi, uvicorn, sqlalchemy, or psycopg in package.json; use one pip requirement per line and never list Python's built-in sqlite3 module). Implement real connected workflows for employee records, departments, attendance, payroll runs, salary calculations, deductions/bonuses/net pay, and reports/payslips; persist domain data through FastAPI and PostgreSQL, and derive reports from persisted records. Keep the first release compact, but do not substitute a generic landing page, fake in-memory user database, or disconnected mock dashboard for the requested payroll features. For authentication, use password hashing and role checks on protected API routes; load signing/encryption keys and DATABASE_URL from environment variables, provide only placeholder variable names in .env.example, and never hard-code secrets or claim encryption/authentication is production-ready unless implemented end to end. Validate request fields with explicit bounds and formats, and parameterize database inputs. Keep calculation rules in a clear backend module and include a small, transparent seed dataset only if it is clearly labeled as development data."
+      : "",
+    "FIRST-RUN CONTENT: if you create a new database-backed backend (SQLite or otherwise), also make the app show real content the first time it's opened, not an empty list. Either add a small idempotent seed step that runs on startup (check if the table is empty, then insert a handful of realistic example rows matching the request's domain -- e.g. several real-sounding products for a shop) or, for SQLite specifically, propose a seed script alongside the schema. An empty database on first load is a common, avoidable way a build looks broken when the code is actually fine.",
+    "END-TO-END INTEGRATION: when this request includes both a frontend and backend, make the shipped user flows use the backend as their source of truth. Implement and connect the actual API routes, request/response schemas, persistence, and frontend API calls; keep shared field names and URL paths consistent across both sides. For separate local frontend/backend services, put the backend origin in one environment-configurable frontend setting (for Next.js, e.g. NEXT_PUBLIC_API_BASE_URL), use it consistently for every fetch, include an .env.example/default and document the ports and run commands. Never assume a common port is free or silently connect to another project's service; ensure the documented backend process listens on the configured origin. Check response.ok before consuming API data, validate that JSON has the expected shape (especially arrays before rendering with .map), and show a useful error state for HTTP errors, malformed responses, and network failures. Include a documented local run path and environment example, handle backend unavailable/empty/error states in the UI, and never silently substitute hard-coded frontend demo data for a failed API call. For Python seed data use Python literals (None/True/False), not JSON/JavaScript literals (null/true/false); mentally verify startup seeding by tracing initialization. Before returning the edits, mentally trace one realistic user action from the rendered page through the API to the database and back, and ensure every referenced file, import, route, and script exists in the proposed edits.",
+    AUTHENTICATED_FILE_DOWNLOADS_RULE,
+    "HONOR THE REQUESTED STACK: treat named frameworks, languages, and databases in the user's prompt as requirements. For example, if they ask for Next.js + FastAPI + SQLite, produce those technologies, connect them directly, and document how to run both services; do not quietly replace the backend with Next API routes, use a different database, or leave one stack component as a disconnected scaffold.",
+    commercePrompt
+      ? `STOREFRONT FLOW: this request describes selling products, so build a coherent small commerce experience rather than a static marketing page. Include a browsable catalog with useful category/search controls, individual product detail, and a cart that stays consistent across navigation. If you implement checkout, submit an order to the backend and persist it; do not claim to charge a card or provide real payment processing unless a payment provider was explicitly requested and configured. Keep stock/price totals authoritative on the backend. ${gardenPrompt ? "Use recognizable gardening categories and believable product names, prices, descriptions, and care/use details; make the visual direction feel like a considered garden nursery brand, not a generic template." : "Use believable domain-specific catalog content and a visual direction that fits the business, not a generic dashboard."}`
+      : "PRODUCT FINISH: make the main task's central user journey work end to end, including validation and a clear success state. Keep the first release focused on the requested job; do not add unrelated features just to increase file or page count.",
+    // Added Oct 2026 after a second direct quality comparison against
+    // Cursor, this time on a REAL launched build (not just a prompt
+    // diff): the same gardening-business prompt, run twice through this
+    // gateway, now matched Cursor on completeness/seed data (the
+    // COMPLETENESS/FIRST-RUN CONTENT rules above already worked) but still
+    // lost on two concrete, observed axes. (1) Visual polish -- Cursor's
+    // build used a deliberate green design-token palette, a serif/sans
+    // type pairing, and a real Unsplash hero photo; this gateway's two
+    // comparison builds either used no styling system at all or plain
+    // undifferentiated CSS with zero imagery -- nothing in this prompt
+    // asked for visual quality at all, only scope and seed data. (2)
+    // Dependency version safety -- one of the two comparison builds
+    // (openai/gpt-oss-120b via Groq, Next.js frontend) pinned
+    // "typescript": "7.0.2" in package.json, a version that does not
+    // exist; npm silently resolved it to some other installed version,
+    // and the mismatch crashed Next's own startup-time TypeScript check
+    // with "Cannot read properties of undefined (reading 'endsWith')" the
+    // first time a real person tried to run the generated app -- a
+    // completely avoidable failure that had nothing to do with the
+    // request itself. Both rules below close a real, reproduced gap the
+    // same way COMPLETENESS/FIRST-RUN CONTENT did -- not a style
+    // preference, a fix for a specific observed failure.
+    "VISUAL QUALITY: when the request produces a user-facing page or app (not an API-only backend or a one-off script), the first version should look like real, finished software, not an unstyled scaffold. Concretely: (1) pick ONE deliberate color system -- a small set of named, reused tokens (CSS custom properties, or a Tailwind theme extension if this ecosystem already uses Tailwind) consistent with the request's domain, rather than ad hoc hex values scattered per element. EXPLICIT USER DESIGN DIRECTIONS ALWAYS OVERRIDE DOMAIN CONVENTIONS AND EXAMPLES: if the user asks for blue, use a blue palette even for a gardening business; never silently substitute the stereotypical green palette. If no color is requested, choose an intentional palette that suits the domain; (2) use real content, never lorem-ipsum or literal \"[placeholder]\" text, and include at least one real photographic image anywhere the domain plausibly has one (a storefront, portfolio, listing, or landing page) -- reference a real, stable, publicly hosted image URL such as a specific `https://images.unsplash.com/photo-<id>?auto=format&fit=crop&w=<n>&q=80` URL (a real photo id, not a placeholder service or an invented path) rather than an empty box or a broken <img>; (3) give interactive elements (buttons, links, cards) real hover/focus/disabled states, not only the browser default; (4) make the layout genuinely responsive at common breakpoints, not fixed-width; (5) use a legible type scale with a clear size/weight distinction between headings and body text. Prefer a bundled local font when one already exists; otherwise use a considered system font stack (for example, a serif/sans pairing from `ui-serif` and `ui-sans-serif`) so offline builds remain reliable. In Next.js, use `next/font/google` only when build-time access to Google Fonts is known to work or the required fonts are already cached; never make a network font download a build requirement. Do not use a runtime Google Fonts link/import. For plain HTML/CSS, bundle fonts locally if available or use the system stack; (6) design a real empty/loading/error state for anything that fetches data, instead of a blank screen. A working-but-ugly first version is a worse first impression than one slightly smaller in scope that genuinely looks shipped -- treat this with the same weight as COMPLETENESS and FIRST-RUN CONTENT above, not as optional polish.",
+    "DEPENDENCY VERSION SAFETY: every version string you write in a package.json, requirements.txt, pyproject.toml, or any other manifest must be one you are actually confident exists and is installable -- never a guessed, rounded-up, or \"next major\" version number (e.g. do not write `\"typescript\": \"7.0.2\"` unless you are genuinely certain TypeScript 7 has shipped as a stable release; when in doubt, use a caret range anchored to the newest major you're confident is real, such as `\"^5\"`, rather than inventing a specific patch version that merely sounds plausible). A hallucinated version is strictly worse than a slightly old one: the package manager will either fail to resolve it outright, or -- worse -- some unrelated real package will happen to satisfy that version string and get installed silently, producing a dependency the rest of your generated code was never actually written against. This is not a hypothetical: it has caused a generated Next.js app to crash on its very first `npm run dev`, before a single line of the actual feature code ever ran. When genuinely unsure of the exact newest version, a broad, safe caret/tilde range beats a precise-looking number you can't verify. For Python projects, ensure the chosen FastAPI/Pydantic/pydantic-core versions support the project's selected Python interpreter, especially newly released Python versions: old Pydantic pins may have no compatible pydantic-core wheel and pip can fail while trying to compile Rust sources. Prefer compatible minimum-version ranges over stale exact pins, rather than pinning early 2024-era FastAPI/Pydantic releases. If schemas use Pydantic EmailStr, include the email extra (`pydantic[email]`) or `email-validator` explicitly. For PostgreSQL on a current Python interpreter, choose a psycopg2-binary release that publishes a wheel for that Python version (use a compatible version range; old exact pins can force a native source build). Keep SQLAlchemy's PostgreSQL URL and driver aligned: `postgresql://` with psycopg2 should use SQLAlchemy 2.0.x, while psycopg 3 should use `postgresql+psycopg://` and declare `psycopg[binary]`. If using Passlib's legacy bcrypt handler, constrain bcrypt to a version supported by Passlib and verify the documented seed user's password path so a working wheel doesn't hide an auth-time runtime incompatibility. Apply the same wheel-availability check to every native-extension dependency before writing the manifest. Do not pin a package to a version range that excludes the interpreter-compatible release needed to install and run the generated app.",
+    "NEXT.JS RUNTIME COMPATIBILITY: for Next.js 13 and later, use <Link href=\"...\">text</Link> without a nested <a>; move className and link attributes onto Link. Preserve legacy link markup only when the project explicitly depends on legacyBehavior.",
+    "NEXT.JS FRESHNESS: when creating a brand-new Next.js app (or adding Next.js to a project that does not already use it), use the stable `latest` npm dist-tag for `next`, `react`, and `react-dom` rather than copying an older Next.js major/version from training data. Do not invent package-lock contents; let MobiusX's real `npm install` step resolve packages and create the lockfile. When modifying an existing Next.js project, preserve its declared versions and lockfile unless the user asks to upgrade. The official Next.js installation guide recommends installing `next@latest react@latest react-dom@latest` for a new app.",
     fullContentPaths.length > 0
       ? `Only use action "modify" for one of these exact paths, which you were shown in full below: ${fullContentPaths.join(", ")}. Do not use "modify" for any other path.`
       : 'You were not shown the full content of any existing file, so do not use action "modify" at all — only "create" a genuinely new path.',
@@ -623,6 +966,66 @@ export function systemPromptFor(input: RunnerInput): string {
     `Omit the ${EDITS_MARKER} marker and JSON block ONLY if you genuinely cannot propose any concrete file — e.g. the request is too ambiguous to act on. If you CAN write real file contents (as in most "build/add/create X" requests), you MUST use the format above — writing the same content as prose or markdown code fences instead is not an acceptable substitute, since only the json "edits" array actually gets applied to the user's project.`,
     relevantFilesContext(input, true),
   ].join("\n");
+}
+
+/**
+ * Compact instructions for Ollama creating a brand-new application. The
+ * general Build prompt contains extensive cross-mode guidance that is useful
+ * for cloud models but makes local CPU models spend minutes evaluating rules
+ * unrelated to the requested project. Keep the essential output, stack,
+ * completeness, and safety contracts while preserving the full prompt for
+ * existing-project edits and every non-build mode.
+ */
+export function systemPromptForLocalBuild(input: RunnerInput): string {
+  const hasProjectFiles = (input.projectContext?.relevantFiles?.length ?? 0) > 0;
+  const blankProject = !hasProjectFiles && input.projectContext?.indexedChunkCount === 0;
+  const stagedGeneration = input.stagedBuild !== undefined;
+  // Staged greenfield builds accumulate their own generated checkpoint files
+  // as context. They are still new-app generation, not an existing user code
+  // base. Keep the compact local-model contract for those stages while
+  // including the full checkpoint contents below; otherwise each resumed
+  // stage receives the much larger general editing prompt and can answer with
+  // a plan instead of the requested bounded file edits.
+  if (input.mode !== "build" || (!blankProject && !stagedGeneration)) return systemPromptFor(input);
+
+  const payroll = /\b(payroll|pay slip|payslip|salary calculation|salary processing)\b/i.test(input.prompt);
+  if (stagedGeneration && input.stagedBuild?.id === "tests") {
+    return [
+      "You are MobiusX generating executable tests for one validated application stage. Keep reasoning private.",
+      "Return only complete test files in the approved test paths. Do not edit application source, dependencies, schema, or deployment files.",
+      "Use only the exact routes, schemas, roles, states and UI interactions in the supplied test task. Use real HTTP/browser behavior and isolated synthetic data. Assert persisted effects where configured.",
+      "No placeholders, skipped tests, trivial assertions, fake persistence, invented routes, or credentials. Do not generate scenarios the supplied contracts cannot support.",
+      BUILD_RESPONSE_CONTRACT_RULES,
+    ].filter(Boolean).join("\n\n");
+  }
+  if (stagedGeneration) {
+    return [
+      "You are MobiusX, a coding agent implementing one bounded application stage. Keep private reasoning hidden; give concise progress and a short user-facing summary.",
+      BUILD_RESPONSE_CONTRACT_RULES,
+      "Treat the immutable PAC slice and stage task specification as authoritative. Implement only their target paths and acceptance criteria; preserve validated interfaces and use only declared dependencies. Return complete, runnable file contents with no placeholders, mock transactions, or unrelated files.",
+      "Honor the user's requested stack and design. For FastAPI, make every await-bearing handler async, use the configured SQLAlchemy session dependency, validate external input, use parameterized ORM operations, enforce authentication/roles, and load secrets from environment configuration. For React, connect visible forms and actions to the real API and provide clear loading, error, and success states.",
+      payroll ? "PAYROLL: keep required Employees/Departments, Attendance, Payroll, and Reports/Payslips screens reachable from navigation, with matching persisted API workflows and role checks." : "Prioritize the requested business workflow and use readable, responsive implementation.",
+      input.archMode === "web" ? "Web app: keep the implementation lean and the user experience polished." : "",
+      steeringContextBlock(input),
+      assistantMemoryBlock(input),
+      relevantFilesContext(input, true),
+    ].filter(Boolean).join("\n\n");
+  }
+  return [
+    "You are MobiusX, a practical coding agent. Build a complete, runnable first version of the application requested by the user. Keep analysis private; give only a short user-facing summary and real task progress.",
+    BUILD_RESPONSE_CONTRACT_RULES,
+    "Honor every named language, framework, and database. Implement the main workflows end to end with coherent frontend/backend contracts, persistent data, validation, and loading/error/empty states. Keep the UI polished, responsive, and consistent with explicit design directions. Use concise code and avoid unrelated boilerplate.",
+    "For Python, every function containing `await` must be declared `async def`; this includes FastAPI route handlers that call async database/ORM methods. Do not emit `await` at module scope or inside a synchronous `def`.",
+    "For a Next.js + Python/FastAPI application, keep frontend files under frontend/ and backend files under backend/. frontend/package.json is for JavaScript packages only; backend/requirements.txt is for Python packages only, with exactly one valid pip requirement per line (never a space-separated package list). Python's sqlite3 is part of the standard library and must not appear in requirements.txt. Never put FastAPI, Uvicorn, SQLAlchemy, Pydantic, or PostgreSQL drivers in package.json. Include separate run instructions and an .env.example containing placeholder variable names only. For Next.js 13+, do not render an <a> child inside <Link>; put className and other link attributes directly on <Link>.",
+    "Never hard-code credentials, encryption keys, signing secrets, JWT keys, or real personal data. Load signing keys from environment configuration, document them in .env.example, and fail clearly when required secrets are unset; never include a plausible fallback secret in source code. MobiusX Preview can provision a project-specific development ENCRYPTION_KEY when source code explicitly requires it. In Next.js 13+, use <Link href=\"...\">text</Link> directly; do not nest an <a> inside <Link> and do not use legacyBehavior unless preserving an existing legacy link. Validate external requests with typed Pydantic schemas and explicit bounds/constraints (for example non-negative pay/hours and valid dates); use ORM filters or parameterized SQL, and never interpolate user input into SQL. Hash passwords and enforce role authorization on protected routes. Never claim a security feature exists unless implemented.",
+    payroll
+      ? "PAYROLL SCOPE: deliver usable frontend screens for Employees/Departments, Attendance, Payroll Runs, and Reports/Payslips. Each screen must be reachable from visible navigation and show domain data plus working actions/forms; a generic dashboard, one basic page, static feature cards, or placeholder buttons do not count. Keep frontend files concise and focus on these screens. Implement the matching FastAPI endpoints and PostgreSQL persistence; salary calculations must derive gross pay, deductions, bonuses, and net pay, and payroll processing must use transactions. Include Admin/Payroll Manager and Employee roles with actual protected routes. Keep a small, clearly development-only seed dataset if needed; do not replace workflows with fake in-memory authentication or disconnected mock data. Use compatible, installable dependency ranges and keep Python and npm manifests separate. `sqlite3` is part of Python's standard library; never list it in requirements.txt."
+      : "Prioritize the core journey named in the request, with meaningful sample content where useful and working controls rather than placeholder buttons.",
+    input.archMode === "web" ? "Web app style: lean implementation, polished user experience, no unnecessary enterprise infrastructure." : "",
+    steeringContextBlock(input),
+    assistantMemoryBlock(input),
+    relevantFilesContext(input, true),
+  ].filter(Boolean).join("\n\n");
 }
 
 /**

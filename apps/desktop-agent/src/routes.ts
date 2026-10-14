@@ -12,7 +12,17 @@ import type {
   CreateProjectResponse,
   EffectivePolicyResponse,
   FsTreeResponse,
+  FsWriteRequest,
+  FsWriteResponse,
+  GitCloneRequest,
+  GitCloneResponse,
+  GitCommitRequest,
+  GitCommitResponse,
   GitDiffRequest,
+  GitPushResponse,
+  RemoteConnectRequest,
+  RemoteConnectResponse,
+  RemoteStatusResponse,
   OpenProjectRequest,
   TicketInvestigateRequest,
   OpenProjectResponse,
@@ -29,6 +39,8 @@ import type {
   BrowserValidationResponse,
   SteeringListResponse,
   SteeringWriteRequest,
+  MemoryListResponse,
+  MemoryWriteRequest,
   HooksConfigResponse,
   McpStatusResponse,
   McpToolCallRequest,
@@ -44,7 +56,9 @@ import type {
   SecurityScanResponse,
   EnvFileGenerateResponse,
 } from "@mobiusx/protocol";
-import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes } from "./fsOps.js";
+import { applyEdits, buildSnapshot, readProjectFile, snapshotToNodes, validateEditBundle, validateLocalEdits, writeProjectFile } from "./fsOps.js";
+import { connectRemote, disconnectRemote, execOnRemote, getActiveSftp, isRemoteConnected } from "./remoteConnection.js";
+import { applyRemoteEdits, buildRemoteTree, readRemoteFile, validateRemoteEdits } from "./remoteFsOps.js";
 import { createCheckpoint, deleteCheckpoint, listCheckpoints, restoreCheckpoint } from "./checkpoints.js";
 import { gatherDashboard } from "./dashboard.js";
 import { getPreviewStatus, startPreview, stopPreview } from "./previewOps.js";
@@ -60,19 +74,49 @@ import { gatherAuthEvidence } from "./authContext.js";
 import { runSecurityScan } from "./securityScan.js";
 import { detectReferencedEnvVars, generateEnvExample } from "./envFileOps.js";
 import { getSettings, updateSettings, type SettingsPatch } from "./settings.js";
-import { gitDiff, gitLog, gitLogForPath, gitStatus, isGitRepo } from "./gitOps.js";
+import { gitClone, gitCommit, gitDiff, gitHasRemote, gitInit, gitLog, gitLogForPath, gitPush, gitStatus, isGitRepo } from "./gitOps.js";
 import { BUILTIN_POLICY, loadProjectPolicy } from "./policy.js";
 import { buildSemanticIndex, searchSemanticIndex } from "./semanticOps.js";
 import { projectState } from "./state.js";
 import { deleteSteeringFile, listSteeringFiles, scaffoldDefaultSteering, writeSteeringFile } from "./steering.js";
+import { deleteMemoryFile, getMemoryDir, listMemoryFiles, scaffoldDefaultMemory, writeMemoryFile } from "@mobiusx/assistant-memory";
 import { loadProjectHooks, runHooksForEvent } from "./hooks.js";
 import { callMcpTool, getMcpStatus } from "@mobiusx/mcp-client";
 import { addKnowledgeSource, buildKnowledgeIndex, listKnowledgeSources, removeKnowledgeSource, searchKnowledge } from "./knowledgeOps.js";
 import { runErrorIntelligence } from "./errorIntelligence.js";
 import { investigateTicket } from "./ticketOps.js";
 
+/** Single-quotes a path for safe interpolation into a remote shell command
+ * (POST /remote/connect's best-effort `test -d .git` exec) -- the standard
+ * '...'\''...' escape for a literal single quote inside single quotes. */
+function shellQuoteRemotePath(p: string): string {
+  return `'${p.replace(/'/g, "'\\''")}'`;
+}
+
 export function buildRouter(): Router {
   const router = Router();
+
+  // The renderer reads /fs/tree from this in-memory snapshot. Keep it in
+  // sync after local writes so generated files appear immediately and the
+  // next agent request indexes the current project contents.
+  const refreshLocalProjectSnapshot = async (root: string): Promise<void> => {
+    try {
+      const snapshot = await buildSnapshot(root);
+      // A project switch can happen while the filesystem scan is running.
+      // Never install a snapshot for the previous project into the new one.
+      if (projectState.path !== root || projectState.isRemote) return;
+      projectState.snapshot = snapshot;
+      projectState.semanticIndexBuilt = false;
+    } catch (err) {
+      // The disk write has already succeeded. Keep the API's success result
+      // accurate and record the cache failure for diagnosis instead of
+      // encouraging a retry that could duplicate or overwrite edits.
+      console.warn(`[desktop-agent] Could not refresh the file tree for ${root}: ${(err as Error).message}`);
+      if (projectState.path === root && !projectState.isRemote) {
+        projectState.semanticIndexBuilt = false;
+      }
+    }
+  };
 
   router.post("/project/open", async (req, res) => {
     const { path } = req.body as OpenProjectRequest;
@@ -187,8 +231,26 @@ export function buildRouter(): Router {
     res.json(body);
   });
 
-  router.get("/fs/tree", (_req, res) => {
-    if (!projectState.path || !projectState.snapshot) {
+  router.get("/fs/tree", async (_req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    // Phase D: a remote project's tree is listed fresh over SFTP on every
+    // call (projectState.snapshot is never populated for one -- see
+    // state.ts's doc comment) rather than cached, so this genuinely
+    // reflects the remote filesystem's current state each time.
+    if (projectState.isRemote) {
+      try {
+        const { nodes, truncated } = await buildRemoteTree(getActiveSftp(), projectState.path);
+        const body: FsTreeResponse = { root: projectState.path, nodes, ...(truncated ? { truncated: true } : {}) };
+        res.json(body);
+      } catch (err) {
+        res.status(500).json({ error: "remote fs/tree failed", detail: (err as Error).message });
+      }
+      return;
+    }
+    if (!projectState.snapshot) {
       res.status(409).json({ error: "no project open" });
       return;
     }
@@ -203,44 +265,109 @@ export function buildRouter(): Router {
     }
     const relPath = String(req.query.path ?? "");
     try {
-      const body = await readProjectFile(projectState.path, relPath);
+      const body = projectState.isRemote
+        ? await readRemoteFile(getActiveSftp(), projectState.path, relPath)
+        : await readProjectFile(projectState.path, relPath);
       res.json(body);
     } catch (err) {
       res.status(400).json({ error: "read failed", detail: (err as Error).message });
     }
   });
 
-  // The only endpoint that ever writes AI-generated content to disk — see
-  // fsOps.ts#applyEdits's doc comment for the full safety contract (path
-  // containment, modify-must-exist / create-must-not-exist, a flag-only
-  // secret scan). The desktop shell only calls this after the user reviews
-  // a task's proposed edits and clicks Apply — nothing upstream of this
-  // route enforces that; it's a UI-level gate, which is why this route
-  // re-validates everything itself rather than trusting the caller.
+  // Manual save -- a human editing in the Monaco editor and pressing
+  // Cmd/Ctrl+S. Deliberately separate from /fs/apply-edits below: no
+  // create/modify-exists split (a save always targets a file the editor
+  // already has open, i.e. already exists), no secret scan (that gate is
+  // for catching the model inventing secret-shaped content, not for
+  // second-guessing a user's own edits). Local project only for now --
+  // unlike /fs/apply-edits, there is no remote/SFTP branch here yet, so
+  // saving while connected to a remote (Phase D) project 500s with a clear
+  // message rather than silently no-opping; a named, not-silently-dropped
+  // gap until Phase D's remote write path exists.
+  router.post("/fs/write", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    if (projectState.isRemote) {
+      res.status(501).json({ error: "manual save isn't supported for a remote (SSH) project yet" });
+      return;
+    }
+    const { path, content } = req.body as Partial<FsWriteRequest>;
+    if (!path || typeof path !== "string" || typeof content !== "string") {
+      res.status(400).json({ error: "path (string) and content (string) are required" });
+      return;
+    }
+    try {
+      await writeProjectFile(projectState.path, path, content);
+      await refreshLocalProjectSnapshot(projectState.path);
+      const body: FsWriteResponse = { path };
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "write failed", detail: (err as Error).message });
+    }
+  });
+
+  // The only endpoint that ever writes AI-generated content to disk (or, for
+  // a remote project -- Phase D -- to the remote host over SFTP; see
+  // remoteFsOps.ts#applyRemoteEdits's doc comment for that branch's own
+  // safety contract and its one real difference from the local path: no
+  // checkpoint/rollback yet) -- see fsOps.ts#applyEdits's doc comment for
+  // the local path's full safety contract (path containment, modify-must-
+  // exist / create-must-not-exist, a flag-only secret scan). The desktop
+  // shell only calls this after the user reviews a task's proposed edits
+  // and clicks Apply — nothing upstream of this route enforces that; it's a
+  // UI-level gate, which is why this route re-validates everything itself
+  // rather than trusting the caller.
   router.post("/fs/apply-edits", async (req, res) => {
     if (!projectState.path) {
       res.status(409).json({ error: "no project open" });
       return;
     }
-    const { edits } = req.body as ApplyEditsRequest;
-    if (!Array.isArray(edits) || edits.length === 0) {
-      res.status(400).json({ error: "edits must be a non-empty array" });
+    const bundle = validateEditBundle((req.body as ApplyEditsRequest | undefined)?.edits);
+    if (!bundle.edits) {
+      res.status(422).json({ error: "proposed edits failed schema and path validation", validationErrors: bundle.errors });
       return;
     }
-    const valid = edits.every(
-      (e): e is ProposedEdit =>
-        e &&
-        typeof e.path === "string" &&
-        e.path.length > 0 &&
-        (e.action === "modify" || e.action === "create") &&
-        typeof e.content === "string",
-    );
-    if (!valid) {
-      res.status(400).json({ error: "each edit needs path (string), action ('modify'|'create'), content (string)" });
+    let edits = bundle.edits;
+
+    if (projectState.isRemote) {
+      try {
+        const sftp = getActiveSftp();
+        const preflight = await validateRemoteEdits(sftp, projectState.path, edits);
+        if (!preflight.edits) {
+          res.status(422).json({ error: "proposed edits failed remote pre-apply validation", validationErrors: preflight.errors });
+          return;
+        }
+        edits = preflight.edits;
+        const results = await applyRemoteEdits(sftp, projectState.path, edits);
+        const appliedCount = results.filter((r) => r.status === "applied").length;
+        const skippedCount = results.length - appliedCount;
+        void appendAuditEntry({
+          source: "desktop-agent",
+          category: "applied-edits",
+          severity: skippedCount > 0 ? "warning" : "info",
+          summary: `Applied ${appliedCount}/${results.length} proposed edit(s) to remote ${projectState.remote?.username}@${projectState.remote?.host}:${projectState.path}${skippedCount > 0 ? ` (${skippedCount} skipped)` : ""}`,
+          detail: { projectPath: projectState.path, remote: projectState.remote, results },
+        });
+        // No checkpointId -- see ApplyEditsResponse's doc comment; Phase D
+        // doesn't have a remote checkpoint store yet, reported honestly by
+        // omitting the field rather than faking a local one.
+        const body: ApplyEditsResponse = { results };
+        res.json(body);
+      } catch (err) {
+        res.status(500).json({ error: "remote apply-edits failed", detail: (err as Error).message });
+      }
       return;
     }
 
     try {
+      const preflight = await validateLocalEdits(projectState.path, edits);
+      if (!preflight.edits) {
+        res.status(422).json({ error: "proposed edits failed pre-apply validation", validationErrors: preflight.errors });
+        return;
+      }
+      edits = preflight.edits;
       // Checkpoints / Rollback (roadmap Phase 15, source requirement §23):
       // snapshot every touched path's PRE-edit state before applyEdits
       // writes anything -- once it runs, the pre-edit content is gone.
@@ -249,6 +376,9 @@ export function buildRouter(): Router {
       const results = await applyEdits(projectState.path, edits);
       const appliedCount = results.filter((r) => r.status === "applied").length;
       const skippedCount = results.length - appliedCount;
+      if (appliedCount > 0) {
+        await refreshLocalProjectSnapshot(projectState.path);
+      }
       void appendAuditEntry({
         source: "desktop-agent",
         category: "applied-edits",
@@ -305,6 +435,9 @@ export function buildRouter(): Router {
     }
     try {
       const { results, preRestoreCheckpointId } = await restoreCheckpoint(projectState.path, req.params.id);
+      if (results.some((result) => result.status === "restored" || result.status === "deleted")) {
+        await refreshLocalProjectSnapshot(projectState.path);
+      }
       const body: CheckpointRestoreResponse = { results, preRestoreCheckpointId };
       res.json(body);
     } catch (err) {
@@ -584,12 +717,12 @@ export function buildRouter(): Router {
   // running. Nothing here is simulated -- a project with neither a
   // frontend "dev" script nor a recognizable FastAPI backend gets an
   // honest {frontend: null, backend: null}, not a fabricated preview.
-  router.post("/preview/start", (_req, res) => {
+  router.post("/preview/start", async (_req, res) => {
     if (!projectState.path) {
       res.status(409).json({ error: "no project open" });
       return;
     }
-    const body: PreviewStartResponse = startPreview(projectState.path);
+    const body: PreviewStartResponse = await startPreview(projectState.path);
     void appendAuditEntry({
       source: "desktop-agent",
       category: "preview-started",
@@ -762,6 +895,258 @@ export function buildRouter(): Router {
     }
   });
 
+  // "Commit & Push to Git": the app previously had NO write capability for
+  // git at all (status/log/diff/clone only). This is deliberately a
+  // single-click-triggered action from the renderer's post-build banner --
+  // never fired automatically without that click -- so a real commit/push
+  // only ever happens when the user explicitly asks for it, same as Apply
+  // above it. A project that isn't a git repo yet (e.g. fresh via New
+  // Project) is initialized here rather than erroring -- "Commit & Push"
+  // should work turnkey on a brand-new project, not require the user to
+  // separately run `git init` first.
+  router.post("/git/commit", async (req, res) => {
+    if (!projectState.path) {
+      res.status(409).json({ error: "no project open" });
+      return;
+    }
+    const { message, paths } = req.body as GitCommitRequest;
+    if (!message || typeof message !== "string" || !message.trim()) {
+      res.status(400).json({ error: "message is required" });
+      return;
+    }
+    try {
+      if (!projectState.isGitRepo) {
+        await gitInit(projectState.path);
+        projectState.isGitRepo = true;
+      }
+      const result = await gitCommit(projectState.path, Array.isArray(paths) ? paths : [], message);
+      void appendAuditEntry({
+        source: "desktop-agent",
+        category: "git-commit",
+        severity: "info",
+        summary: result.committed
+          ? `Committed ${Array.isArray(paths) && paths.length > 0 ? paths.length : "all"} file(s): ${message}`
+          : "Commit requested but nothing was staged (already up to date)",
+        detail: { path: projectState.path, hash: result.hash, paths },
+      });
+      const body: GitCommitResponse = result;
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "git commit failed", detail: (err as Error).message });
+    }
+  });
+
+  router.get("/git/has-remote", async (_req, res) => {
+    if (!projectState.path || !projectState.isGitRepo) {
+      res.json({ hasRemote: false });
+      return;
+    }
+    res.json({ hasRemote: await gitHasRemote(projectState.path) });
+  });
+
+  router.post("/git/push", async (_req, res) => {
+    if (!projectState.path || !projectState.isGitRepo) {
+      res.status(409).json({ error: "no git repo open" });
+      return;
+    }
+    try {
+      const result = await gitPush(projectState.path);
+      void appendAuditEntry({
+        source: "desktop-agent",
+        category: "git-push",
+        severity: result.pushed ? "info" : "warning",
+        summary: result.pushed ? "Pushed to origin" : `Push skipped: ${result.reason}`,
+        detail: { path: projectState.path },
+      });
+      const body: GitPushResponse = result;
+      res.json(body);
+    } catch (err) {
+      res.status(500).json({ error: "git push failed", detail: (err as Error).message });
+    }
+  });
+
+  // "Clone Repository" (Phase C): clones a real remote repo into a new
+  // folder inside a parent directory the user picked via the native folder
+  // dialog, then opens it exactly like /project/create does. `pat`, when
+  // present, comes from either a fresh PAT-entry dialog or a previously
+  // saved safeStorage-backed credential (see main.js's git:getCredential) --
+  // either way it only ever lives in-memory here, folded into the clone URL
+  // gitOps.gitClone builds, and is never written to disk or echoed back.
+  router.post("/git/clone", async (req, res) => {
+    const { parentPath, name, url, pat } = req.body as GitCloneRequest;
+    if (!parentPath || typeof parentPath !== "string") {
+      res.status(400).json({ error: "parentPath is required" });
+      return;
+    }
+    if (!name || typeof name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+      res.status(400).json({
+        error: "name is required, must start with a letter or number, and may only contain letters, numbers, dots, dashes, and underscores",
+      });
+      return;
+    }
+    if (!url || typeof url !== "string") {
+      res.status(400).json({ error: "url is required" });
+      return;
+    }
+
+    const parentAbs = resolvePath(parentPath);
+    try {
+      const parentSt = await stat(parentAbs);
+      if (!parentSt.isDirectory()) {
+        res.status(400).json({ error: "parentPath is not a directory" });
+        return;
+      }
+    } catch {
+      res.status(404).json({ error: "parentPath does not exist" });
+      return;
+    }
+
+    let abs: string;
+    try {
+      const cloned = await gitClone(parentAbs, name, url, typeof pat === "string" && pat ? pat : undefined);
+      abs = cloned.path;
+    } catch (err) {
+      res.status(500).json({ error: "git clone failed", detail: (err as Error).message });
+      return;
+    }
+
+    stopPreview(); // switching projects -- don't leave the previous project's dev server(s) running
+    const snapshot = await buildSnapshot(abs);
+    const gitRepo = await isGitRepo(abs);
+    projectState.path = abs;
+    projectState.snapshot = snapshot;
+    projectState.isGitRepo = gitRepo;
+    projectState.semanticIndexBuilt = false;
+
+    void appendAuditEntry({
+      source: "desktop-agent",
+      category: "project-created",
+      severity: "info",
+      summary: `Cloned ${url.replace(/\/\/[^@/]+@/, "//")} into ${abs}`,
+      detail: { path: abs, url },
+    });
+
+    const body: GitCloneResponse = {
+      path: abs,
+      isGitRepo: gitRepo,
+      fileCount: Object.values(snapshot.nodes).filter((n) => n.type === "file").length,
+    };
+    res.json(body);
+  });
+
+  // "Connect via SSH" (Phase D): opens a real SSH connection + SFTP session
+  // (remoteConnection.ts) and treats the resolved remote directory as the
+  // "open project" exactly like /project/open, /project/create, and
+  // /git/clone already do for a local one -- the same OpenProjectResponse-
+  // shaped handoff, so the renderer's post-open sequence (load tree, show
+  // workspace) needs no special-casing. `password`/`passphrase`, when
+  // present, are used only in-memory inside connectRemote() and never
+  // persisted or echoed back by this endpoint -- saving a target for reuse
+  // is the separate ssh:setTarget safeStorage IPC call in main.js, the same
+  // split GitCloneRequest's `pat` already establishes for git credentials.
+  router.post("/remote/connect", async (req, res) => {
+    const body = req.body as RemoteConnectRequest;
+    if (!body.host || typeof body.host !== "string") {
+      res.status(400).json({ error: "host is required" });
+      return;
+    }
+    if (!body.username || typeof body.username !== "string") {
+      res.status(400).json({ error: "username is required" });
+      return;
+    }
+    if (body.authMethod !== "key" && body.authMethod !== "password" && body.authMethod !== "agent") {
+      res.status(400).json({ error: "authMethod must be 'key', 'password', or 'agent'" });
+      return;
+    }
+
+    let resolvedPath: string;
+    try {
+      const result = await connectRemote(body);
+      resolvedPath = result.resolvedPath;
+    } catch (err) {
+      res.status(502).json({ error: "SSH connection failed", detail: (err as Error).message });
+      return;
+    }
+
+    stopPreview(); // switching projects (now a remote one) -- same as every other project-switch route
+    const port = body.port && Number.isInteger(body.port) && body.port > 0 ? body.port : 22;
+    projectState.path = resolvedPath;
+    projectState.snapshot = null; // remote trees aren't cached through context-engine -- see state.ts's doc comment
+    projectState.semanticIndexBuilt = false;
+    projectState.isRemote = true;
+    projectState.remote = { host: body.host, port, username: body.username, label: typeof body.label === "string" && body.label ? body.label : null };
+
+    // Best-effort, real (not guessed): a quick `test -d .git` over the same
+    // SSH connection's exec channel. If the exec channel itself fails for
+    // some reason (a very locked-down server), this honestly falls back to
+    // false rather than fabricating an answer -- same "never guess, report
+    // not-detected" precedent gitOps.ts's isGitRepo() sets for the local
+    // path, just over a channel that can genuinely be unavailable here.
+    let isGitRepoRemote = false;
+    try {
+      const { stdout } = await execOnRemote(`test -d ${shellQuoteRemotePath(resolvedPath)}/.git && echo yes || echo no`);
+      isGitRepoRemote = stdout.trim() === "yes";
+    } catch {
+      // exec channel unavailable -- leave isGitRepoRemote false rather than guess
+    }
+    projectState.isGitRepo = isGitRepoRemote;
+
+    let nodes: Awaited<ReturnType<typeof buildRemoteTree>>["nodes"] = [];
+    let truncated = false;
+    try {
+      const tree = await buildRemoteTree(getActiveSftp(), resolvedPath);
+      nodes = tree.nodes;
+      truncated = tree.truncated;
+    } catch (err) {
+      // Connected fine, but the very first tree walk failed (e.g. the
+      // resolved path itself isn't readable) -- report the connection as
+      // open with an honest fileCount: 0 rather than failing the whole
+      // connect, since the user can still use the terminal against it.
+      void err;
+    }
+
+    void appendAuditEntry({
+      source: "desktop-agent",
+      category: "project-created", // reusing the existing category -- a remote connect is a project-open event, same as a local open/create/clone
+      severity: "info",
+      summary: `Connected via SSH to ${body.username}@${body.host}:${port}, opened ${resolvedPath}${truncated ? " (tree truncated)" : ""}`,
+      detail: { host: body.host, port, username: body.username, path: resolvedPath, truncated },
+    });
+
+    const responseBody: RemoteConnectResponse = {
+      path: resolvedPath,
+      host: body.host,
+      username: body.username,
+      isGitRepo: isGitRepoRemote,
+      fileCount: nodes.filter((n) => n.type === "file").length,
+      truncated,
+    };
+    res.json(responseBody);
+  });
+
+  router.post("/remote/disconnect", (_req, res) => {
+    disconnectRemote();
+    if (projectState.isRemote) {
+      projectState.path = null;
+      projectState.snapshot = null;
+      projectState.isGitRepo = false;
+      projectState.semanticIndexBuilt = false;
+      projectState.isRemote = false;
+      projectState.remote = null;
+    }
+    res.json({ ok: true });
+  });
+
+  router.get("/remote/status", (_req, res) => {
+    const body: RemoteStatusResponse = {
+      connected: isRemoteConnected(),
+      host: projectState.remote?.host ?? null,
+      username: projectState.remote?.username ?? null,
+      path: projectState.isRemote ? projectState.path : null,
+    };
+    res.json(body);
+  });
+
   router.post("/debug/index", async (_req, res) => {
     if (!projectState.path) {
       res.status(409).json({ error: "no project open" });
@@ -884,6 +1269,44 @@ export function buildRouter(): Router {
       return;
     }
     const written = await scaffoldDefaultSteering(projectState.path);
+    res.json({ written });
+  });
+
+  // Assistant Memory (Oct 2026 addition) -- see @mobiusx/assistant-memory's
+  // doc comment. Deliberately NO `projectState.path` guard, unlike every
+  // steering route above: memory is global, not tied to whichever project
+  // (if any) happens to be open right now.
+  router.get("/memory", async (_req, res) => {
+    const files = await listMemoryFiles();
+    const body: MemoryListResponse = { files, dir: getMemoryDir() };
+    res.json(body);
+  });
+
+  router.put("/memory", async (req, res) => {
+    const { name, content } = req.body as MemoryWriteRequest;
+    if (typeof name !== "string" || !/^[A-Za-z0-9_-]+$/.test(name) || typeof content !== "string") {
+      res.status(400).json({ error: "name (letters/numbers/hyphen/underscore only) and content (string) are required" });
+      return;
+    }
+    try {
+      const file = await writeMemoryFile(name, content);
+      res.json(file);
+    } catch (err) {
+      res.status(500).json({ error: "failed to write memory file", detail: (err as Error).message });
+    }
+  });
+
+  router.delete("/memory/:name", async (req, res) => {
+    try {
+      await deleteMemoryFile(req.params.name);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: "failed to delete memory file", detail: (err as Error).message });
+    }
+  });
+
+  router.post("/memory/scaffold", async (_req, res) => {
+    const written = await scaffoldDefaultMemory();
     res.json({ written });
   });
 
@@ -1045,10 +1468,20 @@ export function buildRouter(): Router {
       res.status(400).json({ error: "fixLoopMode must be 'manual' or 'auto'" });
       return;
     }
+    // Assistant Memory's automatic-extraction toggle -- see AgentSettings.memoryMode's doc comment.
+    if (patch.memoryMode !== undefined && patch.memoryMode !== "off" && patch.memoryMode !== "auto") {
+      res.status(400).json({ error: "memoryMode must be 'off' or 'auto'" });
+      return;
+    }
     // defaultModel (multi-model support): null explicitly clears the standing
     // default (see @mobiusx/agent-settings's SettingsPatch doc comment) --
     // anything else must be a well-formed {provider, model} pair.
-    const KNOWN_PROVIDERS = ["demo", "anthropic", "openrouter", "groq", "ollama"];
+    // "deepseek" was missing from this list until Phase C's build-target
+    // picker work -- see @mobiusx/agent-settings's matching KNOWN_MODEL_PROVIDERS
+    // fix. Without it, pinning a DeepSeek model as the standing default or a
+    // per-mode route was silently rejected with 400 even though DeepSeek was
+    // already a real, selectable runner (see cloud-agent-gateway's registry.ts).
+    const KNOWN_PROVIDERS = ["demo", "anthropic", "openrouter", "groq", "deepseek", "cerebras", "xkiro", "apinex", "ollama"];
     if (patch.defaultModel !== undefined && patch.defaultModel !== null) {
       const dm = patch.defaultModel as { provider?: unknown; model?: unknown };
       if (typeof dm.provider !== "string" || !KNOWN_PROVIDERS.includes(dm.provider) || typeof dm.model !== "string" || !dm.model) {

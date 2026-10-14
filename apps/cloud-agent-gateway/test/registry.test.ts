@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentSettings } from "@mobiusx/protocol";
-import { listAllModels, resolveRunner } from "../src/runners/registry.js";
+import { autoRunnerCandidates, listAllModels, resolveRunner } from "../src/runners/registry.js";
 
 /**
  * Multi-model support: these tests exercise resolveRunner's fallback logic
@@ -36,6 +36,8 @@ function clearProviderEnv() {
   delete process.env.ANTHROPIC_MODEL;
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.GROQ_API_KEY;
+  delete process.env.XKIRO_API_KEY;
+  delete process.env.APINEX_API_KEY;
 }
 
 const NO_DEFAULT: AgentSettings = { terminalApprovalMode: "off" };
@@ -81,6 +83,20 @@ test("resolveRunner: only OpenRouter configured -> auto-resolution picks one of 
   const resolved = await resolveRunner(undefined, NO_DEFAULT, "build");
   assert.equal(resolved.runner.name, "openrouter");
   assert.ok(resolved.modelId, "expected a modelId to be chosen");
+  clearProviderEnv();
+});
+
+test("Auto Cloud includes configured xKiro and APInex free models after the primary candidates", async (t) => {
+  clearProviderEnv();
+  mockOllamaUnreachable(t);
+  process.env.GROQ_API_KEY = "groq-test";
+  process.env.OPENROUTER_API_KEY = "or-test";
+  process.env.XKIRO_API_KEY = "xkiro-test";
+  process.env.APINEX_API_KEY = "apinex-test";
+
+  const candidates = await autoRunnerCandidates("balanced");
+  assert.deepEqual(candidates.map(({ runner }) => runner.name), ["groq", "openrouter", "xkiro", "apinex"]);
+  assert.deepEqual(candidates.slice(-2).map(({ modelId }) => modelId), ["qwen/qwen3-coder-plus:free", "free/deepseek-v4.1-flash"]);
   clearProviderEnv();
 });
 

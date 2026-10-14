@@ -51,6 +51,10 @@ export const groqRunner = createOpenAiCompatibleRunner({
   provider: "groq",
   baseUrl: "https://api.groq.com/openai/v1",
   apiKeyEnvVar: "GROQ_API_KEY",
+  // Groq's GPT-OSS default is medium reasoning. For structured-edit tasks,
+  // it has repeatedly consumed the whole 8k response budget without ever
+  // reaching delta.content; low effort leaves the budget for actual code.
+  reasoningEffort: "low",
   models: [
     { model: "openai/gpt-oss-120b", label: "GPT-OSS 120B (free tier via Groq)", free: true },
     { model: "openai/gpt-oss-20b", label: "GPT-OSS 20B (free tier via Groq — lighter/faster)", free: true },

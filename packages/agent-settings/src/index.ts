@@ -23,7 +23,12 @@ const SETTINGS_FILE = join(SETTINGS_DIR, "settings.json");
 
 const DEFAULT_SETTINGS: AgentSettings = { terminalApprovalMode: "off" };
 
-const KNOWN_MODEL_PROVIDERS = new Set(["demo", "anthropic", "openrouter", "groq", "ollama"]);
+// "deepseek" was missing here until Phase C's build-target picker work —
+// see apps/desktop-agent/src/routes.ts's matching KNOWN_PROVIDERS fix. This
+// set gates getSettings() reading a saved defaultModel/modelRouting entry
+// back off disk, so a DeepSeek selection that PUT /settings had accepted was
+// silently dropped the next time settings were read.
+const KNOWN_MODEL_PROVIDERS = new Set(["demo", "anthropic", "openrouter", "groq", "deepseek", "cerebras", "xkiro", "apinex", "ollama"]);
 
 // Every AgentMode this gateway actually accepts in a CreateTaskRequest (see
 // packages/protocol/src/cloud.ts's AgentMode type) — the only valid keys
@@ -33,7 +38,23 @@ const KNOWN_MODEL_PROVIDERS = new Set(["demo", "anthropic", "openrouter", "groq"
 // just accepting any string key, so a typo'd or stale mode name in a
 // hand-edited settings.json is dropped rather than silently carried
 // forward as a routing rule that can never match a real task.
-const KNOWN_AGENT_MODES = new Set<AgentMode>(["ask", "plan", "build", "spec", "fix", "database", "architecture", "testing"]);
+// "devops" and "auth" were missing here too (the same gap routes.ts's own
+// KNOWN_MODES list had until its Phase 19-23 audit) -- this one matters even
+// more, since this copy gates reading modelRouting BACK off disk: a devops
+// or auth routing rule that PUT /settings happily accepted was silently
+// dropped the very next time getSettings() ran, i.e. on every restart.
+const KNOWN_AGENT_MODES = new Set<AgentMode>([
+  "ask",
+  "plan",
+  "build",
+  "spec",
+  "fix",
+  "database",
+  "architecture",
+  "testing",
+  "devops",
+  "auth",
+]);
 
 function isValidModelSelection(value: unknown): value is ModelSelection {
   if (!value || typeof value !== "object") return false;
@@ -88,6 +109,9 @@ export async function getSettings(): Promise<AgentSettings> {
   if (parsed.fixLoopMode === "manual" || parsed.fixLoopMode === "auto") {
     result.fixLoopMode = parsed.fixLoopMode;
   }
+  if (parsed.memoryMode === "off" || parsed.memoryMode === "auto") {
+    result.memoryMode = parsed.memoryMode;
+  }
   const modelRouting = sanitizeModelRouting(parsed.modelRouting);
   if (modelRouting) {
     result.modelRouting = modelRouting;
@@ -134,6 +158,9 @@ export async function updateSettings(patch: SettingsPatch): Promise<AgentSetting
   }
   if (patch.fixLoopMode !== undefined) {
     next.fixLoopMode = patch.fixLoopMode;
+  }
+  if (patch.memoryMode !== undefined) {
+    next.memoryMode = patch.memoryMode;
   }
   if (patch.modelRouting !== undefined) {
     const merged: Partial<Record<AgentMode, ModelSelection>> = { ...current.modelRouting };

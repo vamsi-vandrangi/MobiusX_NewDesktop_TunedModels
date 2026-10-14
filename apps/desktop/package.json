@@ -10,6 +10,7 @@
     "postinstall": "node scripts/brand-electron-mac.js",
     "build:services": "npm run build --workspaces --if-present --prefix ../..",
     "prepare:resources": "node scripts/prepare-resources.js",
+    "build:hljs-bundle": "node scripts/build-hljs-bundle.js",
     "pack:mac": "npm run build:services && npm run prepare:resources && electron-builder --mac --publish=never",
     "pack:win": "npm run build:services && npm run prepare:resources && electron-builder --win --publish=never",
     "pack": "npm run build:services && npm run prepare:resources && electron-builder --mac --win --publish=never",
@@ -18,6 +19,7 @@
   "devDependencies": {
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
     "pe-library": "^2.0.1",
     "resedit": "^3.1.0"
   },
@@ -26,6 +28,7 @@
     "@xterm/xterm": "^5.5.0",
     "diff": "^7.0.0",
     "electron-updater": "^6.8.9",
+    "highlight.js": "^11.12.0",
     "marked": "^18.0.13",
     "mermaid": "^12.0.0"
   },

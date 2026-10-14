@@ -525,6 +525,39 @@ body {
 button { font-family: inherit; }
 code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
 
+/* ---- Syntax-highlighted code blocks (Gap Analysis Pillar 1) ----
+   hljs.highlightElement() (see renderMarkdownWithMermaid in renderer.js)
+   adds a `hljs` class to the <code> it highlights, which the generic
+   inline `code {}` rule above doesn't carry -- so this can target only
+   real fenced code blocks (never an inline `` `like this` `` span) without
+   touching that rule. Switching .hljs to display:block turns it into the
+   padded, scrollable "card" a fenced block should look like, without
+   needing a `pre:has(code.hljs)` selector (not used anywhere else in this
+   file, and this reads just as clearly). Colors are this file's own
+   --gray/--blue/--green/--gold/--cyan/--lime/--purple/--red tokens, not a
+   stock hljs theme's hardcoded hex values -- so highlighted code
+   automatically matches both this app's dark theme AND its light theme
+   (see the token re-definitions above), the same way everything else here
+   does, instead of drifting from it. */
+code.hljs {
+  display: block; overflow-x: auto; padding: 10px 12px; margin: 4px 0;
+  border-radius: 6px; background: var(--gray-12); font-size: 12px; line-height: 1.5;
+  font-family: "SF Mono", Menlo, monospace; white-space: pre;
+}
+.hljs-comment, .hljs-quote { color: var(--gray-27); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-operator, .hljs-subst { color: var(--blue-13); }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-meta .hljs-string { color: var(--green-8); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--gold-9); }
+.hljs-title, .hljs-title.function_, .hljs-section, .hljs-selector-id { color: var(--cyan-2); }
+.hljs-title.class_, .hljs-type, .hljs-class .hljs-title { color: var(--lime-5); }
+.hljs-attr, .hljs-attribute, .hljs-variable.language_, .hljs-template-variable { color: var(--gold-11); }
+.hljs-name, .hljs-tag, .hljs-selector-class, .hljs-selector-attr, .hljs-selector-pseudo { color: var(--purple-0); }
+.hljs-variable, .hljs-params { color: var(--gray-40); }
+.hljs-meta, .hljs-link { color: var(--gray-30); }
+.hljs-deletion { color: var(--red-12); background: var(--red-3); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+
 #app { display: flex; height: 100vh; }
 
 /* ---- Sidebar ---- */
@@ -543,7 +576,13 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
 }
 .brand-name { font-weight: 700; letter-spacing: 0.02em; }
 
-#nav { display: flex; flex-direction: column; flex: 1; overflow-y: auto; }
+#nav {
+  display: flex; flex-direction: column; flex: 1; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--gray-20) transparent;
+}
+#nav::-webkit-scrollbar { width: 6px; }
+#nav::-webkit-scrollbar-thumb { background: var(--gray-20); border-radius: 3px; }
+#nav::-webkit-scrollbar-track { background: transparent; }
 .nav-item {
   all: unset;
   cursor: pointer;
@@ -553,29 +592,31 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
   padding: 8px 16px;
   color: var(--gray-33);
   border-left: 2px solid transparent;
+  transition: background-color 0.15s ease, color 0.15s ease, border-left-color 0.15s ease;
 }
-.nav-icon { width: 16px; text-align: center; color: var(--gray-28); }
+.nav-icon { width: 16px; text-align: center; color: var(--gray-28); transition: color 0.15s ease; }
 .nav-item:hover { background: var(--gray-9); color: var(--gray-44); }
 .nav-item.active { background: var(--gray-11); color: var(--gray-44); border-left-color: var(--blue-13); }
 .nav-item.active .nav-icon { color: var(--blue-13); }
+.nav-item:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid var(--blue-13); outline-offset: 2px;
+}
 
 .agent-indicator {
-  /* Nested inside .sidebar-footer now (below the user chip row), which
-     already supplies 16px horizontal padding -- no horizontal padding
-     of its own here, just a divider line above and breathing room
-     below since it's the last thing in the footer. */
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 4px;
-  padding: 12px 0;
-  border-top: 1px solid var(--gray-16);
+  margin: 0;
+  padding: 0 14px;
+  min-height: 30px;
+  border-left: 1px solid var(--gray-16);
+  flex-shrink: 0;
 }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray-28); flex-shrink: 0; }
 .dot.ok { background: var(--green-6); box-shadow: 0 0 6px var(--green-7); }
 .dot.error { background: var(--red-11); }
-.agent-label { font-size: 12px; color: var(--gray-37); }
-.agent-substatus { font-size: 11px; color: var(--gray-28); }
+.agent-label { font-size: 10px; line-height: 1.25; color: var(--gray-30); text-transform: uppercase; letter-spacing: .06em; }
+.agent-substatus { font-size: 11px; line-height: 1.3; color: var(--gray-38); }
 
 /* ---- Top bar ---- */
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -599,6 +640,12 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
 }
 #project-chip { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 #project-chip-label { color: var(--gray-33); font-family: monospace; font-size: 12px; }
+.changes-badge {
+  background: var(--gold-1); border: 1px solid var(--gold-6); color: var(--gold-11);
+  border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.changes-badge:hover { background: var(--gold-2); }
+.changes-badge[hidden] { display: none; }
 #open-project-btn, #terminal-toggle, .mode-btn {
   background: var(--gray-13);
   color: var(--gray-44);
@@ -690,6 +737,18 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
 .modal-error { color: var(--red-16); font-size: 12px; margin-top: 8px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 
+/* ---- Clone Repository / Connect GitHub-GitLab modals (Phase C) ---- */
+.connect-git-provider-row { display: flex; gap: 16px; margin-top: 12px; }
+.connect-git-provider-opt { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--gray-38); cursor: pointer; }
+.connect-git-saved-list { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; max-height: 140px; overflow: auto; }
+.connect-git-saved-list:empty { display: none; }
+.connect-git-saved-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--gray-6); border: 1px solid var(--gray-16); border-radius: 6px; padding: 6px 9px; font-size: 12px; color: var(--gray-38);
+}
+.connect-git-saved-row-remove { all: unset; cursor: pointer; color: var(--gray-28); font-size: 11px; }
+.connect-git-saved-row-remove:hover { color: var(--red-10); }
+
 #view-home h1 { margin: 0 0 2px; font-size: 22px; }
 .subtitle { color: var(--gray-30); margin: 0 0 24px; }
 .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--gray-30); margin: 28px 0 10px; }
@@ -727,6 +786,7 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
 .recent-item {
   display: flex; justify-content: space-between; align-items: center;
   background: var(--gray-6); padding: 10px 14px; cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 .recent-item:hover { background: var(--gray-11); }
 .recent-item-path { font-family: monospace; font-size: 11px; color: var(--gray-30); }
@@ -774,6 +834,25 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
 }
 .pane-resize-handle:hover, .pane-resize-handle.dragging { background: var(--blue-10); }
 
+/* Collapse toggle for the AI Assistant sidebar (Gap Analysis Pillar 1: "no
+   collapse/hide toggle, only resize-down-to-160px"). Lives ON the resize
+   handle rather than inside #assistant-embedded itself -- collapsing sets
+   that panel's width to 0, which would carry the button out of view along
+   with everything else inside it, same reason #terminal-toggle/
+   #preview-toggle each live in their own always-visible bar rather than
+   inside the panel they collapse. */
+.pane-collapse-toggle {
+  position: absolute; top: 10px; left: -9px; width: 16px; height: 16px;
+  border-radius: 50%; background: var(--gray-16); border: 1px solid var(--gray-23);
+  color: var(--gray-33); font-size: 10px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; z-index: 3;
+  padding: 0;
+}
+.pane-collapse-toggle:hover { background: var(--gray-20); color: var(--gray-44); }
+#assistant-embedded.collapsed {
+  width: 0 !important; min-width: 0; overflow: hidden; border: none; padding: 0;
+}
+
 #tabs-bar { display: flex; border-bottom: 1px solid var(--gray-16); overflow-x: auto; flex-shrink: 0; }
 .file-tab {
   display: flex; align-items: center; gap: 8px;
@@ -782,9 +861,81 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
 .file-tab.active { color: var(--gray-44); background: var(--gray-6); }
 .file-tab-close { opacity: 0.6; }
 .file-tab-close:hover { opacity: 1; }
+/* Unsaved-changes indicator -- genuinely new as of the Monaco integration;
+   the old read-only <pre> editor had nothing that could ever be dirty. */
+.file-tab-dirty { color: var(--blue-13); margin-left: 2px; }
+.file-tab-dirty[hidden] { display: none; }
 
-#editor-panel { flex: 1; border-right: none; min-height: 0; }
-#editor-content { margin: 0; white-space: pre-wrap; font-family: "SF Mono", Menlo, monospace; font-size: 12px; }
+/* ---- Monaco / Preview split container ----
+   Default (no .split-active): flex-direction:column, so #editor-column
+   (editor-panel + its statusbar) stacks above #preview-column (preview-bar
+   + preview-panel) -- pixel-identical to the pre-split single-column
+   layout. #split-toggle (renderer.js) adds .split-active to switch to a
+   50/50 side-by-side row and forces the (normally collapsible) preview
+   pane open and full-height for the duration. */
+#editor-preview-split { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#editor-column { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#preview-column { flex-shrink: 0; display: flex; flex-direction: column; min-width: 0; }
+
+#editor-preview-split.split-active {
+  flex-direction: row;
+}
+#editor-preview-split.split-active > #editor-column,
+#editor-preview-split.split-active > #preview-column {
+  flex: 1 1 50%; min-width: 0; min-height: 0;
+}
+#editor-preview-split.split-active > #editor-column { border-right: 1px solid var(--gray-16); }
+/* Split mode always shows the preview, and gives it real height instead
+   of the floating panel's fixed 380px -- same #preview-panel/#preview-
+   webview elements, no duplication, just repositioned via CSS. */
+#editor-preview-split.split-active #preview-panel {
+  display: flex !important; flex: 1; height: auto; border-bottom: none;
+}
+#preview-split-toggle {
+  background: none; border: none; color: var(--gray-33); font-size: 12px;
+  cursor: pointer; padding: 2px 4px; margin-left: 8px;
+}
+#preview-split-toggle:hover { color: var(--gray-44); }
+#preview-split-toggle.active { color: var(--blue-13); }
+#preview-bar { display: flex; align-items: center; gap: 8px; }
+#preview-bar #preview-toggle { flex: 1; text-align: left; }
+#preview-split-toggle, #preview-focus-toggle {
+  border: 1px solid var(--gray-18); border-radius: 6px; padding: 5px 9px;
+  color: var(--gray-33); background: var(--gray-7); transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+#preview-split-toggle:hover, #preview-focus-toggle:hover { color: var(--gray-44); border-color: var(--gray-24); background: var(--gray-12); }
+#preview-focus-toggle.active { color: var(--blue-14); background: var(--blue-3); border-color: var(--blue-8); }
+
+/* position:relative + the host/empty-state children below at inset:0 is
+   the standard way to let Monaco fill a flex child without fighting its
+   own internal absolutely-positioned layers -- keeps this flex:1/min-
+   height:0 contract (driving #editor-panel's resize behavior) completely
+   unchanged from before the Monaco integration. */
+#editor-panel { flex: 1; border-right: none; min-height: 0; position: relative; }
+#monaco-host { position: absolute; inset: 0; }
+#editor-empty-state {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--gray-33); font-family: "SF Mono", Menlo, monospace; font-size: 12px;
+}
+#editor-empty-state.workspace-empty {
+  flex-direction: column; gap: 10px; padding: 24px; box-sizing: border-box;
+  text-align: center; font-family: inherit;
+}
+.workspace-empty-icon {
+  width: 46px; height: 46px; display: grid; place-items: center; border-radius: 13px;
+  color: var(--blue-13); background: var(--blue-1); border: 1px solid var(--blue-5);
+  font: 600 17px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+#editor-empty-state strong { color: var(--gray-41); font-size: 16px; font-weight: 600; }
+#editor-empty-state > span { max-width: 340px; color: var(--gray-30); line-height: 1.55; }
+.workspace-empty-actions { display: flex; gap: 8px; margin: 4px 0; }
+.workspace-empty-actions button {
+  background: var(--gray-12); border: 1px solid var(--gray-21); border-radius: 7px;
+  color: var(--gray-41); padding: 8px 13px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.workspace-empty-actions button:first-child { color: var(--blue-14); background: var(--blue-3); border-color: var(--blue-8); }
+.workspace-empty-actions button:hover { filter: brightness(1.12); }
+#editor-empty-state small { max-width: 390px; color: var(--gray-27); font-size: 11px; line-height: 1.5; }
 
 .editor-statusbar {
   flex-shrink: 0; padding: 3px 12px; font-size: 10.5px; color: var(--gray-30);
@@ -792,13 +943,51 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
 }
 .editor-statusbar[hidden] { display: none; }
 
+/* ---- Dev-server console drawer (Oct 2026) ----
+   Bottom 30% of #editor-column, below Monaco, when expanded; a thin
+   always-visible toggle bar otherwise -- same bar/panel/.collapsed shape
+   #terminal-bar/#terminal-panel and #preview-bar/#preview-panel already
+   use, so #editor-panel's own `flex: 1` naturally absorbs whichever space
+   this drawer isn't using, collapsed or not, with no extra math needed. */
+#dev-console-bar {
+  border-top: 1px solid var(--gray-16); padding: 4px 10px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px;
+}
+#dev-console-toggle { background: transparent; border: none; color: var(--gray-33); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+#dev-console-toggle:hover { color: var(--gray-44); }
+#dev-console-hint { flex: 1; margin: 0; }
+#dev-console-clear {
+  background: none; border: none; color: var(--gray-28); font-size: 11px; cursor: pointer;
+  padding: 2px 6px; border-radius: 4px;
+}
+#dev-console-clear:hover { color: var(--gray-41); background: var(--gray-7); }
+#dev-console-panel {
+  flex: 0 0 30%; min-height: 60px; border-top: 1px solid var(--gray-16);
+  background: #0b0d0a; display: flex; flex-direction: column;
+  /* .panel (base class, kept for consistency with #preview-panel/#editor-panel's
+     own use of it) contributes padding/overflow/border-right this console
+     doesn't want -- cleared the same way #editor-panel already clears
+     border-right, so the console text sits flush edge-to-edge. */
+  padding: 0; border-right: none; overflow: hidden;
+}
+#dev-console-panel.collapsed { display: none; }
+#dev-console-output {
+  flex: 1; min-height: 0; margin: 0; padding: 6px 10px; overflow-y: auto; overflow-x: hidden;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px; line-height: 1.6; color: #b9f6c3; white-space: pre-wrap; word-break: break-all;
+}
+#dev-console-output .dev-console-line-backend { color: #9fd8ff; }
+#dev-console-output .dev-console-line-error { color: var(--red-14); }
+#dev-console-output .dev-console-line-scan { color: var(--gray-33); font-style: italic; }
+#dev-console-output .dev-console-empty { color: var(--gray-28); font-style: italic; }
+
 #terminal-bar { border-top: 1px solid var(--gray-16); border-bottom: 1px solid var(--gray-16); padding: 4px 10px; flex-shrink: 0; }
 
 /* ---- Live Preview panel ---- */
 #preview-bar { border-top: 1px solid var(--gray-16); border-bottom: 1px solid var(--gray-16); padding: 4px 10px; flex-shrink: 0; }
 #preview-toggle, #terminal-toggle { background: none; border: none; color: var(--gray-33); font-size: 12px; cursor: pointer; padding: 2px 4px; }
 #preview-panel {
-  flex-shrink: 0; height: 380px; background: var(--gray-2);
+  flex-shrink: 0; height: min(44vh, 520px); min-height: 300px; background: var(--gray-2);
   display: flex; flex-direction: column; border-bottom: 1px solid var(--gray-16);
 }
 #preview-panel.collapsed { display: none; }
@@ -837,9 +1026,31 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
   text-align: center; padding: 20px; color: var(--gray-28); font-size: 12px; line-height: 1.6;
 }
 #preview-empty[hidden] { display: none; }
+#preview-empty { flex-direction: column; gap: 8px; }
+#preview-empty::before { content: "LIVE PREVIEW"; color: var(--gray-33); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 #terminal-toggle { background: transparent; border: none; color: var(--gray-33); padding: 2px 4px; }
 #terminal-panel { flex-shrink: 0; height: 220px; border-right: none; background: var(--gray-2); display: flex; flex-direction: column; }
 #terminal-panel.collapsed { display: none; }
+
+/* Immersive preview mode: a single click hides IDE chrome and gives the
+   actual running application the full workspace. The regular layout and
+   editor state remain mounted, so exiting focus restores the same session. */
+#workspace.preview-focus-active #tree-panel,
+#workspace.preview-focus-active > .pane-resize-handle,
+#workspace.preview-focus-active #assistant-embedded,
+#workspace.preview-focus-active #tabs-bar,
+#workspace.preview-focus-active #editor-column,
+#workspace.preview-focus-active #terminal-bar,
+#workspace.preview-focus-active #terminal-approval-banner,
+#workspace.preview-focus-active #terminal-panel { display: none !important; }
+#workspace.preview-focus-active #center-panel { flex: 1 1 100%; width: 100%; min-width: 0; }
+#workspace.preview-focus-active #editor-preview-split { flex: 1 1 auto; flex-direction: column; min-height: 0; }
+#workspace.preview-focus-active #preview-column { flex: 1 1 auto; min-height: 0; }
+#workspace.preview-focus-active #preview-panel { display: flex !important; flex: 1 1 auto; height: auto; min-height: 0; border: 0; }
+#workspace.preview-focus-active #preview-bar { padding: 8px 14px; border-top: 0; }
+#workspace.preview-focus-active #preview-status-text { padding: 6px 14px; }
+body.preview-focus-mode #sidebar, body.preview-focus-mode #topbar { display: none !important; }
+body.preview-focus-mode #content { overflow: hidden; }
 
 /* Approval Engine: guarded terminal mode's hold prompt — only shown when
    a policy-matching line's completing keystroke is being withheld server-side. */
@@ -879,7 +1090,26 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
    .view, which is itself height:100%/bounded) + overflow:hidden here
    makes .assistant-feed the one thing that scrolls, so the tabs above it
    stay put -- same behavior the sidebar copy already has. */
-.assistant-panel--full { width: 100%; border-left: none; max-width: 760px; margin: 0 auto; height: 100%; overflow: hidden; }
+#view-assistant { display: flex; padding: 0; height: 100%; box-sizing: border-box; overflow: hidden; }
+/* #view-assistant is an ID selector, so its `display: flex` outranks the
+   browser's default `[hidden] { display: none }` rule outright (higher
+   specificity, not just cascade order) -- showView() setting this view's
+   `hidden = true` when navigating away from it was therefore never actually
+   hiding it. It stayed permanently on screen, full height, with every other
+   view (Settings, Search, Automations, Customize, the profile menu's
+   destinations, ...) rendered right below it in normal flow -- which is why
+   switching to any of them looked like nothing happened: the assistant view
+   never left, so the page just silently grew taller instead of changing.
+   Same root cause already fixed once for .more-menu and #right-pane-browser
+   below; this instance was missed. Restate display:none for the hidden case
+   at matching (here: higher, since it's the same ID) specificity so the
+   attribute takes effect. */
+#view-assistant[hidden] { display: none; }
+.assistant-panel--full {
+  flex: 1 1 auto; min-width: 320px; width: auto; border-left: none; max-width: none; margin: 0;
+  height: 100%; overflow: hidden; box-sizing: border-box;
+  padding: 0 max(0px, calc((100% - 760px) / 2));
+}
 .assistant-titlebar {
   display: flex; align-items: center; gap: 7px; padding: 12px 12px 0; flex-shrink: 0;
   font-weight: 600; font-size: 13px; color: var(--gray-42);
@@ -892,11 +1122,6 @@ code { background: var(--gray-12); padding: 1px 5px; border-radius: 3px; font-si
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
-
-.assistant-header { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; border-bottom: 1px solid var(--gray-16); flex-shrink: 0; }
-.assistant-mode-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-.assistant-mode-tabs .mode-btn { flex: 0 0 auto; padding: 5px 13px; }
-.assistant-header .model-select { width: 100%; }
 
 /* ---- Multi-model support: model picker (shared select styling) ---- */
 select.model-select, #default-model-select {
@@ -911,10 +1136,64 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .model-routing-row { display: flex; align-items: center; gap: 12px; }
 .model-routing-row-label { width: 92px; flex: none; font-size: 11.5px; color: var(--gray-38); }
 .model-routing-row select { flex: 1; max-width: 340px; }
+
+/* "Configure the real models": the Settings → Application Settings "AI
+   Model Provider Keys" section -- one row per provider, each with its own
+   key/base-URL input + Save, reusing the same row-card look as the Connect
+   GitHub/GitLab saved-credential list above. */
+.model-key-rows { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.model-key-row {
+  background: var(--gray-6); border: 1px solid var(--gray-16); border-radius: 8px; padding: 10px 12px;
+}
+.model-key-row-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.model-key-row-label { font-size: 12.5px; font-weight: 600; color: var(--gray-42); }
+.model-key-row-status { font-size: 11px; color: var(--green-6); }
+.model-key-row-hint { margin-left: auto; font-size: 10.5px; }
+.model-key-row-fields { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.model-key-input {
+  flex: 1; min-width: 180px; background: var(--gray-13); color: var(--gray-42); border: 1px solid var(--gray-20);
+  border-radius: 6px; padding: 6px 9px; font-size: 11.5px; outline: none;
+}
+.model-key-model-input { flex: 1; min-width: 160px; max-width: 260px; }
+.model-key-save-btn { flex: none; }
+.model-key-remove-btn { flex: none; all: unset; cursor: pointer; color: var(--gray-28); font-size: 11px; padding: 0 4px; }
+.model-key-remove-btn:hover { color: var(--red-10); }
+
 .task-model-note {
   margin-top: 6px; font-size: 11px; color: var(--gold-11); background: var(--gold-2); border: 1px solid var(--gold-6);
   border-radius: 6px; padding: 5px 8px; line-height: 1.5;
 }
+
+/* ---- Build-target picker (Phase C item 3): Cloud / Local / Both, a thin
+   wrapper over the model-select above it -- see createAssistantPanel's
+   applyBuildTarget. ---- */
+.build-target-row { display: flex; gap: 2px; background: var(--gray-11); border: 1px solid var(--gray-18); border-radius: 7px; padding: 2px; width: fit-content; }
+.build-target-btn {
+  all: unset; box-sizing: border-box; cursor: pointer; font-size: 11.5px; color: var(--gray-33);
+  padding: 5px 11px; border-radius: 5px;
+}
+.build-target-btn:hover { background: var(--gray-16); color: var(--gray-42); }
+.build-target-btn.active { background: var(--gray-19); color: var(--gray-44); font-weight: 600; }
+.build-target-note {
+  margin: 0 12px 8px; font-size: 11px; color: var(--gold-11); background: var(--gold-2); border: 1px solid var(--gold-6);
+  border-radius: 6px; padding: 5px 8px; line-height: 1.5;
+}
+.build-target-note[hidden] { display: none; }
+
+/* ---- Web App / Enterprise / Core App style toggle (Oct 2026):
+   same visual language as the build-target picker just above, deliberately
+   -- both are compact multi-choice toggles living in the same header row
+   area, so they should read as one family of control, not two different
+   widget styles competing for attention. See createAssistantPanel's
+   archMode state. ---- */
+.arch-mode-row { display: flex; gap: 2px; background: var(--gray-11); border: 1px solid var(--gray-18); border-radius: 7px; padding: 2px; width: fit-content; }
+.arch-mode-btn {
+  all: unset; box-sizing: border-box; cursor: pointer; font-size: 11.5px; color: var(--gray-33);
+  padding: 5px 11px; border-radius: 5px;
+}
+.arch-mode-btn:hover { background: var(--gray-16); color: var(--gray-42); }
+.arch-mode-btn.active { background: var(--gray-19); color: var(--gray-44); font-weight: 600; }
+
 .assistant-feed { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 
 /* Token-limit alerts (feature request: "alert the token limits (50%, 75%,
@@ -930,10 +1209,31 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .assistant-msg { padding: 8px 10px; border-radius: 8px; font-size: 12.5px; line-height: 1.5; }
 .assistant-msg.user { background: var(--blue-6); align-self: flex-end; max-width: 90%; }
 .assistant-msg.system { background: var(--gray-10); color: var(--gray-33); border: 1px solid var(--gray-16); }
-.assistant-input-row { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--gray-16); }
-.assistant-input-row input {
-  flex: 1; background: var(--gray-7); border: 1px solid var(--gray-18); border-radius: 6px; color: var(--gray-42); padding: 7px 9px; outline: none;
+.assistant-input-row {
+  position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 8px 10px 10px; padding: 8px 9px 7px; border: 1px solid var(--gray-18);
+  border-radius: 12px; background: var(--gray-6); box-shadow: 0 4px 14px rgba(0, 0, 0, .12);
 }
+.assistant-textarea {
+  order: -1; flex: 1 0 100%; width: 100%; min-width: 0; box-sizing: border-box;
+  background: transparent; border: 0; border-radius: 7px; color: var(--gray-42);
+  padding: 5px 5px 8px; outline: none; font: inherit; resize: none; min-height: 40px;
+  max-height: 160px; overflow-y: auto; line-height: 1.45;
+}
+.assistant-textarea:focus-visible { outline: none; }
+.assistant-plus-wrap { order: 0; }
+.composer-mode-label {
+  order: 1; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 5px 8px; border: 1px solid var(--blue-7); border-radius: 7px;
+  background: var(--blue-1); color: var(--blue-14); font-size: 11px; font-weight: 600;
+}
+.chatbar-model-select {
+  order: 2; flex: 0 1 190px; width: auto; min-width: 90px; max-width: 38%;
+  padding: 5px 7px !important; border-radius: 7px !important; font-size: 11px !important;
+}
+.composer-tools-spacer { order: 3; flex: 1 1 auto; }
+.assistant-input-row .mic-btn { order: 4; }
+.assistant-input-row .send-btn { order: 5; margin-left: 0; }
 .mic-btn {
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   width: 30px; height: 30px; border-radius: 50%;
@@ -946,6 +1246,176 @@ select.model-select option:disabled, #default-model-select option:disabled { col
   0%, 100% { box-shadow: 0 0 0 0 rgba(178, 59, 70, 0.55); }
   50% { box-shadow: 0 0 0 6px rgba(178, 59, 70, 0); }
 }
+
+/* ---- Phase B: "+" menu (Debug/Multitask/Files/MCP), attach chips,
+   Multitask bar, right pane (Browser/Changelog/Docs/Live) ---- */
+.assistant-rightpane-toggle {
+  margin-left: auto; background: transparent; border: 1px solid var(--gray-19); color: var(--gray-33);
+  border-radius: 6px; padding: 3px 7px; cursor: pointer; font-size: 12px; flex-shrink: 0;
+}
+.assistant-rightpane-toggle:hover { background: var(--gray-13); color: var(--gray-44); }
+
+.assistant-attach-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px; }
+/* display:flex above ties in specificity with the browser's [hidden] rule
+   -- see .more-menu's own comment elsewhere in this file for the full
+   story on why that silently wins without this override. */
+.assistant-attach-chips[hidden] { display: none; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 5px; background: var(--gray-11); border: 1px solid var(--gray-18);
+  border-radius: 6px; padding: 3px 6px; font-size: 11px; color: var(--gray-38);
+}
+.attach-chip-remove { all: unset; cursor: pointer; color: var(--gray-28); font-size: 10px; }
+.attach-chip-remove:hover { color: var(--red-10); }
+
+.assistant-multitask-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px;
+  border-top: 1px solid var(--gray-16); background: var(--gold-0);
+}
+.assistant-multitask-bar[hidden] { display: none; }
+.assistant-multitask-label { font-size: 11.5px; color: var(--gold-10); flex-basis: 100%; }
+.assistant-multitask-modes { display: flex; flex-wrap: wrap; gap: 8px; }
+.multitask-mode-chk { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--gray-38); cursor: pointer; }
+.assistant-multitask-cancel {
+  margin-left: auto; background: transparent; border: 1px solid var(--gray-19); color: var(--gray-33);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 11px;
+}
+.multitask-run { display: flex; flex-direction: column; gap: 8px; }
+.multitask-run-head { font-weight: 600; color: var(--gray-42); }
+.multitask-run-grid { display: flex; flex-direction: column; gap: 10px; }
+.multitask-lane { border: 1px solid var(--gray-16); border-radius: 8px; padding: 8px; }
+.multitask-lane-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--gray-30); margin-bottom: 6px; }
+
+.assistant-plus-wrap { position: relative; flex-shrink: 0; }
+.plus-btn {
+  width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--gray-7); border: 1px solid var(--gray-18); color: var(--gray-33); cursor: pointer; font-size: 16px; flex-shrink: 0;
+}
+.plus-btn:hover { border-color: var(--gray-24); color: var(--gray-42); }
+.plus-menu {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 100;
+  background: var(--gray-8); border: 1px solid var(--gray-19); border-radius: 10px;
+  padding: 10px; width: min(340px, calc(100vw - 36px)); max-height: min(65vh, 540px); overflow-y: auto;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+  display: flex; flex-direction: column; gap: 1px;
+}
+.assistant-panel:not(.assistant-panel--full) .plus-menu { left: auto; right: 0; }
+.plus-menu[hidden] { display: none; }
+.plus-menu-group { padding: 2px 0 8px; }
+.plus-menu-label { display: block; margin: 0 0 6px; color: var(--gray-30); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.compose-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.compose-mode-grid .mode-btn { min-width: 0; padding: 7px 8px; text-align: left; font-size: 11.5px; }
+.plus-menu-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border-top: 1px solid var(--gray-16); padding-top: 9px; }
+.plus-menu-option { min-width: 0; }
+.plus-menu-option-wide { grid-column: 1 / -1; }
+.plus-menu-option .build-target-row, .plus-menu-option .arch-mode-row { max-width: 100%; flex-wrap: wrap; }
+.plus-menu-option .build-target-btn, .plus-menu-option .arch-mode-btn { padding: 5px 7px; font-size: 10.5px; }
+.plus-menu-divider { border-top: 1px solid var(--gray-16); margin: 2px 0 6px; }
+.plus-menu-item {
+  all: unset; box-sizing: border-box; width: 100%; display: block;
+  background: transparent; color: var(--gray-41); font-size: 12.5px;
+  padding: 7px 8px; border-radius: 6px; cursor: pointer;
+}
+.plus-menu-item:hover { background: var(--gray-16); color: var(--gray-44); }
+
+.assistant-plus-popover {
+  margin: 0 10px; background: var(--gray-8); border: 1px solid var(--gray-19); border-radius: 10px;
+  padding: 8px; max-height: 220px; overflow: auto;
+}
+.files-popover-search {
+  width: 100%; box-sizing: border-box; background: var(--gray-7); border: 1px solid var(--gray-18);
+  border-radius: 6px; color: var(--gray-42); padding: 6px 8px; outline: none; font-size: 12px; margin-bottom: 6px;
+}
+.files-popover-item {
+  all: unset; box-sizing: border-box; display: block; width: 100%; font-family: monospace; font-size: 11.5px;
+  color: var(--gray-38); padding: 5px 6px; border-radius: 5px; cursor: pointer;
+}
+.files-popover-item:hover:not(:disabled) { background: var(--gray-13); color: var(--gray-44); }
+.files-popover-item:disabled { color: var(--gray-26); cursor: default; }
+
+/* "@" mention popover (Gap Analysis Pillar 4) -- unlike .assistant-plus-
+   popover above (a fixed card in the panel's own normal document flow,
+   opened from the "+" button), this one is position:fixed and placed by
+   JS (see positionAtPopover() in renderer.js) at the real caret's pixel
+   position inside .assistant-textarea, the same way an editor's real "@"
+   autocomplete floats right where you're typing rather than off in a
+   corner. position:fixed (not absolute) deliberately sidesteps needing
+   any ancestor to be position:relative -- this panel mounts in two very
+   different layout contexts (the full-page view and the resizable
+   sidebar), and fixed positioning behaves the same, viewport-relative,
+   in both. */
+.at-popover {
+  position: fixed; z-index: 150; background: var(--gray-8); border: 1px solid var(--gray-19);
+  border-radius: 8px; padding: 4px; min-width: 240px; max-width: 380px; max-height: 220px; overflow: auto;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+}
+.at-popover[hidden] { display: none; }
+.at-popover-empty { padding: 6px 7px; font-size: 11.5px; color: var(--gray-27); }
+.at-popover-item {
+  all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 6px; width: 100%;
+  font-size: 11.5px; color: var(--gray-38); padding: 5px 7px; border-radius: 5px; cursor: pointer;
+}
+.at-popover-item.highlighted { background: var(--gray-16); color: var(--gray-44); }
+.at-popover-item-icon { flex-shrink: 0; }
+.at-popover-item-path { font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-popover-item-meta { margin-left: auto; font-size: 10px; color: var(--gray-27); flex-shrink: 0; padding-left: 8px; }
+
+.mcp-popover-server { padding: 4px 0; }
+.mcp-popover-server-name { font-size: 12px; font-weight: 600; color: var(--gray-42); margin-bottom: 4px; }
+.mcp-popover-tool { margin: 4px 0 4px 8px; }
+.mcp-popover-tool-btn {
+  background: var(--gray-13); color: var(--gray-44); border: 1px solid var(--gray-20); border-radius: 6px;
+  padding: 4px 9px; cursor: pointer; font-size: 11.5px;
+}
+.mcp-popover-tool-btn:hover { background: var(--gray-17); }
+.mcp-runner { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.mcp-runner-args {
+  width: 100%; box-sizing: border-box; background: var(--gray-7); border: 1px solid var(--gray-18);
+  border-radius: 6px; color: var(--gray-42); padding: 6px 8px; outline: none; font-size: 11px; font-family: monospace; resize: vertical;
+}
+.mcp-runner-run {
+  align-self: flex-start; background: var(--blue-9); border: 1px solid var(--blue-10); color: var(--blue-14);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 11.5px;
+}
+
+/* ---- Right pane: Browser / Changelog / Docs / live Generation mirror ---- */
+#assistant-right-pane {
+  width: 420px; min-width: 280px; max-width: 720px; flex-shrink: 0;
+  display: flex; flex-direction: column; border-left: 1px solid var(--gray-16); background: var(--gray-4);
+}
+#assistant-right-pane[hidden] { display: none; }
+#right-pane-tabs { display: flex; align-items: center; gap: 2px; padding: 8px 8px 0; border-bottom: 1px solid var(--gray-16); flex-shrink: 0; }
+.right-pane-tab {
+  background: transparent; border: none; color: var(--gray-33); font-size: 12px; padding: 7px 10px;
+  border-radius: 6px 6px 0 0; cursor: pointer;
+}
+.right-pane-tab:hover { background: var(--gray-11); color: var(--gray-42); }
+.right-pane-tab.active { background: var(--gray-11); color: var(--gray-44); font-weight: 600; }
+#right-pane-gen-tab.active { color: var(--green-6); }
+#right-pane-close-btn {
+  margin-left: auto; background: transparent; border: none; color: var(--gray-30); cursor: pointer;
+  padding: 4px 8px; border-radius: 6px; font-size: 12px;
+}
+#right-pane-close-btn:hover { background: var(--gray-13); color: var(--gray-44); }
+.right-pane-body { flex: 1; overflow: hidden; position: relative; }
+.right-pane-panel { height: 100%; overflow: auto; padding: 10px; box-sizing: border-box; }
+#right-pane-browser { padding: 0; display: flex; flex-direction: column; }
+#right-pane-browser[hidden] { display: none; }
+.right-pane-browser-bar { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--gray-16); flex-shrink: 0; }
+#right-pane-browser-url {
+  flex: 1; background: var(--gray-7); border: 1px solid var(--gray-18); border-radius: 6px;
+  color: var(--gray-42); padding: 6px 9px; outline: none; font-size: 12px;
+}
+#right-pane-browser-go {
+  background: var(--gray-13); color: var(--gray-44); border: 1px solid var(--gray-20); border-radius: 6px;
+  padding: 5px 12px; cursor: pointer; font-size: 12px;
+}
+#right-pane-webview { flex: 1; width: 100%; border: none; }
+.changelog-entry { padding: 10px 0; border-bottom: 1px solid var(--gray-12); }
+.changelog-entry:last-child { border-bottom: none; }
+.changelog-entry-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.changelog-entry-tag { font-family: monospace; font-size: 12px; color: var(--blue-13); font-weight: 600; }
+.changelog-entry-date { font-size: 11px; color: var(--gray-28); }
+.changelog-entry-body { font-size: 12px; line-height: 1.6; color: var(--gray-38); }
 
 /* ---- Changes view ---- */
 #git-branch { color: var(--gray-33); margin-bottom: 12px; }
@@ -1073,13 +1543,20 @@ select.model-select option:disabled, #default-model-select option:disabled { col
    failed messages (div gets .done from finish() in renderer.js) freeze it. */
 .assistant-msg.streaming:not(.done) .assistant-spinner-icon { animation: mobius-spin 1.2s linear infinite; }
 .assistant-stream-label { font-size: 11px; font-weight: 600; color: var(--gray-33); }
+.assistant-stream-phase { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--gray-28); }
+.assistant-progress { min-width: 0; }
+.assistant-progress > summary { cursor: pointer; width: fit-content; font-size: 10.5px; color: var(--gray-28); user-select: none; }
+.assistant-progress-count { margin-left: 3px; color: var(--gray-24); }
+.assistant-progress[open] > summary { margin-bottom: 4px; }
 .assistant-msg.streaming .assistant-steps { font-size: 11px; color: var(--gray-33); display: flex; flex-direction: column; gap: 4px; }
 .assistant-step-line { display: flex; align-items: baseline; gap: 6px; }
 .assistant-step-marker { flex-shrink: 0; width: 12px; text-align: center; font-weight: 700; }
 .assistant-step-marker.completed { color: var(--green-6); }
+.assistant-step-marker.failed { color: var(--red-6, #dc2626); }
 .assistant-step-marker.in_progress { color: var(--blue-13); }
 .assistant-step-marker.pending { color: var(--gray-25); }
 .assistant-step-label { }
+.assistant-step-time { margin-left: auto; color: var(--gray-24); font-size: 9.5px; white-space: nowrap; }
 /* "Strike off once completed" (like Claude Code/Cursor's todo list) --
    applies to both the model-call step log above and the edits-card
    lifecycle checklist below. */
@@ -1184,6 +1661,14 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 }
 .task-detail-edits:empty { display: none; }
 .edits-card-head { font-size: 12px; color: var(--gray-38); font-weight: 600; margin-bottom: 6px; }
+.edits-card-stats-total { font-weight: 400; }
+
+/* ---- Numerical lines-added/-removed stats, per-file and aggregate ---- */
+.diff-stat-added { color: var(--lime-6); font-family: "SF Mono", Menlo, monospace; font-size: 10.5px; font-weight: 600; }
+.diff-stat-removed { color: var(--red-16); font-family: "SF Mono", Menlo, monospace; font-size: 10.5px; font-weight: 600; }
+.diff-stat-none { color: var(--gray-28); font-family: "SF Mono", Menlo, monospace; font-size: 10.5px; }
+.edits-file-stats { flex-shrink: 0; display: inline-flex; gap: 4px; }
+.edits-file-stats-pending { color: var(--gray-23); font-size: 10.5px; }
 
 /* ---- Specification Engine structured requirements checklist (roadmap Phase 7, source §6) ---- */
 .spec-checklist { margin-bottom: 12px; padding: 8px 10px; background: var(--gray-7); border: 1px solid var(--gray-16); border-radius: 6px; }
@@ -1206,6 +1691,13 @@ select.model-select option:disabled, #default-model-select option:disabled { col
   padding: 6px 8px; margin-bottom: 8px; line-height: 1.5;
 }
 .edits-card-warning code { font-family: monospace; }
+.edits-open-project-btn {
+  margin-left: 6px; padding: 3px 8px; border: 1px solid var(--gold-7); border-radius: 5px;
+  color: var(--gold-12); background: var(--gold-1); font-size: 10.5px; font-weight: 600; cursor: pointer;
+}
+.edits-open-project-btn:hover:not(:disabled) { background: var(--gold-3); }
+.edits-open-project-btn:disabled { opacity: 0.6; cursor: default; }
+.edits-open-project-result { margin-left: 6px; }
 .edits-card-list { display: flex; flex-direction: column; gap: 6px; }
 .edits-file { background: var(--gray-2); border: 1px solid var(--gray-16); border-radius: 6px; padding: 6px 8px; }
 .edits-file-head { display: flex; align-items: center; gap: 8px; font-size: 12px; flex-wrap: wrap; }
@@ -1245,6 +1737,36 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .edits-apply-btn:hover:not(:disabled) { background: var(--green-3); }
 .edits-apply-btn:disabled { opacity: 0.5; cursor: default; }
 .edits-apply-result { font-size: 11px; color: var(--gray-33); }
+
+/* ---- Post-build panel (Commit & Push, Open Preview, Summary) --------
+   Appears automatically once Apply has actually applied at least one file
+   -- see renderer.js's renderPostBuildPanel. ---- */
+.edits-card-postbuild { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-16); }
+.edits-card-postbuild[hidden] { display: none; }
+.postbuild-summary { font-size: 11.5px; color: var(--gray-33); line-height: 1.6; margin-bottom: 6px; }
+.postbuild-hint { font-size: 11px; color: var(--gold-13); line-height: 1.5; margin-bottom: 10px; }
+.postbuild-hint.postbuild-hint-done { color: var(--green-8); }
+.postbuild-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.postbuild-commit-btn {
+  background: var(--gold-1); border: 1px solid var(--gold-6); color: var(--gold-11); border-radius: 6px;
+  padding: 4px 12px; font-size: 11.5px; cursor: pointer; font-weight: 600;
+}
+.postbuild-commit-btn:hover:not(:disabled) { background: var(--gold-2); }
+.postbuild-commit-btn:disabled { opacity: 0.6; cursor: default; }
+.postbuild-push-btn {
+  background: var(--gray-2); border: 1px solid var(--gray-19); color: var(--gray-38); border-radius: 6px;
+  padding: 4px 12px; font-size: 11.5px; cursor: pointer; font-weight: 600;
+}
+.postbuild-push-btn:hover:not(:disabled) { background: var(--gray-7); }
+.postbuild-push-btn:disabled { opacity: 0.6; cursor: default; }
+.postbuild-preview-btn {
+  background: var(--blue-1); border: 1px solid var(--blue-8); color: var(--cyan-2); border-radius: 6px;
+  padding: 4px 12px; font-size: 11.5px; cursor: pointer; font-weight: 600;
+}
+.postbuild-preview-btn:hover:not(:disabled) { background: var(--blue-3); }
+.postbuild-preview-btn:disabled { opacity: 0.6; cursor: default; }
+.postbuild-commit-result, .postbuild-preview-result, .postbuild-push-result { font-size: 11px; color: var(--gray-33); margin-top: 6px; }
+.postbuild-open-link { color: var(--cyan-2); }
 
 /* ---- Verification Engine (real build/test evidence after Apply) ---- */
 .edits-verify-btn {
@@ -1461,6 +1983,16 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .debug-static-search h3 { font-size: 13px; margin-bottom: 6px; }
 
 
+/* ---- Global error toast (renderer.js's showGlobalError) ---- */
+#global-error-toast {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+  max-width: 480px; z-index: 3000; cursor: pointer;
+  background: var(--red-2); border: 1px solid var(--red-9); color: var(--red-19);
+  border-radius: 8px; padding: 10px 14px; font-size: 12.5px; line-height: 1.5;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+#global-error-toast[hidden] { display: none; }
+
 /* ---- Sign-in overlay (real device sign-in) ---- */
 .signin-overlay {
   position: fixed; inset: 0; background: var(--gray-1); z-index: 2000;
@@ -1513,24 +2045,96 @@ select.model-select option:disabled, #default-model-select option:disabled { col
 .nav-projects-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .nav-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--gray-28); }
 .nav-section-action {
-  all: unset; cursor: pointer; width: 18px; height: 18px; border-radius: 5px;
+  all: unset; box-sizing: border-box; cursor: pointer; width: auto; height: 22px; border-radius: 6px; padding: 0 7px;
   display: flex; align-items: center; justify-content: center;
-  color: var(--gray-33); background: var(--gray-13);
+  color: var(--gray-33); background: var(--gray-13); font-size: 10.5px; font-weight: 600;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 .nav-section-action:hover { background: var(--gray-17); color: var(--gray-44); }
 .nav-projects-open-btn {
   display: block; width: 100%; text-align: left; margin-bottom: 8px;
-  font-size: 12px; padding: 6px 8px;
+  font-size: 12px; padding: 6px 8px; border-radius: 6px;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-.nav-recent-list { max-height: 220px; overflow-y: auto; border: none; }
-.nav-recent-list .recent-item { padding: 6px 8px; font-size: 12px; }
+/* ---- Projects list: folder icons + a smoother, pill-style row look ----
+   (feature request: "Show the projects with folder icons in the left
+   pane. Make the left pane smooth look and feel.") Rows sit flush against
+   the sidebar background until hovered/active, rather than each being its
+   own flat gray box (the base .recent-item look, still used as-is by the
+   Home dashboard's artifact list) -- closer to how a modern IDE's project
+   switcher reads, and consistent with .nav-item's own hover treatment just
+   above. */
+.nav-recent-list {
+  max-height: 220px; overflow-y: auto; border: none; display: flex; flex-direction: column; gap: 2px;
+  scrollbar-width: thin; scrollbar-color: var(--gray-20) transparent;
+}
+.nav-recent-list::-webkit-scrollbar { width: 6px; }
+.nav-recent-list::-webkit-scrollbar-thumb { background: var(--gray-20); border-radius: 3px; }
+.nav-recent-list::-webkit-scrollbar-track { background: transparent; }
+.nav-recent-list .recent-item {
+  padding: 6px 8px; font-size: 12px; background: transparent; border-radius: 7px; gap: 8px; justify-content: flex-start;
+}
+.nav-recent-list .recent-item:hover { background: var(--gray-9); }
 .nav-recent-list .recent-item-path { display: none; } /* too narrow a column for the full path */
+.nav-recent-list .recent-item-icon { flex-shrink: 0; width: 14px; height: 14px; color: var(--gray-28); transition: color 0.15s ease; }
+.nav-recent-list .recent-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.nav-recent-list .recent-item.recent-item-active { background: var(--gray-11); color: var(--gray-44); }
+.nav-recent-list .recent-item.recent-item-active .recent-item-icon { color: var(--blue-13); }
+.nav-recent-list .recent-item:hover .recent-item-icon { color: var(--gray-38); }
+.nav-recent-list .recent-item.recent-item-active:hover .recent-item-icon { color: var(--blue-13); }
+
+/* "This PC ▾" switcher (Phase D, "Connect via SSH") */
+.nav-pc-switcher { position: relative; padding: 10px 16px 0; }
+.nav-pc-switcher-btn {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 7px;
+  width: 100%; padding: 7px 8px; border-radius: 7px; border: 1px solid var(--gray-20);
+  background: var(--gray-13); color: var(--gray-41); font-size: 12.5px;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.nav-pc-switcher-btn:hover { background: var(--gray-17); color: var(--gray-44); }
+.nav-pc-switcher-btn span#pc-switcher-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.nav-pc-switcher-caret { color: var(--gray-28); font-size: 10px; }
+.pc-switcher-menu {
+  position: absolute; top: calc(100% + 4px); left: 16px; right: 16px; z-index: 100;
+  background: var(--gray-8); border: 1px solid var(--gray-19); border-radius: 10px;
+  padding: 6px; box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+  display: flex; flex-direction: column; gap: 1px;
+}
+/* Same fix as .more-menu[hidden] -- restate display:none at matching
+   specificity so the [hidden] attribute actually takes effect (see
+   index.html's comment above .nav-pc-switcher for the full story). */
+.pc-switcher-menu[hidden] { display: none; }
+.pc-switcher-item {
+  all: unset; box-sizing: border-box; width: 100%; cursor: pointer; text-align: left;
+  padding: 7px 10px; border-radius: 6px; font-size: 12.5px; color: var(--gray-41);
+}
+.pc-switcher-item:hover { background: var(--gray-16); color: var(--gray-44); }
+.pc-switcher-item-active { color: var(--blue-13); }
+.pc-switcher-section-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--gray-28); padding: 8px 10px 2px; }
+.pc-switcher-targets:empty::after { content: "No saved remote machines yet"; display: block; padding: 4px 10px 6px; font-size: 11.5px; color: var(--gray-28); }
+.pc-switcher-target-row { display: flex; align-items: center; gap: 4px; }
+.pc-switcher-target-connect {
+  all: unset; box-sizing: border-box; flex: 1; min-width: 0; cursor: pointer; text-align: left;
+  padding: 7px 10px; border-radius: 6px; font-size: 12.5px; color: var(--gray-41);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pc-switcher-target-connect:hover { background: var(--gray-16); color: var(--gray-44); }
+.pc-switcher-target-row-active .pc-switcher-target-connect { color: var(--blue-13); }
+.pc-switcher-target-remove { all: unset; cursor: pointer; color: var(--gray-28); font-size: 11px; padding: 4px 6px; }
+.pc-switcher-target-remove:hover { color: var(--red-10); }
+.pc-switcher-connect { color: var(--blue-13); border-top: 1px solid var(--gray-16); margin-top: 4px; padding-top: 9px; }
+
+/* Connect via SSH modal */
+.connect-ssh-row { display: flex; gap: 8px; }
+.connect-ssh-row input:last-child { max-width: 90px; }
+.connect-ssh-save-row { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--gray-38); margin-top: 10px; cursor: pointer; }
 
 .sidebar-footer { margin-top: auto; padding: 12px 16px 0; border-top: 1px solid var(--gray-16); }
 .sidebar-connect-btn {
   all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 7px 10px; margin-bottom: 10px; border-radius: 7px;
   background: var(--gray-13); border: 1px solid var(--gray-20); color: var(--gray-38); font-size: 12px;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 .sidebar-connect-btn:hover { background: var(--gray-17); color: var(--gray-44); }
 .sidebar-footer-row { display: flex; align-items: center; gap: 6px; padding-bottom: 12px; }

@@ -159,6 +159,88 @@ test("build mode with structured edits: parses edits from the streamed response 
   assert.equal(reviewEvent!.review.summary, "Looks safe.");
   // "retry.ts" matches none of classifyPersona's api/frontend path patterns -- backend is the default.
   assert.equal(reviewEvent!.review.persona, "backend");
-  assert.equal(callCount, 2, "expected exactly one streaming call and one non-streamed review call");
+  assert.ok(callCount >= 2 && callCount <= 3, "expected the build, its review, and at most one optional memory-extraction call");
+  delete process.env.TEST_PROVIDER_API_KEY;
+});
+
+test("build mode: a reasoning-only first response (no real content) recovers via retry and proposes edits", async (t) => {
+  // Real, observed failure mode (Oct 2026: openai/gpt-oss-20b via Groq) --
+  // the model's FIRST attempt spends its whole response on
+  // `delta.reasoning` and never emits any `delta.content`, so sawText is
+  // false and there's no fullText for parseBuildResponse to look at at
+  // all. retryWithoutReasoning should get one more shot, and if THAT
+  // produces a real, well-formed response, the task should end up with
+  // real edits -- not just a nicer error message.
+  process.env.TEST_PROVIDER_API_KEY = "test-key";
+  const retryFull = [
+    "Adding a home page.\n\n===MOBIUSX_EDITS===\n",
+    '```json\n{"edits":[{"path":"index.html","action":"create","content":"<h1>Hi</h1>"}]}\n```',
+  ].join("");
+  let callCount = 0;
+  t.mock.method(globalThis, "fetch", async (_url: string, opts: { body?: string }) => {
+    callCount += 1;
+    const body = JSON.parse((opts?.body as string) ?? "{}") as { stream?: boolean };
+    if (body.stream === false) {
+      // The persona review call.
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"verdict":"approve","summary":"Fine."}' } }] }), { status: 200 });
+    }
+    if (callCount === 1) {
+      // First attempt: all reasoning, no real content at all.
+      return new Response(
+        sseStream([sseDataLine({ choices: [{ delta: { reasoning: "Let me think about this for a while..." } }] }), "data: [DONE]\n\n"]),
+        { status: 200 },
+      );
+    }
+    // The retry: a real, well-formed answer.
+    return new Response(sseStream([sseDataLine({ choices: [{ delta: { content: retryFull } }] }), "data: [DONE]\n\n"]), { status: 200 });
+  });
+  const events: TaskEvent[] = [];
+  await testRunner().run(baseInput({ mode: "build" }), (e) => events.push(e));
+  const editsEvent = events.find((e): e is Extract<TaskEvent, { type: "edits" }> => e.type === "edits");
+  assert.ok(editsEvent, "expected the retry's edits to make it through");
+  assert.equal(editsEvent!.edits[0].path, "index.html");
+  assert.ok(callCount >= 3 && callCount <= 4, "expected the initial attempt, retry, review, and at most one optional memory-extraction call");
+  delete process.env.TEST_PROVIDER_API_KEY;
+});
+
+test("build mode: reasoning-only even after retry gives a short, actionable message instead of a multi-thousand-char dump", async (t) => {
+  process.env.TEST_PROVIDER_API_KEY = "test-key";
+  const longReasoning = "x".repeat(5000); // longer than both the old 4000-char cap and the new 500-char one
+  t.mock.method(globalThis, "fetch", async () => {
+    return new Response(
+      sseStream([sseDataLine({ choices: [{ delta: { reasoning: longReasoning } }] }), "data: [DONE]\n\n"]),
+      { status: 200 },
+    );
+  });
+  const events: TaskEvent[] = [];
+  await testRunner().run(baseInput({ mode: "build" }), (e) => events.push(e));
+  assert.ok(!events.some((e) => e.type === "edits"), "no edits should be proposed when nothing usable ever came back");
+  const output = events.filter((e): e is Extract<TaskEvent, { type: "output" }> => e.type === "output").map((e) => e.delta).join("");
+  assert.ok(output.includes("No file changes were proposed"), "the actionable explanation must be present");
+  assert.ok(output.includes("even after asking again"), "should reflect that a retry was actually attempted");
+  assert.ok(output.includes("try again") || output.includes("switch models"), "should suggest a concrete next step");
+  assert.ok(!output.includes(longReasoning), "provider-private reasoning must never be emitted to the user");
+  assert.ok(output.length < 1200, `expected a short, actionable message, got ${output.length} chars`);
+  delete process.env.TEST_PROVIDER_API_KEY;
+});
+
+test("Auto Cloud marks a prose-only build as provider failure after recovery so it can fail over", async (t) => {
+  process.env.TEST_PROVIDER_API_KEY = "test-key";
+  const signOff = "With this foundation you have a secure, compliant payroll system ready for rapid feature expansion while staying lean and maintainable. Happy coding!";
+  let callCount = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    callCount += 1;
+    return new Response(sseStream([sseDataLine({ choices: [{ delta: { content: signOff } }] }), "data: [DONE]\n\n"]), {
+      status: 200,
+    });
+  });
+  const events: TaskEvent[] = [];
+  await testRunner().run(baseInput({ mode: "build", autoCloud: true }), (event) => events.push(event));
+
+  assert.equal(callCount, 2, "expected one initial generation and one focused file-edit recovery attempt");
+  assert.ok(events.some((event) => event.type === "provider_failure"), "Auto Cloud needs a failure signal to try its next configured model");
+  assert.ok(!events.some((event) => event.type === "edits"), "prose must not be mistaken for generated files");
+  const output = events.filter((event): event is Extract<TaskEvent, { type: "output" }> => event.type === "output").map((event) => event.delta).join("");
+  assert.ok(!output.includes("No file changes were proposed"), "the task-level Auto Cloud flow should own the final failure message");
   delete process.env.TEST_PROVIDER_API_KEY;
 });

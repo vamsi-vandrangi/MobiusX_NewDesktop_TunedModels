@@ -1,0 +1,606 @@
+{
+  "schemaVersion": "1.0",
+  "milestone": "P0.6b.2c",
+  "generatedAt": "2026-10-14T00:00:00Z",
+  "status": "incomplete",
+  "demoReady": false,
+  "baseline": {
+    "taskId": "5769983d-a5f4-4aae-a1ec-7a130bd57a41",
+    "requirementsHash": "7bab9cf1fbef30d0c07d59ca4160e310504375c59cf930752f6ce7a041a0756c",
+    "originalCheckpointPath": "/private/tmp/p0.6b2a-resumed-checkpoint2.json",
+    "originalCheckpointSha256": "0d71db20875c6c2b9df720b39f60a802c448dc81b8c753b74a49bb91fd9c4cd4",
+    "originalCheckpointUnmodified": true,
+    "pacHash": "f7577baa742a41f7c6bdb42032c4049738eeb336d6e83b9782f50ab3f7b07db7",
+    "provider": "ollama",
+    "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+    "completedStages": [
+      "scaffold",
+      "database",
+      "backend",
+      "transactions",
+      "frontend"
+    ],
+    "pendingStageIds": [
+      "tests"
+    ]
+  },
+  "rootCause": {
+    "composeCollision": {
+      "activeOwnerStage": "database",
+      "activePath": "docker-compose.yml",
+      "activeSha256": "1c52c0bfc544a2b2bf4f1dcaa7d7d920e877cec3dffb47a35a2d2dff6b65b5f1",
+      "failedTestStageSha256": [
+        "897b8c678bff7601bf7aacb70825db285f08283707123669a554698b1cf9f6c2"
+      ],
+      "cause": "An earlier workspace materializer flattened failed attempted-stage outputs by path with last-write-wins behavior. The verified aggregate checkpoint kept the database-stage Compose file; the later test Compose file existed only under attemptedStages and was not authorized for promotion."
+    },
+    "frontendCaseRegression": {
+      "cause": "Resume replay normalized artifact lookup keys to lowercase but discarded the original path spelling. Isolated validation therefore materialized frontend/src/App.tsx as frontend/src/app.tsx, causing TypeScript TS1261 and an unnecessary frontend-stage rewind.",
+      "fixed": true,
+      "fix": "Preserve originalPath alongside normalized lookup keys in saved stage files."
+    },
+    "testGeneration": {
+      "cause": "The selected model repeatedly returned incomplete test files. The test gate correctly rejected invented modules, missing fixtures/symbols, wrong routes/credentials, and missing required assertions. The last build deadline expired before a valid test stage was produced."
+    }
+  },
+  "artifactOwnership": {
+    "implementation": "apps/cloud-agent-gateway/src/artifactOwnership.ts",
+    "manifestPath": "/private/tmp/p0.6b2c-forensics/artifact-ownership-and-topology.json",
+    "activeCount": 30,
+    "activeWorkspaceMatches": 30,
+    "mismatches": 0,
+    "perArtifactChecks": [
+      {
+        "path": "backend/requirements.txt",
+        "expectedSha256": "bce8fbb46ee085cf1578e6b0878171b8c5c8cdcce49de07fa781b0b9ac627e26",
+        "actualSha256": "bce8fbb46ee085cf1578e6b0878171b8c5c8cdcce49de07fa781b0b9ac627e26",
+        "matches": true
+      },
+      {
+        "path": "backend/__init__.py",
+        "expectedSha256": "ccd1e6ae73e72c4713ca6231aae4a524e90aac137fbf702a1809e27fdb747a68",
+        "actualSha256": "ccd1e6ae73e72c4713ca6231aae4a524e90aac137fbf702a1809e27fdb747a68",
+        "matches": true
+      },
+      {
+        "path": "backend/routes/__init__.py",
+        "expectedSha256": "c4d6ca02381f4e91206c931ce77bb2a2f3fffe7366606f45a688bddfd6d27cce",
+        "actualSha256": "c4d6ca02381f4e91206c931ce77bb2a2f3fffe7366606f45a688bddfd6d27cce",
+        "matches": true
+      },
+      {
+        "path": "backend/config.py",
+        "expectedSha256": "f83ee28b4137f649a2c62ec6344a00dfc1850f8d5e4ff97295d24262e9e5a89c",
+        "actualSha256": "f83ee28b4137f649a2c62ec6344a00dfc1850f8d5e4ff97295d24262e9e5a89c",
+        "matches": true
+      },
+      {
+        "path": "backend/database.py",
+        "expectedSha256": "e637a97c18ee72439414b6e047b8b43cd24ab20c653364f7a7969eddf2351345",
+        "actualSha256": "e637a97c18ee72439414b6e047b8b43cd24ab20c653364f7a7969eddf2351345",
+        "matches": true
+      },
+      {
+        "path": "backend/alembic.ini",
+        "expectedSha256": "85a78b9aac4e087a195b26df733f7f626358e66c8604061bdc38d0f47ce27a0f",
+        "actualSha256": "85a78b9aac4e087a195b26df733f7f626358e66c8604061bdc38d0f47ce27a0f",
+        "matches": true
+      },
+      {
+        "path": "backend/migrations/env.py",
+        "expectedSha256": "96d238d3a1c339e682e8ee63880dba8dae97e9a9b0e9100ac6e4963d429b4294",
+        "actualSha256": "96d238d3a1c339e682e8ee63880dba8dae97e9a9b0e9100ac6e4963d429b4294",
+        "matches": true
+      },
+      {
+        "path": "backend/main.py",
+        "expectedSha256": "ec02f04845532ef8a01cfa24d0c1d1055077882e140e8d68a1bc7ae9ae724731",
+        "actualSha256": "ec02f04845532ef8a01cfa24d0c1d1055077882e140e8d68a1bc7ae9ae724731",
+        "matches": true
+      },
+      {
+        "path": "frontend/package.json",
+        "expectedSha256": "3aa57ad99a9546e0e09da7f826daa4dc4962bed112ecbfaceae4f5603ce3227c",
+        "actualSha256": "3aa57ad99a9546e0e09da7f826daa4dc4962bed112ecbfaceae4f5603ce3227c",
+        "matches": true
+      },
+      {
+        "path": "frontend/index.html",
+        "expectedSha256": "8381ba70ad45809cff69a91ac5e617b0794f7a7c801d8c469b4064311889c38a",
+        "actualSha256": "8381ba70ad45809cff69a91ac5e617b0794f7a7c801d8c469b4064311889c38a",
+        "matches": true
+      },
+      {
+        "path": "frontend/vite.config.ts",
+        "expectedSha256": "099316384050c3d7218e68808140ea3c9e69d0dab29e32b34c8540a24fc11e57",
+        "actualSha256": "099316384050c3d7218e68808140ea3c9e69d0dab29e32b34c8540a24fc11e57",
+        "matches": true
+      },
+      {
+        "path": "frontend/tsconfig.json",
+        "expectedSha256": "3a11d1d758b82ceae1687b3b3b673d98febb16b81305239be576b6aa30148fed",
+        "actualSha256": "3a11d1d758b82ceae1687b3b3b673d98febb16b81305239be576b6aa30148fed",
+        "matches": true
+      },
+      {
+        "path": "frontend/tsconfig.app.json",
+        "expectedSha256": "ff1749d4a7bb73439e16c63dc9a7a41bcc690fa3daec6305c3fe5365cd5b734e",
+        "actualSha256": "ff1749d4a7bb73439e16c63dc9a7a41bcc690fa3daec6305c3fe5365cd5b734e",
+        "matches": true
+      },
+      {
+        "path": "frontend/tsconfig.node.json",
+        "expectedSha256": "d0f7b8d76a24ef736df536685647ac20b2308d20bf7c21148543ef77e12d51e7",
+        "actualSha256": "d0f7b8d76a24ef736df536685647ac20b2308d20bf7c21148543ef77e12d51e7",
+        "matches": true
+      },
+      {
+        "path": "frontend/src/main.tsx",
+        "expectedSha256": "49396923c9ff41d8be464a0b8e95c51060f383d970c8fbe16e7d635468a09c73",
+        "actualSha256": "49396923c9ff41d8be464a0b8e95c51060f383d970c8fbe16e7d635468a09c73",
+        "matches": true
+      },
+      {
+        "path": "README.md",
+        "expectedSha256": "01cf870d13f2c61a40a8d2f3825cd238c3714427469d3ed253b39b1966008a1e",
+        "actualSha256": "01cf870d13f2c61a40a8d2f3825cd238c3714427469d3ed253b39b1966008a1e",
+        "matches": true
+      },
+      {
+        "path": "docker-compose.yml",
+        "expectedSha256": "1c52c0bfc544a2b2bf4f1dcaa7d7d920e877cec3dffb47a35a2d2dff6b65b5f1",
+        "actualSha256": "1c52c0bfc544a2b2bf4f1dcaa7d7d920e877cec3dffb47a35a2d2dff6b65b5f1",
+        "matches": true
+      },
+      {
+        "path": "backend/Dockerfile",
+        "expectedSha256": "4cb3593ef48a921793b546357425240d87367a9bdd6e1192c12f89c205f77b49",
+        "actualSha256": "4cb3593ef48a921793b546357425240d87367a9bdd6e1192c12f89c205f77b49",
+        "matches": true
+      },
+      {
+        "path": "frontend/Dockerfile",
+        "expectedSha256": "0beb74828ab2e38ccb0e531f51249aed32c5c68e4e4936e95964a3de77caea51",
+        "actualSha256": "0beb74828ab2e38ccb0e531f51249aed32c5c68e4e4936e95964a3de77caea51",
+        "matches": true
+      },
+      {
+        "path": ".env.example",
+        "expectedSha256": "ffbc3ebdca136c675bc1068e73db8e6d991dd90957fd31e32ad7a9b62a2130c8",
+        "actualSha256": "ffbc3ebdca136c675bc1068e73db8e6d991dd90957fd31e32ad7a9b62a2130c8",
+        "matches": true
+      },
+      {
+        "path": "backend/models.py",
+        "expectedSha256": "678e8f23747ff16823f9c3a0eb9a22e7c25ddaf45ec2be409623d278d960dcb6",
+        "actualSha256": "678e8f23747ff16823f9c3a0eb9a22e7c25ddaf45ec2be409623d278d960dcb6",
+        "matches": true
+      },
+      {
+        "path": "backend/migrations/versions/0001_initial.py",
+        "expectedSha256": "b7bead8997e7866a7495479cab2d9d8487c7bdd8d185f8841911933e4ecdb099",
+        "actualSha256": "b7bead8997e7866a7495479cab2d9d8487c7bdd8d185f8841911933e4ecdb099",
+        "matches": true
+      },
+      {
+        "path": "backend/schemas.py",
+        "expectedSha256": "3578ad9e6f79cb365d5d6e6682b63c2a82e318437068d39512a80da564e165b4",
+        "actualSha256": "3578ad9e6f79cb365d5d6e6682b63c2a82e318437068d39512a80da564e165b4",
+        "matches": true
+      },
+      {
+        "path": "backend/auth.py",
+        "expectedSha256": "3995c0d98186311e9559b55fbf39afc71692e2d85871afb53bff88e4b97a17d5",
+        "actualSha256": "3995c0d98186311e9559b55fbf39afc71692e2d85871afb53bff88e4b97a17d5",
+        "matches": true
+      },
+      {
+        "path": "backend/routes/customers.py",
+        "expectedSha256": "0465d6a944ca127d9562c00e676dcdbb6c1babc5a84a4e3698e82800e871336b",
+        "actualSha256": "0465d6a944ca127d9562c00e676dcdbb6c1babc5a84a4e3698e82800e871336b",
+        "matches": true
+      },
+      {
+        "path": "backend/routes/auth.py",
+        "expectedSha256": "22c98d05a55da730fec5b1918f0bf3ff0fe0ebe232285f61dbbf61f9873252e5",
+        "actualSha256": "22c98d05a55da730fec5b1918f0bf3ff0fe0ebe232285f61dbbf61f9873252e5",
+        "matches": true
+      },
+      {
+        "path": "frontend/ui-contract.v1.json",
+        "expectedSha256": "35900fc99bc2a3e3ebb5cdf62a5230ba76ececa7e1541e12826d987cf9951bf9",
+        "actualSha256": "35900fc99bc2a3e3ebb5cdf62a5230ba76ececa7e1541e12826d987cf9951bf9",
+        "matches": true
+      },
+      {
+        "path": "frontend/src/App.tsx",
+        "expectedSha256": "96f2ba63981e824949a9d75082aaac83f31f85a3e07c0cef0f962bcd57d54179",
+        "actualSha256": "96f2ba63981e824949a9d75082aaac83f31f85a3e07c0cef0f962bcd57d54179",
+        "matches": true
+      },
+      {
+        "path": "frontend/src/styles.css",
+        "expectedSha256": "6c5ab54c32645d79a7801ff4ca6ebd0df01d638b14af13e4469f1d1c07d7a8d0",
+        "actualSha256": "6c5ab54c32645d79a7801ff4ca6ebd0df01d638b14af13e4469f1d1c07d7a8d0",
+        "matches": true
+      },
+      {
+        "path": "frontend/src/vite-env.d.ts",
+        "expectedSha256": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
+        "actualSha256": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5",
+        "matches": true
+      }
+    ],
+    "activeComposeSha256": "1c52c0bfc544a2b2bf4f1dcaa7d7d920e877cec3dffb47a35a2d2dff6b65b5f1",
+    "failedComposeSha256": [
+      "897b8c678bff7601bf7aacb70825db285f08283707123669a554698b1cf9f6c2"
+    ],
+    "attemptedTestArtifactCount": 24,
+    "attemptsPreserved": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "attemptArtifactsManifest": "/private/tmp/p0.6b2c-forensics/resume2-attempted-test-artifacts/manifest.json",
+    "explicitReplacementPolicy": true,
+    "pathTraversalRejected": true,
+    "implicitLastWriteWins": false,
+    "checkpointOwnershipActive": 30,
+    "supersededLineageRecords": 3
+  },
+  "topology": {
+    "path": "/private/tmp/p0.6b2c-forensics/artifact-ownership-and-topology.json",
+    "backendEntrypoint": "backend.main:app",
+    "databaseModule": "backend.database",
+    "frontendRoutes": [
+      "/login/customer",
+      "/login/manager",
+      "/customer",
+      "/manager",
+      "/customer/new",
+      "/customer/{customer_id}",
+      "/manager/{customer_id}"
+    ],
+    "loginRoute": [
+      {
+        "method": "POST",
+        "path": "/auth/login"
+      }
+    ],
+    "loginFields": [
+      "username",
+      "password"
+    ],
+    "backendApiRouteCount": 10
+  },
+  "generatedTestArtifacts": {
+    "bestAttemptIndex": 4,
+    "artifactCount": 11,
+    "artifacts": [
+      {
+        "path": "backend/requirements.txt",
+        "sha256": "bce8fbb46ee085cf1578e6b0878171b8c5c8cdcce49de07fa781b0b9ac627e26",
+        "bytes": 263
+      },
+      {
+        "path": "docker-compose.yml",
+        "sha256": "897b8c678bff7601bf7aacb70825db285f08283707123669a554698b1cf9f6c2",
+        "bytes": 1651
+      },
+      {
+        "path": "backend/tests/conftest.py",
+        "sha256": "cbc5e91b93186d34ca56f553f68172f7c7aa01b3f1e1ecd05bd9ff798ee475c2",
+        "bytes": 746
+      },
+      {
+        "path": "backend/tests/test_customer.py",
+        "sha256": "29a731b9a48ddc51ded8e55ad05483a152de7e3ad2c75c5649714997ee1f8c30",
+        "bytes": 1606
+      },
+      {
+        "path": "frontend/e2e/test_customer.js",
+        "sha256": "5d010efabb15d932f97bd243a484c4807f5ac01e6e83c23ae740bb7dab9e0a13",
+        "bytes": 1575
+      },
+      {
+        "path": "backend/tests/test_contract_manifest.json",
+        "sha256": "77ede8c35ecfb026169ced1c81d0e5b74366c38a4a317767a3a8e09f7d9ef04f",
+        "bytes": 21193
+      },
+      {
+        "path": "backend/tests/test_openapi_contract.py",
+        "sha256": "e1c02b7bd8e297659e4579b411800ff0093a696f6eb4f814fd13b311470470a7",
+        "bytes": 6113
+      },
+      {
+        "path": "backend/tests/test_customers.py",
+        "sha256": "32d4d9b6df750e2a3e5fee319c54ba399169b83dba734d63c7375b1b68286266",
+        "bytes": 1971
+      },
+      {
+        "path": "backend/tests/test_approval.py",
+        "sha256": "90c29d483add675b19fd8269baac5e973b1c5f16fbbc27b75c5a291f237b7516",
+        "bytes": 1673
+      },
+      {
+        "path": "frontend/e2e/customer-approval.spec.ts",
+        "sha256": "3f005cef56c49356024d266e00885eddde31125d75d316359a3ba21c263c8bae",
+        "bytes": 1212
+      },
+      {
+        "path": "frontend/playwright.config.ts",
+        "sha256": "d5a737ad83ea55ea95a6fa48db7178a45a459b41ec9862225110942542aeb8bb",
+        "bytes": 220
+      }
+    ],
+    "pythonAstFiles": [
+      "backend/tests/conftest.py",
+      "backend/tests/test_customer.py",
+      "backend/tests/test_openapi_contract.py",
+      "backend/tests/test_customers.py",
+      "backend/tests/test_approval.py"
+    ],
+    "pythonAstSyntaxErrors": 0,
+    "topologyPreflightIssues": [
+      "backend/tests/conftest.py imports missing local package/module 'app.main'",
+      "backend/tests/conftest.py imports missing local package/module 'app.database'",
+      "backend/tests/test_customer.py imports missing local package/module 'app'",
+      "backend/tests/test_customer.py test references undefined pytest fixture 'superuser_token_headers'",
+      "backend/tests/test_customers.py test references undefined pytest fixture 'async_session'",
+      "backend/tests/test_customers.py test references undefined pytest fixture 'test_customer'",
+      "backend/tests/test_customers.py uses asyncio pytest tests but pytest-asyncio is not declared",
+      "backend/tests/test_approval.py test references undefined pytest fixture 'async_session'",
+      "backend/tests/test_approval.py test references undefined pytest fixture 'test_customer'",
+      "backend/tests/test_approval.py test references undefined pytest fixture 'test_audit_event'",
+      "backend/tests/test_approval.py uses asyncio pytest tests but pytest-asyncio is not declared",
+      "frontend/e2e/customer-approval.spec.ts navigates to unregistered frontend route '/login'",
+      "frontend/e2e/customer-approval.spec.ts navigates to unregistered frontend route '/customers'",
+      "frontend/e2e/customer-approval.spec.ts embeds a fixed credential instead of using test-data provisioning or environment configuration"
+    ],
+    "modelReviewFindings": [
+      "Tests omitted valid customer form submission and form validation assertions.",
+      "Backend tests imported nonexistent backend.database.Session and backend.schemas.CustomerUpdate symbols.",
+      "E2E coverage omitted required persistence/reload and audit assertions."
+    ],
+    "laterAttemptRepair": {
+      "validation": "failed",
+      "issues": [
+        "backend/tests/test_customers.py imports missing symbol Session from backend.database",
+        "backend/tests/test_customers.py imports missing symbol CustomerUpdate from backend.schemas",
+        "backend/tests/test_approval.py imports missing symbol Session from backend.database",
+        "backend/tests/test_approval.py imports missing symbol CustomerUpdate from backend.schemas",
+        "browser E2E test does not verify form validation",
+        "browser E2E test does not fill and submit a real customer form",
+        "backend API tests do not cover invalid state transition",
+        "staged Build exceeded its end-to-end deadline",
+        "focused repair returned no usable in-scope file edits"
+      ]
+    }
+  },
+  "execution": {
+    "pytest": {
+      "status": "blocked_before_collection",
+      "collected": 0,
+      "executed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "collectionErrors": 0,
+      "reason": "Test topology preflight rejected the artifacts. The local Python 3.14 environment also has no pytest module installed; no generated pytest suite was launched."
+    },
+    "playwright": {
+      "status": "blocked_before_execution",
+      "specFiles": 1,
+      "collected": 0,
+      "executed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "reason": "The generated spec references unregistered /login and /customers routes and includes a fixed password. Chromium 140 was previously installed and launched successfully, but this generated suite was not run."
+    },
+    "postgresqlAcceptance": {
+      "status": "notRun",
+      "apiChecks": 0,
+      "independentDatabaseAssertions": 0,
+      "rollbackChecks": 0,
+      "concurrencyChecks": 0,
+      "reason": "Generated test artifacts failed static topology and symbol checks; no test acceptance was attempted against live services."
+    },
+    "fullStackBusinessWorkflow": {
+      "status": "notRun",
+      "reason": "Test-stage gate failed; do not infer acceptance from the earlier limited smoke test."
+    }
+  },
+  "modelInference": {
+    "readinessProbe": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+      "outcome": "success",
+      "requestId": "native-ollama-readiness-probe",
+      "prompt": "Return exactly the word READY.",
+      "response": "READY",
+      "durationMs": 19137,
+      "modelLoadDurationMs": 16358,
+      "promptTokens": 35,
+      "generatedTokens": 2
+    },
+    "buildRequests": [
+      {
+        "requestId": "aa2b0035-e210-4e80-9b2a-7f0ee0b7edf2",
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434/api/chat",
+        "modelId": "qwen2.5-coder:7b-instruct-q4_K_M",
+        "phase": "complete",
+        "durationMs": 523568,
+        "queueWaitMs": 0,
+        "serializedRequestBytes": 27545,
+        "serializedRequestSha256": "14346714d2c57b3a1424ee1d16c830b8f21508b5515d7c1349f75889a5d54e30",
+        "headersTimeoutMs": 900000,
+        "requestTimeoutMs": 1800000,
+        "timeToHeadersMs": 229425,
+        "timeToFirstTokenMs": 229444,
+        "promptTokens": 5174,
+        "generatedTokens": 41,
+        "responseBytes": 199,
+        "streaming": true,
+        "httpStatus": 200,
+        "errorCategory": null,
+        "errorCause": null,
+        "cancelled": false,
+        "deadlineExceeded": false,
+        "retryHistory": [
+          "initial-request"
+        ],
+        "ollamaLoadDurationMs": 13848,
+        "promptEvaluationDurationMs": 215354,
+        "generationDurationMs": 14293,
+        "providerTotalDurationMs": 243570,
+        "ollamaProcessCpuPercent": 76.89,
+        "ollamaCpuSeconds": 402.49,
+        "ollamaProcessRssBytes": 5648003072,
+        "hostMemoryFreePercent": 68,
+        "maxObservedStreamIdleMs": 407,
+        "streamIdleTimedOut": false
+      },
+      {
+        "requestId": "88d89a82-29a6-412b-8107-7cf48d2ac870",
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434/api/chat",
+        "modelId": "qwen2.5-coder:7b-instruct-q4_K_M",
+        "phase": "complete",
+        "durationMs": 1490863,
+        "queueWaitMs": 0,
+        "serializedRequestBytes": 28861,
+        "serializedRequestSha256": "a79ea58b4c8a487ed74e0a3e6225e3de847e0e4a328212786fc5a76ff098e30f",
+        "headersTimeoutMs": 900000,
+        "requestTimeoutMs": 2100000,
+        "timeToHeadersMs": 274529,
+        "timeToFirstTokenMs": 274537,
+        "promptTokens": 5433,
+        "generatedTokens": 891,
+        "responseBytes": 3502,
+        "streaming": true,
+        "httpStatus": 200,
+        "errorCategory": null,
+        "errorCause": null,
+        "cancelled": false,
+        "deadlineExceeded": false,
+        "retryHistory": [
+          "staged-focused-repair"
+        ],
+        "ollamaLoadDurationMs": 13843,
+        "promptEvaluationDurationMs": 260480,
+        "generationDurationMs": 326699,
+        "providerTotalDurationMs": 601216,
+        "ollamaProcessCpuPercent": 70.92,
+        "ollamaCpuSeconds": 1057.27,
+        "ollamaProcessRssBytes": 5021814784,
+        "hostMemoryFreePercent": 70,
+        "maxObservedStreamIdleMs": 1984,
+        "streamIdleTimedOut": false
+      },
+      {
+        "requestId": "43f97a79-1e4b-46ba-8023-287e8e3fb2e6",
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434/api/chat",
+        "modelId": "qwen2.5-coder:7b-instruct-q4_K_M",
+        "phase": "complete",
+        "durationMs": 1172076,
+        "queueWaitMs": 0,
+        "serializedRequestBytes": 29468,
+        "serializedRequestSha256": "b1969f6201ce3ceb6421eb5eaff57ce2c395d61a7e6f21d17373ce7e18379a71",
+        "headersTimeoutMs": 900000,
+        "requestTimeoutMs": 2100000,
+        "timeToHeadersMs": 259536,
+        "timeToFirstTokenMs": 259555,
+        "promptTokens": 5557,
+        "generatedTokens": 627,
+        "responseBytes": 2473,
+        "streaming": true,
+        "httpStatus": 200,
+        "errorCategory": null,
+        "errorCause": null,
+        "cancelled": false,
+        "deadlineExceeded": false,
+        "retryHistory": [
+          "staged-focused-repair"
+        ],
+        "ollamaLoadDurationMs": 14875,
+        "promptEvaluationDurationMs": 244400,
+        "generationDurationMs": 320982,
+        "providerTotalDurationMs": 506157,
+        "ollamaProcessCpuPercent": 15.7,
+        "ollamaCpuSeconds": 183.98,
+        "ollamaProcessRssBytes": 5011734528,
+        "hostMemoryFreePercent": 60,
+        "maxObservedStreamIdleMs": 86770,
+        "streamIdleTimedOut": false
+      }
+    ],
+    "acceptedTestContribution": {
+      "requestId": "ec651158-f1aa-4722-8786-0daa278508be",
+      "model": "qwen2.5-coder:7b-instruct-q4_K_M",
+      "sha256": "41966d1f07e29d8a3d975ed9dfaa0004d4247d01757eef6bf6c1d3103df3f4dd",
+      "reusedDuringResume": true,
+      "regenerated": false
+    },
+    "providerFallback": "none",
+    "modelChanged": false,
+    "buildRunElapsedMs": 3325291
+  },
+  "resume": {
+    "checkpointFile": "/private/tmp/p0.6b2c-resumed-checkpoint.json",
+    "checkpointHash": "ef9282451d659cdaac63ee396b5242ee38dae1e36b492182328aed8bd4eef446",
+    "checkpointCountEmitted": 3,
+    "completedStagesReused": [
+      "scaffold",
+      "database",
+      "backend",
+      "transactions",
+      "frontend"
+    ],
+    "testStageStatus": "failed",
+    "acceptedContributionPreserved": true,
+    "processLevelCheckpointReload": true,
+    "gatewayHttpServiceRestart": false,
+    "reason": "The saved checkpoint was loaded by a fresh Node runner process; the running gateway service itself was not restarted."
+  },
+  "tests": {
+    "protocolBuild": "passed",
+    "gatewayBuild": "passed",
+    "focusedGatewayTests": {
+      "passed": 123,
+      "failed": 0,
+      "skipped": 0,
+      "log": "Tool output from the focused Build/ownership/topology run; full suite log is preserved below."
+    },
+    "fullGatewaySuite": {
+      "passed": 299,
+      "failed": 0,
+      "skipped": 0,
+      "log": "/private/tmp/p0.6b2c-gateway-suite.log",
+      "durationMs": 117310.886709
+    },
+    "gitDiffCheck": "passed"
+  },
+  "manualGeneratedApplicationSourceEdits": 0,
+  "remainingBlockers": [
+    "Generated pytest files still reference nonexistent imports and fixtures.",
+    "Generated Playwright routes, credentials, and assertions do not match the application topology/contracts.",
+    "pytest and Playwright business suites have not executed.",
+    "PostgreSQL rollback, concurrency, and full workflow acceptance remain unverified.",
+    "Fresh gateway-service restart/resume remains unverified.",
+    "The test-stage model generation is slow and did not converge before the bounded Build deadline."
+  ],
+  "completionCriteria": {
+    "materializationIntegrity": true,
+    "collisionsPrevented": true,
+    "pytestAcceptance": false,
+    "playwrightAcceptance": false,
+    "rollbackAndConcurrency": false,
+    "modelContributionPreserved": true,
+    "gatewayServiceRestartResume": false,
+    "fullGatewayRegression": true,
+    "noManualApplicationSourceEdits": true
+  }
+}

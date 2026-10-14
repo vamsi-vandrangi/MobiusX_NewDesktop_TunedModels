@@ -8,6 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "echo \"Phase 1 not started yet — see docs/ARCHITECTURE.md\""
+    "dev": "echo \"Phase 1 not started yet — see docs/ARCHITECTURE.md\"",
+    "eval:report": "node evals/phase-0/report.mjs"
   }
 }

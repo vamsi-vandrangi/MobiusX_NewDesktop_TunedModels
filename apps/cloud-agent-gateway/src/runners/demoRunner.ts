@@ -1,4 +1,4 @@
-import type { ModelOption, ProposedEdit, TaskEvent } from "@mobiusx/protocol";
+import { BUILD_RESPONSE_CONTRACT_VERSION, type ModelOption, type ProposedEdit, type TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
 import { classifyPersona, PERSONAS } from "./personas.js";
 
@@ -48,7 +48,7 @@ export const demoRunner: AgentRunner = {
       else if (input.mode === "spec") edits = [demoSpecEdit(input)];
 
       if (edits.length > 0) {
-        emit({ type: "edits", edits });
+        emit({ type: "edits", edits, contractVersion: BUILD_RESPONSE_CONTRACT_VERSION });
         // Second-pass Reviewer agent (PRD §11/§46) — scripted here, same as everything else in this runner.
         const persona = classifyPersona(input.mode, edits);
         emit({

@@ -14,32 +14,49 @@
         <span class="brand-name">MobiusX</span>
       </div>
 
-      <!-- Cursor-style flat nav (2026 redesign, see docs/ARCHITECTURE.md's
-           note above the nav-projects block below) -- Knowledge, Debug,
-           Tasks, Changes, Artifacts and the classic Workspace/file-tree
-           view aren't gone, they're reachable from "More" in the topbar
-           until they're folded into the chat experience itself (chat
-           @-context, a Debug mode, an inline diff card) in the next
-           phase of this redesign. -->
+      <!-- Primary destinations stay visible here: chat for creating and
+           iterating, Workspace for editing and previewing, and Search for
+           returning to prior work. Less frequent project tools live in More. -->
       <nav id="nav">
         <button class="nav-item active" data-view="assistant"><span class="nav-icon">✎</span>New Chat</button>
+        <button class="nav-item" data-view="workspace" title="Open the code editor and live preview"><span class="nav-icon">▣</span>Workspace</button>
         <button class="nav-item" data-view="search"><span class="nav-icon">⌕</span>Search</button>
         <button class="nav-item" data-view="automations"><span class="nav-icon">⚡</span>Automations</button>
         <button class="nav-item" data-view="customize"><span class="nav-icon">◫</span>Customize</button>
       </nav>
 
+      <!-- "This PC ▾" switcher (Phase D, "Connect via SSH") -- a real remote
+           target picker: This PC (the default, local-filesystem mode every
+           other feature already assumes), any saved remote machines, and
+           "Connect via SSH…" to add a new one. Mirrors the More menu's
+           fixed outside-click/Escape-close pattern below (see renderer.js's
+           pcSwitcher block) rather than the earlier, buggier hidden-state-
+           only approach that was already fixed once for #more-menu. -->
+      <div class="nav-pc-switcher">
+        <button id="pc-switcher-btn" class="nav-pc-switcher-btn" type="button" aria-haspopup="true" aria-expanded="false">
+          <span class="nav-icon">🖥</span><span id="pc-switcher-label">This PC</span><span class="nav-pc-switcher-caret">▾</span>
+        </button>
+        <div id="pc-switcher-menu" class="pc-switcher-menu" hidden>
+          <button id="pc-switcher-this-pc-btn" class="pc-switcher-item pc-switcher-this-pc" type="button">✓ This PC</button>
+          <div class="pc-switcher-section-label">Remote Machines</div>
+          <div id="pc-switcher-targets" class="pc-switcher-targets"></div>
+          <button id="pc-switcher-connect-btn" class="pc-switcher-item pc-switcher-connect" type="button">+ Connect via SSH…</button>
+        </div>
+      </div>
+
       <div class="nav-projects">
         <div class="nav-projects-head">
           <span class="nav-section-label">Projects</span>
-          <button id="new-project-btn" class="nav-section-action" title="New Project — create a folder and scaffold an app into it">+</button>
+          <button id="new-project-btn" class="nav-section-action" type="button" aria-label="Create a new project" title="Create a project folder and start building">+ New</button>
         </div>
         <button id="open-project-btn" class="nav-projects-open-btn">Open Folder…</button>
+        <button id="clone-project-btn" class="nav-projects-open-btn">Clone Repository…</button>
         <div id="recent-projects" class="recent-list nav-recent-list"></div>
       </div>
 
       <div class="sidebar-footer">
-        <button id="sidebar-connect-github-btn" class="sidebar-connect-btn" title="Real GitHub/GitLab connect (clone, PAT auth) is coming in a follow-up pass — not wired yet">
-          <span class="nav-icon">⎇</span>Connect GitHub
+        <button id="sidebar-connect-github-btn" class="sidebar-connect-btn" title="Connect a GitHub or GitLab personal access token, for cloning private repos and pushing/pulling from an opened project">
+          <span class="nav-icon">⎇</span><span id="sidebar-connect-github-label">Connect GitHub</span>
         </button>
         <div class="sidebar-footer-row">
           <div id="user-chip-wrap">
@@ -64,24 +81,28 @@
           <button id="theme-toggle-btn" class="theme-toggle-btn" title="Switch theme" type="button">◐</button>
         </div>
 
-        <div id="agent-indicator" class="agent-indicator">
-          <span id="agent-dot" class="dot"></span>
-          <div>
-            <div class="agent-label">Local Agent</div>
-            <div id="agent-substatus" class="agent-substatus">Connecting…</div>
-          </div>
-        </div>
       </div>
     </aside>
 
     <div id="main">
       <header id="topbar">
         <span id="project-chip-label" class="project-chip-label">No project open</span>
+        <!-- Observation: "No info on Right top: Changes <no of files>, ...".
+             Real, git-status-backed count -- hidden until a git repo is open
+             AND has at least one uncommitted change, never a fabricated
+             number. See renderer.js's refreshChangesBadge(). -->
+        <button id="changes-badge" class="changes-badge" hidden title="Uncommitted changes in this project — click to review"></button>
         <div class="topbar-spacer"></div>
+        <div id="agent-indicator" class="agent-indicator" role="status" aria-live="polite" title="Local agent connection status">
+          <span id="agent-dot" class="dot"></span>
+          <div>
+            <div class="agent-label">Local Agent</div>
+            <div id="agent-substatus" class="agent-substatus">Connecting…</div>
+          </div>
+        </div>
         <div id="more-menu-wrap">
-          <button id="more-menu-btn" class="icon-btn" title="Workspace, Tasks, Debug, Changes, Artifacts, Knowledge">⋯ More</button>
+          <button id="more-menu-btn" class="icon-btn" title="Tasks, Debug, Changes, Artifacts, Knowledge">⋯ More</button>
           <div id="more-menu" class="more-menu" hidden>
-            <button class="more-menu-item" data-view-link="workspace">Workspace</button>
             <button class="more-menu-item" data-view-link="knowledge">Knowledge</button>
             <button class="more-menu-item" data-view-link="tasks">Tasks</button>
             <button class="more-menu-item" data-view-link="debug">Debug &amp; Fix</button>
@@ -89,13 +110,6 @@
             <button class="more-menu-item" data-view-link="artifacts">Artifacts</button>
           </div>
         </div>
-        <div id="org-switcher" class="org-switcher" title="Workspace/org switching isn't built yet — visual placeholder for the single-user setup this app runs today">
-          <span class="org-switcher-name" id="org-switcher-name">—</span>
-          <span class="org-switcher-caret">▾</span>
-        </div>
-        <button id="notif-btn" class="icon-btn" title="Notifications aren't wired up yet — visual placeholder">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-        </button>
       </header>
 
       <main id="content">
@@ -107,16 +121,75 @@
              in place rather than deleted — revisit if it's wanted back). -->
         <section class="view" id="view-assistant">
           <div class="assistant-panel assistant-panel--full" id="assistant-full"></div>
+
+          <!-- Right pane (Phase B): Browser / Changelog / Docs, plus a 4th
+               "Live" tab that appears while a task is generating and mirrors
+               the same step checklist/output the main feed already shows
+               (see createAssistantPanel's addStreamingMsg mirrorEl option).
+               Hidden by default; opened via the titlebar's ⊞ toggle or
+               automatically when a task starts running. Reuses the exact
+               same generic initPaneResize() mechanism #workspace already
+               uses -- just a new .pane-resize-handle target, zero JS
+               changes to the resize logic itself. -->
+          <div class="pane-resize-handle" data-resize-target="assistant-right-pane" data-resize-reverse title="Drag to resize" id="assistant-right-pane-handle" hidden></div>
+          <div id="assistant-right-pane" hidden>
+            <div id="right-pane-tabs">
+              <button class="right-pane-tab active" data-right-tab="browser">Browser</button>
+              <button class="right-pane-tab" data-right-tab="changelog">Changelog</button>
+              <button class="right-pane-tab" data-right-tab="docs">Docs</button>
+              <button class="right-pane-tab" data-right-tab="generation" id="right-pane-gen-tab" hidden>● Live</button>
+              <button id="right-pane-close-btn" title="Close panel">✕</button>
+            </div>
+            <div class="right-pane-body">
+              <div class="right-pane-panel" id="right-pane-browser">
+                <div class="right-pane-browser-bar">
+                  <input id="right-pane-browser-url" placeholder="Enter a URL and press Enter…" />
+                  <button id="right-pane-browser-go">Go</button>
+                </div>
+                <!-- General-purpose, arbitrary-URL scratch browser -- sandboxed
+                     like the trusted preview webview, but deliberately on a
+                     DIFFERENT, non-persistent partition. Mixing arbitrary
+                     external sites into the same storage/cookie jar as the
+                     project's own trusted local dev-server preview would be
+                     a real isolation downgrade, not just a style choice;
+                     omitting the "persist:" prefix also means this partition
+                     is in-memory and cleared on every app restart. -->
+                <!-- No initial src attribute on purpose: a literal
+                     src="about:blank" here makes Electron's guest-view
+                     manager throw a harmless but noisy repeated
+                     ERR_ABORTED(-3) loading 'about:blank' during the
+                     webview's own attach handshake, every time the app
+                     launches, well before the user ever asks for this
+                     panel. Leaving src unset means nothing navigates
+                     until navigateBrowser() below sets a real URL. -->
+                <webview
+                  id="right-pane-webview"
+                  sandbox="true"
+                  partition="general-browser"
+                ></webview>
+              </div>
+              <div class="right-pane-panel" id="right-pane-changelog" hidden>
+                <div class="debug-empty">Click the Changelog tab to load real GitHub releases for this repo.</div>
+              </div>
+              <div class="right-pane-panel" id="right-pane-docs" hidden></div>
+              <div class="right-pane-panel" id="right-pane-generation" hidden>
+                <div class="debug-empty">Nothing running right now — this tab lights up automatically while a task is generating.</div>
+              </div>
+            </div>
+          </div>
         </section>
 
-        <!-- SEARCH — real, not a stub: filters Recent Projects + live Tasks
-             (GET /tasks, already real) by text. Full chat-history search
-             isn't built (there's no persisted chat history yet, see
-             createAssistantPanel's own doc comment on historyTurns being
-             in-memory only) -- labeled honestly below rather than faked. -->
+        <!-- SEARCH — real, not a stub: filters Recent Chats (threads --
+             Pillar 3's /threads store), Recent Projects, and live Tasks
+             (GET /tasks, already real) by text. Clicking a Chats row
+             re-opens that exact past conversation in New Chat (see
+             renderer.js's loadThread) -- this is the thread-list/history
+             browser the "New Chat" reset work always implied needing. -->
         <section class="view" id="view-search" hidden>
           <h2>Search</h2>
-          <input id="global-search-input" type="text" placeholder="Search projects and tasks…" class="global-search-input" />
+          <input id="global-search-input" type="text" placeholder="Search chats, projects, and tasks…" class="global-search-input" />
+          <h3 class="section-title">Chats</h3>
+          <div id="global-search-chats" class="recent-list"></div>
           <h3 class="section-title">Projects</h3>
           <div id="global-search-projects" class="recent-list"></div>
           <h3 class="section-title">Tasks</h3>
@@ -171,7 +244,7 @@
                 <div id="project-context-results" hidden></div>
               </div>
               <h3>Explorer</h3>
-              <div id="file-tree"><div class="debug-empty">Open a project to see its files.</div></div>
+            <div id="file-tree"><div class="debug-empty">Open a project to see its files.</div></div>
             </div>
 
             <!-- Resizable 3-pane workspace: drag to grow/shrink the file
@@ -182,34 +255,105 @@
 
             <div id="center-panel">
               <div id="tabs-bar"></div>
-              <div id="editor-panel" class="panel">
-                <pre id="editor-content">Open a project, then select a file.</pre>
-              </div>
-              <div id="editor-statusbar" class="editor-statusbar" hidden></div>
 
-              <!-- LIVE PREVIEW (item 6, phase 2) -- a real dev server for the
-                   open project, spawned by desktop-agent (see previewOps.ts),
-                   shown in an embedded <webview>. Nothing runs until you
-                   click Start Preview; a project with no recognizable
-                   frontend/backend says so honestly instead of faking it. -->
-              <div id="preview-bar">
-                <button id="preview-toggle">▸ Preview</button>
-              </div>
-              <div id="preview-panel" class="panel collapsed">
-                <div id="preview-toolbar">
-                  <button id="preview-start-btn">Start Preview</button>
-                  <button id="preview-stop-btn" hidden>Stop Preview</button>
-                  <button id="preview-back-btn" title="Back" disabled>◂</button>
-                  <button id="preview-forward-btn" title="Forward" disabled>▸</button>
-                  <button id="preview-reload-btn" title="Reload" disabled>↻</button>
-                  <input id="preview-url-input" placeholder="Preview URL appears here once a dev server is running" disabled />
-                  <button id="preview-open-browser-btn" title="Open in your default browser" disabled>⧉</button>
+              <!-- Monaco (left) and the live preview webview (right) share a
+                   split container. Default is a plain vertical stack,
+                   identical to the pre-split layout (editor, statusbar,
+                   preview bar, preview panel in that order) -- #split-toggle
+                   switches #editor-preview-split to a 50/50 side-by-side row
+                   so the two can be viewed together. See initPreviewSplit()
+                   in renderer.js. -->
+              <div id="editor-preview-split">
+                <div id="editor-column">
+                  <div id="editor-panel" class="panel">
+                    <div id="monaco-host"></div>
+                    <div id="editor-empty-state" class="workspace-empty">
+                      <div class="workspace-empty-icon">{ }</div>
+                      <strong>No file open</strong>
+                      <span>Choose a file in Explorer, or open a folder or create a project to begin.</span>
+                      <div class="workspace-empty-actions">
+                        <button id="workspace-open-project-cta" type="button">Open Folder</button>
+                        <button id="workspace-new-project-cta" type="button">New Project</button>
+                      </div>
+                      <small>Then choose Build in New Chat to generate code, review the proposed files, and apply them.</small>
+                    </div>
+                  </div>
+                  <div id="editor-statusbar" class="editor-statusbar" hidden></div>
+
+                  <!-- Dev-server console drawer (Oct 2026) -- NOT the existing
+                       #terminal-panel/#terminal-xterm below (that's a real
+                       interactive shell, full-width, driven by its own PTY
+                       over desktop-agent's terminalWs.ts). This is a
+                       read-only live tail of whatever "Start Preview"
+                       spawned (npm run dev / uvicorn), fed by
+                       previewWatcher.js's "terminal:log-stream" IPC pushes
+                       -- see initDevConsole() in renderer.js. Collapsed by
+                       default, same toggle-bar pattern as #terminal-bar/
+                       #preview-bar above. -->
+                  <div id="dev-console-bar">
+                    <button id="dev-console-toggle">▸ Console</button>
+                    <span id="dev-console-hint" class="scope-note-small">Live output from Start Preview's dev server(s)</span>
+                    <button id="dev-console-clear" title="Clear console">Clear</button>
+                  </div>
+                  <div id="dev-console-panel" class="panel collapsed">
+                    <pre id="dev-console-output"></pre>
+                  </div>
                 </div>
-                <div id="preview-status-text" class="scope-note-small"></div>
-                <pre id="preview-log" class="preview-log" hidden></pre>
-                <div id="preview-body">
-                  <webview id="preview-webview" src="about:blank"></webview>
-                  <div id="preview-empty">Click "Start Preview" to detect and run this project's dev server(s) — nothing starts until you do.</div>
+
+                <!-- LIVE PREVIEW (item 6, phase 2) -- a real dev server for the
+                     open project, spawned by desktop-agent (see previewOps.ts),
+                     shown in an embedded, sandboxed, partitioned <webview>.
+                     Nothing runs until you click Start Preview; a project with
+                     no recognizable frontend/backend says so honestly instead
+                     of faking it. -->
+                <div id="preview-column">
+                  <div id="preview-bar">
+                    <button id="preview-toggle">▸ Preview</button>
+                    <button id="preview-split-toggle" title="View Preview side-by-side with the editor">⬓ Split</button>
+                    <button id="preview-focus-toggle" title="Expand the live preview to fill the workspace" aria-pressed="false">⛶ Focus Preview</button>
+                  </div>
+                  <div id="preview-panel" class="panel collapsed">
+                    <div id="preview-toolbar">
+                    <button id="preview-start-btn" title="Starts this project's local dev server. No model call or AI tokens are used.">Start Preview · Free</button>
+                      <button id="preview-stop-btn" hidden>Stop Preview</button>
+                      <button id="preview-back-btn" title="Back" disabled>◂</button>
+                      <button id="preview-forward-btn" title="Forward" disabled>▸</button>
+                      <button id="preview-reload-btn" title="Reload" disabled>↻</button>
+                      <input id="preview-url-input" placeholder="Preview URL appears here once a dev server is running" disabled />
+                      <button id="preview-open-browser-btn" title="Open in your default browser" disabled>⧉</button>
+                    </div>
+                    <div id="preview-status-text" class="scope-note-small"></div>
+                    <pre id="preview-log" class="preview-log" hidden></pre>
+                    <div id="preview-body">
+                      <!-- sandbox + a dedicated, in-memory partition so
+                           project previews do not persist cookies,
+                           localStorage, or service workers after MobiusX
+                           closes. The desktop app also clears this session
+                           whenever a project preview changes, so a reused
+                           localhost port cannot serve the prior app's cache.
+                           This partition never shares storage/cookies with
+                           the general-purpose right-pane browser webview
+                           below (that uses its own "general-browser"
+                           partition), and it inherits the window's
+                           webSecurity (never disabled) rather than opting
+                           out of it. -->
+                      <!-- No initial src attribute, same reason as
+                           right-pane-webview above: a static
+                           src="about:blank" makes Electron spam
+                           ERR_ABORTED(-3) loading 'about:blank' into the
+                           console on every launch, before Start Preview
+                           is ever clicked. renderPreviewStatus's "first
+                           known URL" check (renderer.js) now treats a
+                           missing src attribute the same as an explicit
+                           "about:blank" one. -->
+                      <webview
+                        id="preview-webview"
+                        sandbox="true"
+                        partition="project-preview"
+                      ></webview>
+                      <div id="preview-empty">Click "Start Preview" to detect and run this project's dev server(s) — nothing starts until you do.</div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -228,7 +372,9 @@
               </div>
             </div>
 
-            <div class="pane-resize-handle" data-resize-target="assistant-embedded" data-resize-reverse title="Drag to resize"></div>
+            <div class="pane-resize-handle" data-resize-target="assistant-embedded" data-resize-reverse title="Drag to resize">
+              <button class="pane-collapse-toggle" id="assistant-collapse-toggle" type="button" title="Collapse AI Assistant panel">›</button>
+            </div>
             <div class="assistant-panel" id="assistant-embedded"></div>
           </div>
         </section>
@@ -571,6 +717,38 @@
 
             <div class="settings-section">
               <div class="settings-section-head">
+                <h3>Task notifications</h3>
+                <button id="task-sound-test" class="refresh-btn" type="button">Play sample</button>
+              </div>
+              <label class="terminal-approval-mode-option">
+                <input id="task-sound-enabled" type="checkbox" checked />
+                Play a short sound when a task finishes or fails
+              </label>
+              <label class="terminal-approval-mode-option">
+                <input id="task-desktop-notifications" type="checkbox" />
+                Show a desktop notification when MobiusX is in the background
+              </label>
+              <span id="task-notification-status" class="terminal-approval-mode-status"></span>
+              <p class="scope-note-small">The sound is generated locally. It does not make a model request or use tokens.</p>
+            </div>
+
+            <div class="settings-section" id="settings-model-keys-section">
+              <div class="settings-section-head">
+                <h3>AI Model Provider Keys</h3>
+              </div>
+              <p class="scope-note-small">
+                Paste your own API key for a provider below to make its models available for Ask/Plan/Build
+                and every other mode. Keys are typed here and encrypted at rest with your OS keychain.
+                For routing services such as OpenRouter, xKiro, and APInex, prompts and project context
+                are sent through that service to its upstream model provider. Review both services' data
+                policies before using private code. Saved keys take effect the next time this app starts.
+              </p>
+              <div id="model-key-rows" class="model-key-rows"></div>
+              <span id="model-keys-status" class="terminal-approval-mode-status"></span>
+            </div>
+
+            <div class="settings-section">
+              <div class="settings-section-head">
                 <h3>Default AI Model</h3>
                 <button id="model-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
               </div>
@@ -633,6 +811,37 @@
                 <button id="steering-new-btn" class="refresh-btn">Add file</button>
               </div>
               <span id="steering-status" class="terminal-approval-mode-status"></span>
+            </div>
+
+            <!-- Assistant Memory (Oct 2026 addition) -- the top-priority gap found
+                 when comparing MobiusX's AI Assistant against Claude Chat/Code
+                 directly: cross-session, cross-PROJECT memory of the user
+                 (unlike Project Steering above, which is per-project and only
+                 about the CODE's conventions). Mirrors Project Steering's own
+                 markup/behavior, minus any "open a project first" gating. -->
+            <div class="settings-section">
+              <div class="settings-section-head">
+                <h3>Assistant Memory <span class="status-text">(cross-session, cross-project)</span></h3>
+                <button id="memory-refresh-btn" class="refresh-btn" title="Refresh">↻ Refresh</button>
+              </div>
+              <p class="scope-note-small">
+                Durable facts the AI Assistant remembers about YOU across every project and every future
+                session — stated preferences for how you like to work, your role, recurring conventions —
+                stored under <code>~/.mobiusx/memory/</code> and consulted automatically on every request,
+                in every mode, with or without a project open. Edit these files directly any time, or turn
+                on "Memory Mode" below to let the assistant add to them itself after a completed task.
+                Nothing here is ever generated without a review trail — automatic additions are plain,
+                readable markdown lines you can edit or delete like anything else in this list.
+              </p>
+              <div id="memory-file-list" class="steering-file-list memory-file-list"></div>
+              <div class="steering-file-actions">
+                <button id="memory-scaffold-btn" class="refresh-btn">Create default templates</button>
+              </div>
+              <div class="steering-new-row">
+                <input id="memory-new-name" type="text" placeholder="new-file-name (e.g. topic-database)" />
+                <button id="memory-new-btn" class="refresh-btn">Add file</button>
+              </div>
+              <span id="memory-status" class="terminal-approval-mode-status"></span>
             </div>
 
             <div class="settings-section">
@@ -704,12 +913,12 @@
             <div class="settings-section">
               <h3>Autonomous Fix Loop <span class="status-text">(autonomy level)</span></h3>
               <p class="scope-note-small">
-                "Manual" (default) — each Diagnose &amp; Fix cycle's proposed edits still require an
-                explicit Apply click, same as any other task. "Auto" — after you click Diagnose &amp; Fix
-                the first time, the desktop shell applies that fix, re-runs verification, and (if still
-                failing) diagnoses again automatically, up to 3 attempts, then stops and reports an
-                honest "still failing" result rather than looping forever. Takes effect on your very
-                next Diagnose &amp; Fix click — no reconnect needed.
+                Every successful local Apply runs available verification scripts and starts or reuses the
+                project's frontend/backend preview, installing declared dependencies when needed. "Manual"
+                (default) shows failures and waits for you to click Diagnose &amp; Fix and Apply each repair.
+                "Auto" starts the bounded repair loop after a failed build, test, preview, or browser check, applies proposed fixes,
+                and re-verifies up to 3 attempts before reporting that the project still fails. Takes
+                effect on the next Apply or Diagnose &amp; Fix action — no reconnect needed.
               </p>
               <div class="terminal-approval-mode-options">
                 <label class="terminal-approval-mode-option">
@@ -723,6 +932,36 @@
               </div>
               <div class="terminal-approval-mode-footer">
                 <span id="fix-loop-mode-status" class="terminal-approval-mode-status"></span>
+              </div>
+            </div>
+
+            <!-- Assistant Memory's automatic-extraction toggle (Oct 2026 addition) --
+                 mirrors Autonomous Fix Loop's off/auto shape directly above. Reading
+                 memory back into every prompt (see the Assistant Memory section
+                 above) is ALWAYS on; this only controls whether the assistant may
+                 also WRITE to it automatically after a completed task. -->
+            <div class="settings-section">
+              <h3>Memory Mode <span class="status-text">(automatic learning)</span></h3>
+              <p class="scope-note-small">
+                "Off" (default) — the assistant only ever reads what's in Assistant Memory above; it never
+                writes to it on its own. "Auto" — after a Build/Fix/Spec/Database/Architecture/Testing/
+                DevOps/Auth task with real file changes completes, the assistant makes one extra pass
+                looking for durable facts you stated (a preference, a convention, a correction) — never
+                one-off task specifics — and appends any it finds to the relevant file above, where you
+                can review, edit, or delete them at any time.
+              </p>
+              <div class="terminal-approval-mode-options">
+                <label class="terminal-approval-mode-option">
+                  <input type="radio" name="memory-mode" value="off" />
+                  Off — read only, never writes automatically
+                </label>
+                <label class="terminal-approval-mode-option">
+                  <input type="radio" name="memory-mode" value="auto" />
+                  Auto — learn durable facts after completed tasks
+                </label>
+              </div>
+              <div class="terminal-approval-mode-footer">
+                <span id="memory-mode-status" class="terminal-approval-mode-status"></span>
               </div>
             </div>
 
@@ -794,6 +1033,90 @@
     </div>
   </div>
 
+  <!-- CLONE REPOSITORY MODAL — Phase C item 1: clone a real remote repo via
+       desktop-agent's POST /git/clone, then open it exactly like New
+       Project does. If a saved token exists for the URL's host (see the
+       Connect GitHub/GitLab modal below), it's used automatically and the
+       PAT field is hidden; otherwise the field is offered but optional
+       (a public repo needs no token at all). -->
+  <div id="clone-project-modal" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <h3>Clone Repository</h3>
+      <p id="clone-project-location" class="scope-note-small"></p>
+      <input id="clone-project-url-input" placeholder="Repository URL, e.g. https://github.com/org/repo.git" />
+      <input id="clone-project-name-input" placeholder="Folder name (defaults to the repo name)" />
+      <div id="clone-project-saved-token-note" class="scope-note-small" hidden></div>
+      <input id="clone-project-pat-input" type="password" placeholder="Personal access token (optional — only needed for a private repo)" />
+      <div id="clone-project-error" class="modal-error" hidden></div>
+      <div class="modal-actions">
+        <button id="clone-project-cancel-btn" class="refresh-btn">Cancel</button>
+        <button id="clone-project-clone-btn" class="send-btn">Clone</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONNECT GITHUB/GITLAB MODAL — Phase C item 2: a personal access token,
+       stored via main.js's safeStorage-backed git-credentials.enc (never in
+       the plain-JSON ~/.mobiusx/settings.json). This is a real, working
+       credential entry a token, not an OAuth "Sign in with GitHub" consent
+       screen (that needs a registered OAuth app -- a separate, account-level
+       task; see the plan's scope notes). -->
+  <div id="connect-git-modal" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <h3>Connect GitHub / GitLab</h3>
+      <p class="scope-note-small">Stored encrypted on this machine via your OS keychain — used to clone private repos and authenticate git pushes/pulls. Not an OAuth sign-in; paste a personal access token.</p>
+      <div class="connect-git-provider-row">
+        <label class="connect-git-provider-opt"><input type="radio" name="connect-git-provider" value="github" checked /> GitHub</label>
+        <label class="connect-git-provider-opt"><input type="radio" name="connect-git-provider" value="gitlab" /> GitLab</label>
+      </div>
+      <input id="connect-git-host-input" placeholder="Host, e.g. github.com" value="github.com" />
+      <input id="connect-git-pat-input" type="password" placeholder="Personal access token" />
+      <div id="connect-git-error" class="modal-error" hidden></div>
+      <div id="connect-git-saved-list" class="connect-git-saved-list"></div>
+      <div class="modal-actions">
+        <button id="connect-git-close-btn" class="refresh-btn">Close</button>
+        <button id="connect-git-save-btn" class="send-btn">Save Token</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONNECT VIA SSH MODAL — Phase D: opens a real SSH connection + SFTP
+       session via desktop-agent's POST /remote/connect (see
+       remoteConnection.ts), then opens the resolved remote directory
+       exactly like Open Folder/Clone Repository do for a local one.
+       Connection details (and, if "Save" is checked, any password/key
+       passphrase) are stored via main.js's safeStorage-backed
+       ssh-targets.enc -- never in the plain-JSON ~/.mobiusx/settings.json,
+       same precedent as Connect GitHub/GitLab's PAT storage above. No
+       known_hosts verification yet -- only connect to machines you trust
+       the network path to (see remoteConnection.ts's doc comment). -->
+  <div id="connect-ssh-modal" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <h3>Connect via SSH</h3>
+      <p class="scope-note-small">Opens a real remote terminal and a real remote file tree over SFTP. Connection details stay on this machine, encrypted via your OS keychain if you save them. No known-hosts verification yet — only connect to machines you trust.</p>
+      <input id="connect-ssh-label-input" placeholder="Label (optional), e.g. Staging box" />
+      <div class="connect-ssh-row">
+        <input id="connect-ssh-host-input" placeholder="Host, e.g. 192.168.1.20 or my-server.com" />
+        <input id="connect-ssh-port-input" placeholder="Port" value="22" />
+      </div>
+      <input id="connect-ssh-username-input" placeholder="Username" />
+      <div class="connect-git-provider-row">
+        <label class="connect-git-provider-opt"><input type="radio" name="connect-ssh-auth" value="key" checked /> Private key</label>
+        <label class="connect-git-provider-opt"><input type="radio" name="connect-ssh-auth" value="password" /> Password</label>
+        <label class="connect-git-provider-opt"><input type="radio" name="connect-ssh-auth" value="agent" /> SSH agent / default key</label>
+      </div>
+      <input id="connect-ssh-identity-input" placeholder="Identity file path, e.g. ~/.ssh/id_rsa" />
+      <input id="connect-ssh-secret-input" type="password" placeholder="Password or key passphrase (optional for a key)" hidden />
+      <input id="connect-ssh-path-input" placeholder="Remote folder to open (optional — defaults to your home directory)" />
+      <label class="connect-ssh-save-row"><input id="connect-ssh-save-checkbox" type="checkbox" checked /> Save this connection for next time</label>
+      <div id="connect-ssh-error" class="modal-error" hidden></div>
+      <div class="modal-actions">
+        <button id="connect-ssh-cancel-btn" class="refresh-btn">Cancel</button>
+        <button id="connect-ssh-connect-btn" class="send-btn">Connect</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Real sign-in -- see main.js's device-login block and
        backend/app/api/device_auth.py for the full flow. Shown at launch
        whenever there's no valid stored session; hidden the moment one
@@ -838,6 +1161,14 @@
   <script src="vendor/diff.min.js"></script>
   <script src="vendor/marked.umd.js"></script>
   <script src="vendor/mermaid.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+  <!-- Monaco's AMD loader installs a GLOBAL define()/require() the instant
+       it runs -- every library above is a UMD build that checks for an AMD
+       loader and, if one's already present, registers itself as an
+       anonymous module instead of attaching its usual window global. So
+       this has to stay the LAST vendor script, right before renderer.js --
+       see vendor/README.md's "Script-order hazard" note. -->
+  <script src="vendor/monaco/vs/loader.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -1,7 +1,8 @@
-import type { ModelOption, ProposedEdit, TaskEvent } from "@mobiusx/protocol";
+import { BUILD_RESPONSE_CONTRACT_VERSION, type ModelOption, type ProposedEdit, type TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
-import { EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
+import { createStructuredProseStreamer, EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
 import { parseReview, runPersonaReview } from "./personas.js";
+import { maybeExtractAssistantMemory } from "./memoryExtraction.js";
 import { listAllTools, callMcpTool, toAnthropicToolDefs } from "@mobiusx/mcp-client";
 import { contextWindowFor } from "./contextWindows.js";
 
@@ -62,7 +63,7 @@ export const anthropicRunner: AgentRunner = {
     emit({ type: "status", status: "running" });
     const step = {
       id: stepId(),
-      label: "Streaming response from Anthropic API",
+      label: `Generating response with Anthropic (${model})`,
       status: "in_progress" as const,
       startedAt: new Date().toISOString(),
     };
@@ -84,14 +85,54 @@ export const anthropicRunner: AgentRunner = {
       const mcpTools =
         input.mode === "build" || input.mode === "fix" ? await listAllTools(input.projectContext?.projectPath ?? null) : [];
 
-      const finishStructuredEdits = async (fullText: string, sawText: boolean): Promise<void> => {
+      const finishStructuredEdits = async (fullText: string, sawText: boolean, streamedProse = ""): Promise<void> => {
         if (!sawText) {
           emit({ type: "output", delta: "(model returned no text content)" });
           return;
         }
-        const { prose, edits, droppedCount } = parseBuildResponse(fullText, input);
-        emit({ type: "output", delta: prose || fullText });
-        if (edits.length > 0) emit({ type: "edits", edits });
+        let { prose, edits, droppedCount, parseFailed } = parseBuildResponse(fullText, input);
+
+        // One narrowly-scoped retry, same spirit as the other runners'
+        // retryForEdits (this runner had none at all before this fix --
+        // see parseFailed's doc comment in promptShared.ts for the live
+        // failure this closes). Handing the model its own truncated/
+        // unparseable prior answer plus one explicit instruction to finish
+        // the block properly recovers the common case: the model had the
+        // right content, it just ran out of room or malformed the closing
+        // fence.
+        let retried = false;
+        if (parseFailed) {
+          retried = true;
+          const retry = await retryAnthropicForEdits(apiKey, model, systemPrompt, input, fullText);
+          if (retry) {
+            if (retry.prose) prose = retry.prose;
+            edits = retry.edits;
+            droppedCount = retry.droppedCount;
+            parseFailed = retry.parseFailed;
+          }
+        }
+
+        if (!streamedProse) {
+          // If the marker starts the response, fullText contains only the
+          // machine-readable edit bundle. Never dump it into the chat when
+          // there is no user-facing prose prefix.
+          const hadMarker = fullText.includes(EDITS_MARKER);
+          const visibleText = prose || (hadMarker ? "" : fullText);
+          if (visibleText) emit({ type: "output", delta: visibleText });
+        }
+        else if (retried && prose && prose.trim() !== streamedProse.trim()) {
+          emit({ type: "output", delta: `\n\nUpdated response after retry:\n${prose}` });
+        }
+        if (edits.length > 0) emit({ type: "edits", edits, contractVersion: BUILD_RESPONSE_CONTRACT_VERSION });
+        if (parseFailed) {
+          // Honest and specific, not the generic "0 edits omitted" count
+          // (there's no per-edit count to give -- the whole block failed
+          // to parse) and never mislabeled as a clarifying question.
+          emit({
+            type: "output",
+            delta: `\n\n(This response included the file-edit marker${retried ? ", even after asking again," : ""} but the JSON that followed it didn't parse — almost always because the response was cut off before the JSON finished. No files were changed. Try again, or ask for a smaller/more focused change.)`,
+          });
+        }
         if (droppedCount > 0) {
           emit({
             type: "output",
@@ -114,15 +155,25 @@ export const anthropicRunner: AgentRunner = {
             input.mode === "devops" ||
             input.mode === "auth" ||
             input.mode === "spec") &&
+          (!input.stagedBuild || input.stagedBuild.final) &&
           edits.length > 0
         ) {
           await runPersonaReview(input.mode, input, edits, emit, (systemPrompt, userContent) => callAnthropicNonStreamed(apiKey, model, systemPrompt, userContent, input.signal));
         }
+        // Assistant Memory's automatic-extraction call (Oct 2026 addition) —
+        // see memoryExtraction.ts's module doc comment for why this is
+        // deliberately wired at the same call site as runPersonaReview just
+        // above, reusing its exact callModel closure. No-ops unless the
+        // user has turned AgentSettings.memoryMode to "auto".
+        await maybeExtractAssistantMemory(input, prose || fullText, edits, (systemPrompt, userContent) =>
+          callAnthropicNonStreamed(apiKey, model, systemPrompt, userContent, input.signal),
+        );
       };
 
       if (mcpTools.length > 0) {
-        const { fullText, sawText } = await runToolUseLoop(apiKey, model, systemPrompt, input, mcpTools, emit);
-        await finishStructuredEdits(fullText, sawText);
+        const publicProse = createStructuredProseStreamer((delta) => emit({ type: "output", delta }));
+        const { fullText, sawText } = await runToolUseLoop(apiKey, model, systemPrompt, input, mcpTools, emit, publicProse);
+        await finishStructuredEdits(fullText, sawText, publicProse.finish());
       } else {
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
@@ -134,7 +185,7 @@ export const anthropicRunner: AgentRunner = {
           },
           body: JSON.stringify({
             model,
-            max_tokens: 4096,
+            max_tokens: maxTokensFor(input.mode),
             system: systemPrompt,
             messages: [...historyMessages(input), { role: "user", content: input.prompt }],
             stream: true,
@@ -155,14 +206,16 @@ export const anthropicRunner: AgentRunner = {
         };
         if (MODES_WITH_STRUCTURED_EDITS.has(input.mode)) {
           let fullText = "";
+          const publicProse = createStructuredProseStreamer((delta) => emit({ type: "output", delta }));
           const sawText = await streamSse(
             res.body,
             (delta) => {
               fullText += delta;
+              publicProse.push(delta);
             },
             onUsage,
           );
-          await finishStructuredEdits(fullText, sawText);
+          await finishStructuredEdits(fullText, sawText, publicProse.finish());
         } else {
           const sawText = await streamSse(res.body, (delta) => emit({ type: "output", delta }), onUsage);
           if (!sawText) emit({ type: "output", delta: "(model returned no text content)" });
@@ -217,6 +270,37 @@ type AnthropicContentBlock =
 
 const MAX_TOOL_ITERATIONS = 6;
 
+// Root cause, confirmed live Oct 2026 via the raw-SSE-event diagnostic
+// above: every build-mode call used the same flat max_tokens: 4096 as
+// plain chat modes (ask/plan), regardless of how much the model actually
+// needed to write. A real multi-file response -- several Next.js pages,
+// a FastAPI backend split across modules, a seed script, all encoded as
+// a single JSON "edits" array -- routinely needs far more than 4096
+// output tokens, and when the model hits that ceiling mid-response
+// Anthropic's API just stops: stop_reason "max_tokens", whatever text
+// streamed before the cutoff (sometimes substantial, sometimes barely a
+// paragraph -- that part varies response to response) is ALL there is,
+// no EDITS_MARKER, no edits, nothing applied. completionTokens landing
+// exactly on 4096 was the tell both times this was reproduced live.
+// Scoped to MODES_WITH_STRUCTURED_EDITS specifically (build/fix/database/
+// architecture/testing/devops/auth/spec) rather than raised for every
+// mode: those are the modes that write real file content and can
+// legitimately need this much room; ask/plan stay at the smaller,
+// cheaper budget since they're meant to be conversational replies, not
+// file dumps.
+//
+// A real Employee Payroll build on 2026-10-07 exhausted exactly 32,000
+// completion tokens on claude-sonnet-4-5-20250929 and left an incomplete
+// edit bundle, so the automatic repair call also failed to produce files.
+// This model supports up to 64K output tokens; using that ceiling gives
+// multi-file builds room to finish while still allowing shorter answers to
+// stop naturally as soon as they are complete.
+const STRUCTURED_EDITS_MAX_TOKENS = 64_000;
+const CHAT_MAX_TOKENS = 4096;
+function maxTokensFor(mode: RunnerInput["mode"]): number {
+  return MODES_WITH_STRUCTURED_EDITS.has(mode) ? STRUCTURED_EDITS_MAX_TOKENS : CHAT_MAX_TOKENS;
+}
+
 /**
  * Broader MCP tool support (source requirement §28): a real, non-streamed
  * multi-turn Anthropic Messages API tool-use loop. Each iteration hands
@@ -232,14 +316,10 @@ const MAX_TOOL_ITERATIONS = 6;
  * in its last turn, same honest "partial" framing verify.ts/hooks.ts use
  * for a timed-out step rather than pretending it finished cleanly.
  *
- * Not streamed (unlike the plain path in `run()` above) because a
- * tool-use turn's content is a structured array of blocks that has to be
- * inspected as a whole to find tool_use entries — there's no meaningful
- * way to stream "the model is 40% through deciding whether to call a
- * tool." Only build/fix mode ever reaches this function (see the mode
- * check in `run()`), and only when the project actually has ≥1 connected
- * MCP server, so the vast majority of tasks never pay a streaming-vs-not
- * trade-off at all.
+ * Uses Anthropic's SSE stream for every tool-enabled turn. Public text is
+ * forwarded as it arrives (through the structured-output prose filter),
+ * while tool_use JSON is buffered until the block is complete so it can be
+ * safely validated and executed. Private reasoning blocks are never emitted.
  */
 async function runToolUseLoop(
   apiKey: string,
@@ -248,6 +328,7 @@ async function runToolUseLoop(
   input: RunnerInput,
   mcpTools: Parameters<typeof toAnthropicToolDefs>[0],
   emit: (event: TaskEvent) => void,
+  publicProse: ReturnType<typeof createStructuredProseStreamer>,
 ): Promise<{ fullText: string; sawText: boolean }> {
   const toolDefs = toAnthropicToolDefs(mcpTools);
   const messages: { role: "user" | "assistant"; content: string | AnthropicContentBlock[] }[] = [
@@ -259,6 +340,10 @@ async function runToolUseLoop(
   let sawText = false;
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    const modelStepId = stepId();
+    const modelStepStartedAt = new Date().toISOString();
+    const modelStep = { id: modelStepId, label: `Requesting model response with MCP tools (round ${iteration + 1})`, status: "in_progress" as const, startedAt: modelStepStartedAt };
+    emit({ type: "step", step: modelStep });
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       signal: input.signal,
@@ -269,11 +354,11 @@ async function runToolUseLoop(
       },
       body: JSON.stringify({
         model,
-        max_tokens: 4096,
+        max_tokens: maxTokensFor(input.mode),
         system: systemPrompt,
         messages,
         tools: toolDefs,
-        stream: false,
+        stream: true,
       }),
     });
 
@@ -281,8 +366,11 @@ async function runToolUseLoop(
       const body = await res.text();
       throw new Error(`Anthropic API returned ${res.status}: ${body.slice(0, 500)}`);
     }
-    const parsed = (await res.json()) as { content?: AnthropicContentBlock[]; stop_reason?: string };
-    const blocks = parsed.content ?? [];
+    if (!res.body) throw new Error("Anthropic tool-use response had no body to stream");
+    const { blocks, stopReason } = await streamAnthropicToolTurn(res.body, (text) => {
+      publicProse.push(text);
+    });
+    emit({ type: "step", step: { ...modelStep, status: "completed", completedAt: new Date().toISOString() } });
 
     const textBlocks = blocks.filter((b): b is { type: "text"; text: string } => b.type === "text");
     finalText = textBlocks.map((b) => b.text).join("");
@@ -290,7 +378,7 @@ async function runToolUseLoop(
 
     const toolUseBlocks = blocks.filter((b): b is { type: "tool_use"; id: string; name: string; input: Record<string, unknown> } => b.type === "tool_use");
 
-    if (parsed.stop_reason !== "tool_use" || toolUseBlocks.length === 0) {
+    if (stopReason !== "tool_use" || toolUseBlocks.length === 0) {
       break; // model is done — finalText is this turn's answer
     }
 
@@ -298,11 +386,16 @@ async function runToolUseLoop(
 
     const toolResults: AnthropicContentBlock[] = [];
     for (const call of toolUseBlocks) {
+      const toolStep = { id: stepId(), label: `Calling MCP tool: ${call.name}`, status: "in_progress" as const, startedAt: new Date().toISOString() };
       emit({
         type: "step",
-        step: { id: stepId(), label: `Calling MCP tool: ${call.name}`, status: "completed", startedAt: new Date().toISOString(), completedAt: new Date().toISOString() },
+        step: toolStep,
       });
       const result = await callMcpTool(input.projectContext?.projectPath ?? null, call.name, call.input ?? {});
+      emit({
+        type: "step",
+        step: { ...toolStep, label: result.isError ? `MCP tool returned an error: ${call.name}` : `Completed MCP tool: ${call.name}`, status: "completed", completedAt: new Date().toISOString() },
+      });
       toolResults.push({ type: "tool_result", tool_use_id: call.id, content: result.content, is_error: result.isError });
     }
     messages.push({ role: "user", content: toolResults });
@@ -314,6 +407,162 @@ async function runToolUseLoop(
   }
 
   return { fullText: finalText, sawText };
+}
+
+async function streamAnthropicToolTurn(
+  body: ReadableStream<Uint8Array>,
+  onText: (text: string) => void,
+): Promise<{ blocks: AnthropicContentBlock[]; stopReason?: string }> {
+  type BlockBuffer = { type: "text" | "tool_use"; text: string; id?: string; name?: string; input?: Record<string, unknown>; partialInput: string };
+  const blocks = new Map<number, BlockBuffer>();
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let stopReason: string | undefined;
+
+  const consumeEvent = (raw: string) => {
+    const dataLine = raw.split("\n").find((line) => line.startsWith("data:"));
+    if (!dataLine) return;
+    let event: {
+      type?: string;
+      index?: number;
+      content_block?: { type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> };
+      delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: string };
+      error?: { message?: string };
+    };
+    try {
+      event = JSON.parse(dataLine.slice(5).trim());
+    } catch {
+      return;
+    }
+    if (event.type === "error") throw new Error(event.error?.message ?? "Anthropic tool-use stream reported an error");
+    if (event.type === "content_block_start" && Number.isInteger(event.index) && event.content_block) {
+      if (event.content_block.type === "text") {
+        blocks.set(event.index!, { type: "text", text: event.content_block.text ?? "", partialInput: "" });
+      } else if (event.content_block.type === "tool_use") {
+        blocks.set(event.index!, {
+          type: "tool_use",
+          text: "",
+          id: event.content_block.id,
+          name: event.content_block.name,
+          input: event.content_block.input ?? {},
+          partialInput: "",
+        });
+      }
+      return;
+    }
+    if (event.type === "content_block_delta" && Number.isInteger(event.index) && event.delta) {
+      const block = blocks.get(event.index!);
+      if (!block) return;
+      if (event.delta.type === "text_delta" && event.delta.text) {
+        block.text += event.delta.text;
+        onText(event.delta.text);
+      } else if (event.delta.type === "input_json_delta" && event.delta.partial_json) {
+        block.partialInput += event.delta.partial_json;
+      }
+      return;
+    }
+    if (event.type === "message_delta") stopReason = event.delta?.stop_reason;
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        consumeEvent(raw);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const completed: AnthropicContentBlock[] = [];
+  for (const block of [...blocks.entries()].sort(([a], [b]) => a - b).map(([, value]) => value)) {
+    if (block.type === "text") {
+      completed.push({ type: "text", text: block.text });
+    } else {
+      let input = block.input ?? {};
+      if (block.partialInput) {
+        try {
+          const parsed = JSON.parse(block.partialInput);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("tool input must be a JSON object");
+          input = parsed as Record<string, unknown>;
+        } catch (err) {
+          throw new Error(`Anthropic returned invalid JSON for an MCP tool call: ${(err as Error).message}`);
+        }
+      }
+      if (!block.id || !block.name) throw new Error("Anthropic returned an incomplete MCP tool call");
+      completed.push({ type: "tool_use", id: block.id, name: block.name, input });
+    }
+  }
+  return { blocks: completed, stopReason };
+}
+
+/**
+ * One narrowly-scoped retry for when a build/spec-mode response included
+ * EDITS_MARKER but the JSON after it failed to parse under every strategy
+ * (see promptShared.ts's parseBuildResponse / parseFailed doc comment for
+ * the live failure this was written for -- a real claude-sonnet-4-5 build
+ * task that streamed for 2+ minutes and still produced zero files, with no
+ * warning shown anywhere before this fix). Mirrors
+ * openAiCompatibleRunner.ts's retryForEdits: hands the model its own prior
+ * (truncated/malformed) answer as assistant-turn context, plus one new
+ * user message insisting it finish the block properly, and re-parses
+ * whatever comes back the same way the main response is parsed. Streamed,
+ * same as the main path, so a genuinely large corrected response isn't
+ * capped any tighter than the first attempt. Returns null on any failure
+ * of the retry itself so the caller falls back cleanly to the original
+ * (if incomplete) response instead of losing it to a retry error.
+ */
+async function retryAnthropicForEdits(
+  apiKey: string,
+  model: string,
+  systemPrompt: string,
+  input: RunnerInput,
+  priorAssistantText: string,
+): Promise<{ prose: string; edits: ProposedEdit[]; droppedCount: number; parseFailed: boolean } | null> {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: input.signal,
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokensFor(input.mode),
+        system: systemPrompt,
+        messages: [
+          ...historyMessages(input),
+          { role: "user", content: input.prompt },
+          { role: "assistant", content: priorAssistantText },
+          {
+            role: "user",
+            content: `Your previous answer included the ${EDITS_MARKER} marker, but the JSON that followed it was incomplete or malformed — most likely it was cut off before finishing. Respond again from the start. Keep the prose brief and preserve the full requested application scope: implement every requested core feature, and include all files necessary for the application to run. Reduce duplicated boilerplate and explanatory text instead of dropping features or omitting necessary files. Then write ${EDITS_MARKER} on its own line, followed by one fenced json code block containing the complete content of every file in an "edits" array. Ensure the JSON and closing fence are complete.`,
+          },
+        ],
+        stream: true,
+      }),
+    });
+    if (!res.ok || !res.body) return null;
+    let retryText = "";
+    const sawText = await streamSse(res.body, (delta) => {
+      retryText += delta;
+    });
+    if (!sawText) return null;
+    return parseBuildResponse(retryText, input);
+  } catch {
+    // AbortError, network failure, etc. -- the caller falls back to the
+    // original (unparsed) response rather than losing it to a retry error.
+    return null;
+  }
 }
 
 /**

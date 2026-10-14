@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { chromium } from "playwright";
 import type { Browser, ConsoleMessage, Page, Request as PWRequest, Response as PWResponse } from "playwright";
 import type { BrowserValidationResponse, BrowserValidationStep } from "@mobiusx/protocol";
@@ -10,6 +14,45 @@ const MAX_NETWORK_ERRORS = 20;
 const MAX_OUTPUT_CHARS = 4000; // same bounded-response discipline as verify.ts's MAX_OUTPUT_CHARS
 const MAX_LINKS_TO_VISIT = 5; // bounded "click through flows" -- only real same-origin links actually found in the rendered DOM, never invented
 const SCREENSHOT_JPEG_QUALITY = 50;
+const require = createRequire(import.meta.url);
+
+/**
+ * Browser Validation is an explicit user action, so provision Playwright's
+ * matching Chromium build on first use when npm installed the package but
+ * its separate browser download is missing. Invoke the installed Playwright
+ * CLI by absolute path (no shell or PATH guesswork), then verify the exact
+ * executable Playwright will launch exists before retrying.
+ */
+async function launchChromium(): Promise<Browser> {
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (firstError) {
+    const executable = chromium.executablePath();
+    const message = (firstError as Error).message;
+    const missingBrowser = /Executable doesn't exist|Executable not found|browserType\.launch.*executable/i.test(message);
+    // In headless mode Chromium launches the separate headless-shell binary;
+    // chromium.executablePath() can still exist while that shell is missing.
+    const missingPath = message.match(/Executable doesn't exist at ([^\r\n]+)/i)?.[1]?.trim();
+    if (!missingBrowser || (missingPath ? existsSync(missingPath) : existsSync(executable))) throw firstError;
+
+    const playwrightPackage = require.resolve("playwright/package.json");
+    const cliPath = join(dirname(playwrightPackage), "cli.js");
+    await new Promise<void>((resolve, reject) => {
+      execFile(process.execPath, [cliPath, "install", "chromium"], { timeout: 10 * 60_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+        if (error) {
+          const details = `${stdout}\n${stderr}`.trim().slice(-2400);
+          reject(new Error(`Playwright Chromium is missing and automatic installation failed: ${error.message}${details ? `\n${details}` : ""}. You can retry with: npx playwright install chromium`));
+          return;
+        }
+        resolve();
+      });
+    });
+    if (!existsSync(executable)) {
+      throw new Error(`Playwright install completed but its Chromium executable is still missing at ${executable}. Retry with: npx playwright install chromium`);
+    }
+    return chromium.launch({ headless: true });
+  }
+}
 
 /**
  * Roadmap Phase 12 (Browser / Application Validation, source requirement
@@ -44,7 +87,7 @@ export async function runBrowserValidation(projectPath: string): Promise<Browser
   const steps: BrowserValidationStep[] = [];
   let browser: Browser | null = null;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await launchChromium();
     const page = await browser.newPage();
     steps.push(await visitOne(page, rootUrl, `Open ${rootUrl}`));
 
@@ -62,7 +105,7 @@ export async function runBrowserValidation(projectPath: string): Promise<Browser
       url: rootUrl,
       consoleErrors: [],
       networkErrors: [],
-      output: `Failed to launch or drive the headless browser: ${(err as Error).message}. If this is the first Browser Validation run, Playwright's Chromium binary may not be installed yet (run "npx playwright install chromium" in the repo root).`,
+      output: `Failed to launch or drive the headless browser: ${(err as Error).message}`,
       durationMs: 0,
     });
   } finally {

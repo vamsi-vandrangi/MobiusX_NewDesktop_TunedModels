@@ -141,6 +141,32 @@ function trimmedPackageJson(srcPkgJsonPath) {
   return trimmed;
 }
 
+/**
+ * Real bug caught in Phase D live testing: node-pty's terminal -- local
+ * shell AND remote `ssh` alike, since both go through the same native
+ * spawn-helper underneath -- failed every single time with the opaque
+ * native error "posix_spawnp failed." The first diagnosis (a Finder-
+ * launched app's impoverished PATH failing to resolve a bare "ssh") was
+ * wrong -- SFTP (pure JS, no native exec) worked fine the whole time this
+ * was broken, which in hindsight was the tell.
+ *
+ * The real cause, and the fix, are centralized in desktop-agent's own
+ * apps/desktop-agent/scripts/fix-node-pty-perms.js (see its doc comment for
+ * the full story) -- this script's own staging `npm install` above runs
+ * with --ignore-scripts (see that comment for why that's still correct),
+ * which means desktop-agent's normal "postinstall" hook never fires here,
+ * so it's invoked directly, pointed at THIS staging tree's node-pty rather
+ * than the one it would otherwise resolve relative to its own location.
+ * This has to run after npm install and before electron-builder copies
+ * resources-staging/ verbatim into the packaged app.
+ */
+function fixNativeHelperPermissions(stagingRoot) {
+  const nodePtyDir = path.join(stagingRoot, "node_modules", "node-pty");
+  if (!fs.existsSync(nodePtyDir)) return;
+  const fixScript = path.join(DESKTOP_DIR, "..", "desktop-agent", "scripts", "fix-node-pty-perms.js");
+  execFileSync("node", [fixScript, nodePtyDir], { stdio: "inherit" });
+}
+
 function main() {
   console.log("[prepare-resources] cleaning", STAGING);
   rmrf(STAGING);
@@ -218,6 +244,8 @@ function main() {
       env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
     },
   );
+
+  fixNativeHelperPermissions(STAGING);
 
   // Now that npm install has finished reconciling node_modules against
   // stagingPkgJson's declared dependencies, it's safe to drop the

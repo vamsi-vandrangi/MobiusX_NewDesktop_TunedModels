@@ -1,15 +1,13 @@
-import type { ModelOption, ModelProvider, ProposedEdit, TaskEvent } from "@mobiusx/protocol";
+import { BUILD_RESPONSE_CONTRACT_VERSION, type ModelOption, type ModelProvider, type ProposedEdit, type TaskEvent } from "@mobiusx/protocol";
 import type { AgentRunner, RunnerInput } from "./types.js";
-import { EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
+import { createStructuredProseStreamer, EDITS_MARKER, historyMessages, MODES_WITH_STRUCTURED_EDITS, parseBuildResponse, stepId, systemPromptFor } from "./promptShared.js";
 import { runPersonaReview } from "./personas.js";
+import { maybeExtractAssistantMemory } from "./memoryExtraction.js";
 import { contextWindowFor } from "./contextWindows.js";
 
-// How much of a model's "reasoning" trace to show as a fallback when it
-// never produces real `content` (see streamOpenAiSse's reasoning handling
-// below) -- bounded the same way VerificationStep/previewOps.ts bound their
-// own captured text, so one runaway "thinking" model can't flood a task's
-// output.
-const MAX_REASONING_FALLBACK_CHARS = 4000;
+// Provider reasoning is private. Keep only enough information internally
+// to distinguish an empty response from a reasoning-only response and show
+// a concise actionable fallback to the user.
 
 /**
  * Factory for any provider that speaks the OpenAI chat-completions wire
@@ -56,6 +54,14 @@ export interface OpenAiCompatibleConfig {
   models: OpenAiCompatibleModelSpec[];
   /** Extra request headers beyond Authorization/content-type, e.g. OpenRouter's optional attribution headers. */
   extraHeaders?: Record<string, string>;
+  /** Optional provider/model-specific reasoning budget. Groq's GPT-OSS models otherwise default to medium reasoning, which can consume the entire output budget before producing any answer. */
+  reasoningEffort?: "low" | "medium" | "high";
+  /** Provider/model output ceiling for structured app edits. Keep conservative defaults for providers with strict per-minute quotas; raise explicitly where the selected provider supports larger completions. */
+  maxOutputTokens?: number;
+}
+
+function outputLimit(config: OpenAiCompatibleConfig): number {
+  return config.maxOutputTokens ?? 8192;
 }
 
 export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): AgentRunner {
@@ -92,7 +98,7 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
       emit({ type: "status", status: "running" });
       const step = {
         id: stepId(),
-        label: `Streaming response from ${config.provider} (${model})`,
+        label: `Generating response with ${config.provider} (${model})`,
         status: "in_progress" as const,
         startedAt: new Date().toISOString(),
       };
@@ -116,6 +122,7 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
           },
           body: JSON.stringify({
             model,
+            ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
             // Was 4096 -- raised after real evidence (Sept 2026, a build-mode
             // task on nex-agi/nex-n2.5-mini:free) that a "reasoning" model
             // can burn its ENTIRE token budget on `delta.reasoning`
@@ -126,7 +133,7 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
             // build prompt, without going so high that a slow model takes
             // even longer and risks the upstream-idle-timeout failure mode
             // instead (see openrouterRunner.ts's Nex-N2.5 Pro comment).
-            max_tokens: 8192,
+            max_tokens: outputLimit(config),
             messages: [
               { role: "system", content: systemPrompt },
               ...historyMessages(input),
@@ -152,7 +159,7 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
 
         // Some models (confirmed live: OpenRouter's nex-agi/nex-n2.5-pro:free,
         // a "hybrid instant/reasoning" model) stream their entire response as
-        // `delta.reasoning` -- a chain-of-thought scratchpad -- with
+        // `delta.reasoning` -- a private reasoning scratchpad -- with
         // `delta.content` staying empty the whole time. `fullText`/
         // `reasoningText` are declared above the try block precisely so
         // they're still readable from the catch block if an upstream error
@@ -169,18 +176,86 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
 
         let sawText: boolean;
         if (MODES_WITH_STRUCTURED_EDITS.has(input.mode)) {
+          const publicProse = createStructuredProseStreamer((delta) => emit({ type: "output", delta }));
           sawText = await streamOpenAiSse(
             res.body,
             (delta) => {
               fullText += delta;
+              publicProse.push(delta);
             },
             onReasoning,
             onUsage,
           );
+          const streamedProse = publicProse.finish();
           if (!sawText) {
-            emit({ type: "output", delta: reasoningFallbackMessage(reasoningText) });
+            // Real, observed failure mode (Oct 2026: openai/gpt-oss-20b via
+            // Groq, asked to build a gardening-business storefront) --
+            // distinct from the "wrote prose but forgot the marker" case
+            // below. Here the model spent its ENTIRE max_tokens budget on
+            // `delta.reasoning` private reasoning and never emitted any real
+            // `delta.content` at all, so there is no fullText for
+            // parseBuildResponse to even look at. Previously this just
+            // showed a long internal trace as the task's entire `output`;
+            // that is neither a useful answer nor an appropriate disclosure.
+            // A concise fallback now explains what happened while
+            // every chat panel in this app auto-scrolls new messages to the
+            // BOTTOM (see renderer.js's feed.scrollTop = feed.scrollHeight).
+            // A real user never saw that sentence -- only an abrupt,
+            // unexplained tail cut off mid-thought, indistinguishable from
+            // the app having glitched. Two real fixes, not just a better
+            // error string: (1) one narrowly-scoped retry, same shape as
+            // retryForEdits below but asking the model to skip extended
+            // reasoning and answer directly -- recovers the (common) case
+            // where the model just needed a push rather than being
+            // incapable of the task; (2) when that still doesn't produce
+            // usable edits, lead with the actionable explanation and keep
+            // private reasoning out of the conversation.
+            const retried = true;
+            const retry = await retryWithoutReasoning(config, key, systemPrompt, input);
+            if (retry && retry.edits.length > 0) {
+              emit({ type: "output", delta: retry.prose || "(no files were created on the first attempt, so this response was regenerated once -- see the files proposed below)" });
+              emit({ type: "edits", edits: retry.edits, contractVersion: BUILD_RESPONSE_CONTRACT_VERSION });
+              if (retry.droppedCount > 0) {
+                emit({
+                  type: "output",
+                  delta: `\n\n(${retry.droppedCount} proposed edit(s) omitted: the model tried to "modify" a file it wasn't shown in full, or its edits JSON didn't parse — see apps/cloud-agent-gateway/src/runners/promptShared.ts#parseBuildResponse.)`,
+                });
+              }
+              if (
+                (input.mode === "build" ||
+                input.mode === "fix" ||
+                input.mode === "database" ||
+                input.mode === "architecture" ||
+                input.mode === "testing" ||
+                input.mode === "devops" ||
+                input.mode === "auth" ||
+                input.mode === "spec") &&
+                (!input.stagedBuild || input.stagedBuild.final)
+              ) {
+                await runPersonaReview(input.mode, input, retry.edits, emit, (systemPrompt, userContent) =>
+                  callOpenAiCompatibleNonStreamed(config, key, model, systemPrompt, userContent, input.signal),
+                );
+              }
+              // Assistant Memory's automatic-extraction call (Oct 2026
+              // addition) — see memoryExtraction.ts's module doc comment.
+              // No-ops unless the user has turned AgentSettings.memoryMode
+              // to "auto".
+              await maybeExtractAssistantMemory(input, retry.prose ?? "", retry.edits, (systemPrompt, userContent) =>
+                callOpenAiCompatibleNonStreamed(config, key, model, systemPrompt, userContent, input.signal),
+              );
+            } else {
+              if (input.autoCloud) {
+                emit({ type: "provider_failure", message: `${config.provider}/${model} returned no usable file edits after the automatic recovery attempt.` });
+                emit({ type: "done" });
+                return;
+              }
+              emit({
+                type: "output",
+                delta: `(No file changes were proposed${retried ? " even after asking again" : ""} — ${config.provider}/${model} did not produce a final answer. Internal reasoning is not displayed. Try again, ask for a smaller/more specific change, or switch models in Settings.)`,
+              });
+            }
           } else {
-            let { prose, edits, droppedCount, hadMarker } = parseBuildResponse(fullText, input);
+            let { prose, edits, droppedCount, hadMarker, parseFailed } = parseBuildResponse(fullText, input);
 
             // Real, observed failure mode (Sept 2026: openai/gpt-oss-120b via
             // Groq, asked to build a payroll app) distinct from the "wrong
@@ -193,28 +268,58 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
             // the pre-flight-clarification case, see the BUILD prompt's
             // {"edits": []} instruction -- sets hadMarker but proposes
             // nothing, and should NOT be treated as a failure to retry away).
+            //
+            // A second, previously-conflated failure mode (Oct 2026, see
+            // promptShared.ts's parseFailed doc comment): marker present,
+            // but the JSON after it never parsed under any strategy -- most
+            // often the response hit its token ceiling mid-JSON. This used
+            // to report the exact same {hadMarker:true, edits:[],
+            // droppedCount:0} shape as the deliberate-clarification case
+            // below, so it was silently mislabeled as "waiting on your
+            // answer" -- actively misleading, since nothing was actually
+            // asked. parseFailed distinguishes the two so each gets its own
+            // real retry and its own honest message.
+            //
             // One automatic, narrowly-scoped retry -- handing the model its
             // own prior answer and explicitly demanding just the missing
             // block -- costs one extra request but recovers the (common)
-            // case where the model merely forgot the format rather than
-            // being incapable of it.
+            // case where the model merely forgot the format, or got cut off,
+            // rather than being incapable of it.
             let retried = false;
-            if (edits.length === 0 && droppedCount === 0 && !hadMarker) {
+            if (edits.length === 0 && droppedCount === 0 && (!hadMarker || parseFailed)) {
               retried = true;
               const retry = await retryForEdits(config, key, systemPrompt, input, fullText);
               if (retry) {
                 if (retry.prose) prose = retry.prose;
                 edits = retry.edits;
                 droppedCount = retry.droppedCount;
+                parseFailed = retry.parseFailed;
               }
             }
 
-            emit({ type: "output", delta: prose || fullText });
-            if (edits.length > 0) emit({ type: "edits", edits });
+            if (retried && prose && prose.trim() !== streamedProse.trim() && (!input.autoCloud || edits.length > 0)) {
+              emit({ type: "output", delta: `\n\nUpdated response after retry:\n${prose}` });
+            }
+            if (edits.length > 0) emit({ type: "edits", edits, contractVersion: BUILD_RESPONSE_CONTRACT_VERSION });
+            if (input.autoCloud && edits.length === 0 && (!hadMarker || droppedCount > 0)) {
+              emit({ type: "provider_failure", message: `${config.provider}/${model} returned a plan or unusable file edits after the automatic recovery attempt.` });
+              emit({ type: "done" });
+              return;
+            }
             if (edits.length === 0 && droppedCount === 0 && !hadMarker) {
               emit({
                 type: "output",
                 delta: `\n\n(No file changes were proposed${retried ? " even after asking again" : ""} — ${config.provider}/${model} produced a plan or description instead of the required file-edit format. This happens on some free models some of the time; try again, be more explicit (e.g. "write the complete files now"), or switch models in Settings.)`,
+              });
+            } else if (parseFailed) {
+              if (input.autoCloud) {
+                emit({ type: "step", step: { ...step, status: "failed", completedAt: new Date().toISOString() } });
+                emit({ type: "provider_failure", message: `${config.provider}/${model} returned an incomplete or invalid file-edit JSON response.` });
+                return;
+              }
+              emit({
+                type: "output",
+                delta: `\n\n(This response included the file-edit marker${retried ? ", even after asking again," : ""} but the JSON that followed it didn't parse — almost always because the response was cut off before the JSON finished. No files were changed. Try again, ask for something smaller/more focused, or switch models in Settings.)`,
               });
             } else if (edits.length === 0 && hadMarker && droppedCount === 0) {
               // The pre-flight-clarification case: the model deliberately
@@ -242,12 +347,20 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
                 input.mode === "devops" ||
                 input.mode === "auth" ||
                 input.mode === "spec") &&
+              (!input.stagedBuild || input.stagedBuild.final) &&
               edits.length > 0
             ) {
               await runPersonaReview(input.mode, input, edits, emit, (systemPrompt, userContent) =>
                 callOpenAiCompatibleNonStreamed(config, key, model, systemPrompt, userContent, input.signal),
               );
             }
+            // Assistant Memory's automatic-extraction call (Oct 2026
+            // addition) — see memoryExtraction.ts's module doc comment.
+            // No-ops unless the user has turned AgentSettings.memoryMode to
+            // "auto".
+            await maybeExtractAssistantMemory(input, prose || fullText, edits, (systemPrompt, userContent) =>
+              callOpenAiCompatibleNonStreamed(config, key, model, systemPrompt, userContent, input.signal),
+            );
           }
         } else {
           sawText = await streamOpenAiSse(
@@ -259,7 +372,7 @@ export function createOpenAiCompatibleRunner(config: OpenAiCompatibleConfig): Ag
             onReasoning,
             onUsage,
           );
-          if (!sawText) emit({ type: "output", delta: reasoningFallbackMessage(reasoningText) });
+          if (!sawText) emit({ type: "output", delta: reasoningFallbackMessage(Boolean(reasoningText.trim())) });
         }
 
         if (capturedUsage) {
@@ -351,7 +464,7 @@ async function retryForEdits(
   systemPrompt: string,
   input: RunnerInput,
   priorAssistantText: string,
-): Promise<{ prose: string; edits: ProposedEdit[]; droppedCount: number } | null> {
+): Promise<{ prose: string; edits: ProposedEdit[]; droppedCount: number; parseFailed: boolean } | null> {
   try {
     const res = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
@@ -363,7 +476,8 @@ async function retryForEdits(
       },
       body: JSON.stringify({
         model: input.modelId ?? config.models[0]?.model,
-        max_tokens: 8192,
+        ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
+        max_tokens: outputLimit(config),
         messages: [
           { role: "system", content: systemPrompt },
           ...historyMessages(input),
@@ -371,7 +485,7 @@ async function retryForEdits(
           { role: "assistant", content: priorAssistantText },
           {
             role: "user",
-            content: `Your previous answer did not include the required ${EDITS_MARKER} marker and JSON edits block — it was a plan or description, not the file-edit format your instructions require. Respond again, this time following the required format exactly: a brief prose summary, then ${EDITS_MARKER} on its own line, then a single fenced json code block containing the complete content of every file in an "edits" array. Do not just repeat your previous description in prose.`,
+            content: `Your previous answer did not include the required ${EDITS_MARKER} marker and JSON edits block, or included it but the JSON after it was incomplete/malformed (most likely cut off before finishing) — it was a plan or description, not the file-edit format your instructions require. Respond again with no architecture diagram, tutorial, or long explanation: at most 40 words of summary, then ${EDITS_MARKER} on its own line, then one fenced json code block containing the complete content of the necessary files in an "edits" array. Preserve the user's explicitly requested core features, but consolidate related code and configuration into a compact, runnable implementation of at most 10 files. Omit speculative extras and duplicate boilerplate. Do not just repeat your previous description in prose.`,
           },
         ],
         stream: true,
@@ -387,6 +501,63 @@ async function retryForEdits(
   } catch {
     // AbortError, network failure, etc. -- the caller falls back to the
     // original (unparsed) response rather than losing it to a retry error.
+    return null;
+  }
+}
+
+/**
+ * One narrowly-scoped retry for when a model in build/spec mode spent its
+ * entire response on `delta.reasoning` and never produced any real
+ * `delta.content` (see run()'s `!sawText` branch for the full reasoning and
+ * the observed case this was written for). Unlike retryForEdits above,
+ * there is no usable prior assistant turn to hand back -- it was all
+ * chain-of-thought, not an answer -- so this sends the original prompt
+ * again with one added instruction to skip extended reasoning and answer
+ * directly. Same failure-handling contract as retryForEdits: returns null
+ * on any failure of the retry itself so the caller falls back cleanly to
+ * the original (empty) response instead of losing the task to a retry
+ * error.
+ */
+async function retryWithoutReasoning(
+  config: OpenAiCompatibleConfig,
+  key: string,
+  systemPrompt: string,
+  input: RunnerInput,
+): Promise<{ prose: string; edits: ProposedEdit[]; droppedCount: number } | null> {
+  try {
+    const res = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      signal: input.signal,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${key}`,
+        ...(config.extraHeaders ?? {}),
+      },
+      body: JSON.stringify({
+        model: input.modelId ?? config.models[0]?.model,
+        ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
+        max_tokens: outputLimit(config),
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...historyMessages(input),
+          {
+            role: "user",
+            content: `${input.prompt}\n\nIMPORTANT: Your previous attempt spent its response on reasoning and did not produce a usable answer. Keep any private reasoning brief. Do not write an architecture diagram, tutorial, or long explanation. Output at most 40 words of summary, then the ${EDITS_MARKER} marker on its own line, then one fenced json code block with complete, compact files that preserve the explicitly requested core features. Consolidate the implementation into at most 10 files; do not omit explicitly requested functionality.`,
+          },
+        ],
+        stream: true,
+      }),
+    });
+    if (!res.ok || !res.body) return null;
+    let retryText = "";
+    const sawText = await streamOpenAiSse(res.body, (delta) => {
+      retryText += delta;
+    });
+    if (!sawText) return null;
+    return parseBuildResponse(retryText, input);
+  } catch {
+    // AbortError, network failure, etc. -- the caller falls back to the
+    // original (empty) response rather than losing it to a retry error.
     return null;
   }
 }
@@ -417,6 +588,7 @@ async function callOpenAiCompatibleNonStreamed(
     },
     body: JSON.stringify({
       model,
+      ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
       max_tokens: 1024,
       messages: [
         { role: "system", content: systemPrompt },
@@ -437,17 +609,13 @@ async function callOpenAiCompatibleNonStreamed(
  * What to show when a model produced NO real `content` at all -- either a
  * genuinely empty response, or (the case this was written for) a
  * reasoning-only response that ran out of stream before ever reaching a
- * final answer. Showing the reasoning trace is honest best-effort, not a
- * real answer to the prompt -- labeled as such rather than presented as if
- * it were one.
+ * final answer. Private reasoning is never a user-facing fallback; give an
+ * actionable explanation instead.
  */
-function reasoningFallbackMessage(reasoningText: string): string {
-  if (!reasoningText.trim()) return "(model returned no text content)";
-  const truncated = reasoningText.length > MAX_REASONING_FALLBACK_CHARS;
-  const shown = truncated ? reasoningText.slice(0, MAX_REASONING_FALLBACK_CHARS) : reasoningText;
-  return (
-    `(this model spent its whole response "reasoning" and never produced a final answer -- showing its reasoning trace instead, which may be incomplete and does not directly answer the prompt${truncated ? "; truncated" : ""})\n\n${shown.trim()}`
-  );
+function reasoningFallbackMessage(hasReasoning: boolean): string {
+  return hasReasoning
+    ? "(The model did not produce a final answer. Its internal reasoning is not displayed. Try a smaller request or choose another model.)"
+    : "(model returned no text content)";
 }
 
 /**

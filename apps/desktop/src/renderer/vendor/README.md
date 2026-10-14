@@ -23,3 +23,13 @@ Copied from (versions pinned in `package.json`'s `dependencies`):
 
 To refresh after bumping one of these packages, re-copy the matching file
 from `node_modules` (two levels up from `apps/desktop`) over the one here.
+
+`highlight.min.js` is the one exception to "just copy the file" above:
+modern `highlight.js` (pinned in `dependencies`) no longer ships a pre-built
+browser global in its npm package at all -- only CommonJS/ESM modules meant
+for a bundler, so there's no single file in `node_modules` to copy out. It's
+built instead from `../../../scripts/hljs-entry.js` (core + a curated set
+of languages -- see that file for the exact list and why those) via
+esbuild (a `devDependency`, nothing about it ships in the app). To refresh
+after bumping the `highlight.js` version or changing the language list, run
+`npm run build:hljs-bundle` from `apps/desktop`.

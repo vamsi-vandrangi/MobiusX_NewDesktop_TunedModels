@@ -1,0 +1,21 @@
+{
+  "name": "@mobiusx/assistant-memory",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "description": "Shared ~/.mobiusx/memory/ read/write (Assistant Memory, Oct 2026 addition) — desktop-agent exposes it through GET/PUT/DELETE /memory, cloud-agent-gateway reads it for prompt injection and writes to it for automatic extraction, so neither process duplicates the other's file handling or needs IPC.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@mobiusx/protocol": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.1",
+    "@types/node": "^22.7.5"
+  }
+}

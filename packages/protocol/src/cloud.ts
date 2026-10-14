@@ -101,6 +101,31 @@ import type { ArchitectureEvidence, AuthEvidence, DevopsEvidence, TestingEvidenc
  */
 export type AgentMode = "ask" | "plan" | "build" | "spec" | "fix" | "database" | "architecture" | "testing" | "devops" | "auth";
 
+/**
+ * Oct 2026 addition — a per-task toggle in the Assistant panel's header
+ * ("☁ Cloud / 💻 Local / ⇄ Both" has a sibling row for this), independent
+ * of AgentMode: it doesn't change WHICH task type runs (Build vs Testing vs
+ * Auth, etc.), only the architectural register every mode answers in —
+ * see systemPromptFor's archModeGuidanceBlock in
+ * apps/cloud-agent-gateway/src/runners/promptShared.ts for the actual
+ * guidance text each value injects. Optional and has no server-side
+ * default: omitted entirely, the prompt is unchanged from before this
+ * field existed (see archModeGuidanceBlock's own doc comment for exactly
+ * which call sites never set this).
+ *
+ * "web" = lean/fast web-application patterns (modern frontend frameworks,
+ * utility-first styling, light state management, the simplest database
+ * that fits). "enterprise" = layered architecture, SOLID, secure
+ * role/attribute-based data access, async/event-driven service
+ * communication where relevant, explicit test-coverage callouts. "core" =
+ * general-purpose software development and debugging across languages
+ * supported by the selected model. "embedded" = hardware-aware development
+ * and debugging for embedded, bare-metal, and RTOS targets.
+ * None of these values changes what this app itself enforces or verifies;
+ * they change the model's instructions only.
+ */
+export type AppArchitectureMode = "web" | "enterprise" | "core" | "embedded";
+
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 /**
@@ -115,15 +140,28 @@ export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancel
  * comment for the current, live-verified state rather than trusting this
  * comment to stay current.
  *
- * Two providers are deliberately excluded from automatic selection
- * (registry.ts's AUTO_PRIORITY) and only ever run when explicitly chosen:
+ * Providers that are paid, local-only, or not yet phase-tested are
+ * deliberately excluded from automatic selection (registry.ts's
+ * AUTO_PRIORITY) and only run when explicitly chosen. This includes:
  * "ollama" (local-only, depends on a background process happening to be
- * running on the user's machine) and "deepseek" (a paid, metered API —
+ * running on the user's machine), "deepseek" (a paid, metered API —
  * DeepSeek's own platform.deepseek.com, not free like openrouter/groq's
  * current lineups — so using it should always be an explicit choice, never
- * a silent fallback that starts charging the user's account).
+ * a silent fallback that starts charging the user's account), and
+ * "cerebras" (ported Oct 2026 from the MobiusX web app's own X-Debug
+ * fallback chain — see app/core/ai_config.py/settings.py in the CredenceX
+ * repo — which runs Cerebras Cloud's OpenAI-compatible API,
+ * https://api.cerebras.ai/v1. Starts on a $5 free-trial credit at a modest
+ * 30K-tokens/minute rate limit, graduating to real metered billing once
+ * that's used up or a paid Developer tier is purchased — see
+ * cerebrasRunner.ts's own doc comment for the live-verified numbers this
+ * was added with. Not "free like openrouter/groq" for the same reason
+ * deepseek isn't: it can genuinely cost money, so it must be an explicit
+ * choice); "xkiro" and "apinex" (third-party model routers whose free
+ * coding models are newly provisioned here and must pass our own evaluation
+ * before becoming automatic choices).
  */
-export type ModelProvider = "demo" | "anthropic" | "openrouter" | "groq" | "deepseek" | "ollama";
+export type ModelProvider = "demo" | "anthropic" | "openrouter" | "groq" | "deepseek" | "cerebras" | "xkiro" | "apinex" | "ollama";
 
 export interface ModelSelection {
   provider: ModelProvider;
@@ -158,6 +196,23 @@ export interface ModelOption extends ModelSelection {
 
 export interface ListModelsResponse {
   models: ModelOption[];
+}
+
+/** Read-only result of probing Ollama from the gateway process itself. A
+ * reachable Ollama service and a working Laya decision endpoint are tracked
+ * separately because local generation can work while Laya falls back. */
+export interface OllamaDiagnosticsResponse {
+  endpoint: string;
+  endpointSource: "settings/environment" | "default" | "discovered";
+  reachable: boolean;
+  httpStatus?: number;
+  version?: string;
+  installedModels: string[];
+  selectedLocalModelAvailable?: boolean;
+  layaInstalled: boolean;
+  layaUsable: boolean | null;
+  detail: string;
+  runtime: "host" | "container" | "unknown";
 }
 
 /**
@@ -258,6 +313,17 @@ export interface ProjectContext {
    */
   steeringContext?: string;
   /**
+   * Assistant Memory (Oct 2026 addition — see MemoryFile's doc comment in
+   * agent.ts for the full feature background). Same client-side-fetched,
+   * prepended-to-every-mode pattern as steeringContext directly above
+   * (see assistantMemoryBlock() in promptShared.ts): the desktop client
+   * calls GET /memory on the LOCAL desktop-agent and joins the non-empty
+   * files into this string before every task-creation call, regardless
+   * of mode or whether a project is even open — memory is global, unlike
+   * steering. Absent when ~/.mobiusx/memory/ has no non-empty files yet.
+   */
+  assistantMemoryContext?: string;
+  /**
    * Enterprise Knowledge / Global Intelligence local substitute (roadmap
    * Phase 17, source requirement §29/§30 -- see KnowledgeSearchHit in
    * agent.ts for what a hit actually is). Real snippets retrieved from the
@@ -300,8 +366,22 @@ export interface CreateTaskRequest {
    * has set as their default (or the automatic choice, if they haven't).
    */
   model?: ModelSelection;
+  /** True only when the client selected Cloud Auto. Enables retrying a failed
+   * provider against the next configured automatic provider. */
+  autoCloud?: boolean;
+  /** See AppArchitectureMode's doc comment. Omit entirely for prompts unaffected by this toggle (the default, before this field existed). */
+  archMode?: AppArchitectureMode;
   /** See HistoryTurn's doc comment. Omit (or send []) for a fresh, contextless request. */
   history?: HistoryTurn[];
+  /**
+   * Which conversation thread this task belongs to (see ThreadSummary
+   * below). Optional so older clients / one-off tasks that don't use
+   * threads keep working unchanged -- a task created without one simply
+   * has no thread association and won't show up under any ThreadDetailResponse.
+   * When present, the gateway touches (and, for a still-default-titled
+   * thread, auto-titles) the referenced thread -- see store.ts#touchThread.
+   */
+  threadId?: string;
 }
 
 export interface CreateTaskResponse {
@@ -336,12 +416,14 @@ export interface TaskSummary {
    * renderer.js's buildEditsCard) rather than assuming they always match.
    */
   projectPath?: string;
+  /** See CreateTaskRequest.threadId. Absent for tasks created without a thread. */
+  threadId?: string;
 }
 
 export interface TaskStep {
   id: string;
   label: string;
-  status: "pending" | "in_progress" | "completed";
+  status: "pending" | "in_progress" | "completed" | "failed";
   startedAt?: string;
   completedAt?: string;
 }
@@ -365,6 +447,34 @@ export interface ProposedEdit {
   path: string;
   action: "modify" | "create";
   content: string;
+}
+
+/**
+ * Versioned, model-neutral representation of a generated build response.
+ * Providers may use different wire formats (for example MobiusX's marker
+ * convention or Ollama's JSON schema mode), but runners normalize them to
+ * this envelope before emitting ProposedEdit events.
+ */
+export const BUILD_RESPONSE_CONTRACT_VERSION = 1 as const;
+
+export interface BuildResponseEnvelope {
+  /** A concise user-facing summary; never a claim that checks passed. */
+  summary?: string;
+  /** Complete replacement file contents, normalized and validated by the gateway. */
+  edits: ProposedEdit[];
+}
+
+/** Normalized parser result shared by every structured-edit runner. */
+export interface ParsedBuildResponse extends BuildResponseEnvelope {
+  contractVersion: typeof BUILD_RESPONSE_CONTRACT_VERSION;
+  /** Whether a provider-specific structured response boundary was present. */
+  hadMarker: boolean;
+  /** Number of model-proposed entries rejected by common validation. */
+  droppedCount: number;
+  /** The response advertised structured output but could not be parsed. */
+  parseFailed: boolean;
+  /** Paths of rejected modify operations; never includes source contents. */
+  rejectedEditPaths?: string[];
 }
 
 
@@ -427,10 +537,269 @@ export interface TaskDetail extends TaskSummary {
   review?: EditReview;
   /** Real token usage for this task's model call, when the provider reported it (see TokenUsage above). Absent for the demo runner and for providers/responses that didn't include usage data. */
   usage?: TokenUsage;
+  /** Per-request local/cloud model execution diagnostics; sensitive prompts and response bodies are never stored here. */
+  modelDiagnostics?: ModelExecutionDiagnostic[];
+  /** Durable, per-stage generated draft checkpoint. Files remain proposals until explicit Desktop Agent apply. */
+  generationCheckpoint?: GenerationCheckpoint;
+}
+
+export interface GenerationCheckpoint {
+  version: 1;
+  taskId: string;
+  requirementsHash: string;
+  provider: string;
+  modelId: string;
+  projectPath?: string;
+  completedStageIds: string[];
+  stages: Array<{
+    id: string;
+    completedAt: string;
+    artifactPaths: string[];
+    /** Full checksummed stage delta. Optional for checkpoints written before P0.2 stage snapshots. */
+    artifacts?: Array<{ path: string; action: ProposedEdit["action"]; content: string; sha256: string }>;
+    validation: "passed";
+  }>;
+  artifacts: Array<{ path: string; action: ProposedEdit["action"]; content: string; sha256: string }>;
+  /** Explicit ownership/lineage for the active materialized files. Failed
+   * attemptedStages are forensic proposals and are never part of this list. */
+  artifactOwnership?: {
+    schemaVersion: "1.0";
+    active: Array<{
+      artifactId: string;
+      stageId: string;
+      path: string;
+      sha256: string;
+      version: number;
+      provenance: "model" | "deterministic" | "repair" | "checkpoint";
+      replacesArtifactId?: string;
+      replacementAuthorization?: string;
+    }>;
+    superseded: Array<{
+      artifactId: string;
+      stageId: string;
+      path: string;
+      sha256: string;
+      version: number;
+      provenance: "model" | "deterministic" | "repair" | "checkpoint";
+      replacesArtifactId?: string;
+      replacementAuthorization?: string;
+    }>;
+  };
+  /** Failed-stage outputs kept for inspection/recovery; never treated as validated promotion artifacts. */
+  attemptedStages?: Array<{
+    id: string;
+    attemptedAt: string;
+    validation: "failed";
+    issues: string[];
+    repairOutcomes: string[];
+    /** Content-addressed repair proposals retained across task resumes. */
+    repairFingerprints?: Array<{
+      fingerprint: string;
+      diagnosticHash: string;
+      targetPath: string;
+      relevantCodeHash: string;
+      proposedPatchHash: string;
+      outcome: "applied" | "duplicate" | "no-progress";
+    }>;
+    artifacts: Array<{ path: string; action: ProposedEdit["action"]; content: string; sha256: string }>;
+  }>;
+  baseFiles: Array<{ path: string; sha256: string }>;
+  pendingStageIds: string[];
+  pendingDependencies: string[];
+  repairHistory: Array<{ stageId: string; attempts: number; outcomes: string[] }>;
+  /** Independently validated database-stage outputs. These remain resumable even when the database stage has not passed as a whole. */
+  databaseSubtasks?: Array<{
+    id: string;
+    completedAt: string;
+    architectureHash: string;
+    artifacts: Array<{ path: string; action: ProposedEdit["action"]; content: string; sha256: string }>;
+  }>;
+  /** Independently validated backend implementation outputs, resumable without repeating completed modules. */
+  backendSubtasks?: Array<{
+    id: string;
+    completedAt: string;
+    architectureHash: string;
+    artifacts: Array<{ path: string; action: ProposedEdit["action"]; content: string; sha256: string }>;
+  }>;
+  /** PAC-validated business operation contracts used by deterministic route scaffolds. */
+  businessOperations?: Array<{
+    operationId: string;
+    architectureHash: string;
+    content: string;
+    sha256: string;
+    createdAt: string;
+  }>;
+  /** Immutable superseded business-operation versions retained during safe contract upgrades. */
+  businessOperationHistory?: Array<{
+    operationId: string;
+    architectureHash: string;
+    content: string;
+    sha256: string;
+    createdAt: string;
+    supersededBySha256: string;
+    supersededAt: string;
+    reason: string;
+  }>;
+  /** AI-authored UI intent validated against the PAC and operation contracts; source files are rendered from this resumable spec. */
+  uiContracts?: Array<{
+    architectureHash: string;
+    content: string;
+    sha256: string;
+    modelId: string;
+    createdAt: string;
+    /** Compact model-authored choice merged into a deterministic UI contract skeleton. */
+    modelRequestId?: string;
+    modelResponse?: string;
+    contribution?: string;
+    contributionSha256?: string;
+    /** Privacy-safe provider request provenance; message text is never checkpointed here. */
+    requestMetadata?: {
+      requestId: string;
+      provider: string;
+      endpoint: string;
+      modelId: string;
+      promptSha256: string;
+      promptCharacters: number;
+      promptBytes?: number;
+      estimatedPromptTokens?: number;
+      expectedOutputTokens?: number;
+      structuredOutputOverheadTokens?: number;
+      safetyMarginTokens?: number;
+      contextTokens?: number;
+      estimatedTotalTokens?: number;
+      serializedRequestSha256?: string;
+      serializedRequestBytes?: number;
+      serializedRequestRedacted?: ModelExecutionDiagnostic["serializedRequestRedacted"];
+      startedAt?: string;
+      endedAt?: string;
+      durationMs?: number;
+      timeToHeadersMs?: number;
+      timeToFirstTokenMs?: number;
+      promptTokens?: number;
+      generatedTokens?: number;
+      cancelled?: boolean;
+      deadlineExceeded?: boolean;
+      responseSha256?: string;
+      responseCharacters?: number;
+    };
+  }>;
+  /** Versioned, PAC/operation-derived test inventory plus separately attributed model contributions. */
+  testSpecifications?: Array<{
+    architectureHash: string;
+    content: string;
+    sha256: string;
+    modelId: string;
+    createdAt: string;
+    modelRequestId?: string;
+    modelResponse?: string;
+    contribution?: string;
+    contributionSha256?: string;
+    requestMetadata?: {
+      requestId: string;
+      provider: string;
+      endpoint: string;
+      modelId: string;
+      promptSha256: string;
+      promptCharacters: number;
+      promptBytes?: number;
+      estimatedPromptTokens?: number;
+      expectedOutputTokens?: number;
+      structuredOutputOverheadTokens?: number;
+      safetyMarginTokens?: number;
+      contextTokens?: number;
+      estimatedTotalTokens?: number;
+      serializedRequestSha256?: string;
+      serializedRequestBytes?: number;
+      startedAt?: string;
+      endedAt?: string;
+      durationMs?: number;
+      timeToHeadersMs?: number;
+      timeToFirstTokenMs?: number;
+      promptTokens?: number;
+      generatedTokens?: number;
+      cancelled?: boolean;
+      deadlineExceeded?: boolean;
+      responseSha256?: string;
+      responseCharacters?: number;
+    };
+  }>;
+  /** Immutable, versioned project architecture approved before staged code generation. Optional only for checkpoints created before P0.5. */
+  projectArchitecture?: ProjectArchitectureContract;
+  updatedAt: string;
+}
+
+export interface ProjectArchitectureContract {
+  schemaVersion: "1.0" | "1.1";
+  contractHash: string;
+  stack: { backend: string; orm: string; migrations: string; database: string; frontend: string; e2e: string };
+  modules: Array<{ path: string; provides: string[]; dependsOn: string[] }>;
+  /** Versioned domain boundary added only through an approved architecture change. */
+  reviewScope?: {
+    entity: "ReviewScope";
+    userField: "review_scope_id";
+    customerField: "review_scope_id";
+    customerAssignment: "inherit-authenticated-customer";
+    managerAccess: "same-scope-only";
+    defaultProvisioning: "default-scope";
+  };
 }
 
 export interface ListTasksResponse {
   tasks: TaskSummary[];
+}
+
+/**
+ * A conversation thread -- what the desktop "New Chat" / thread-list UI
+ * actually operates on. Mirrors store.ts's existing tasks.json persistence
+ * pattern exactly (see createThread/getThread/listThreads/touchThread in
+ * that file), persisted separately as threads.json. A thread is deliberately
+ * thin: it does not itself hold messages or edits -- every real task
+ * (TaskDetail, with its own `output`/`edits`/`review`/`usage`) still lives
+ * in the existing tasks store, tagged with `threadId`. A thread is just the
+ * grouping + display metadata (title, timestamps, which task was most
+ * recent) a desktop panel instance needs to show a thread list and to
+ * rehydrate one on selection (see ThreadDetailResponse below).
+ */
+export interface ThreadSummary {
+  id: string;
+  /**
+   * Starts as "New Chat" (desktop-side default, same string the "New Chat"
+   * nav item already uses) and is auto-set from the first task's prompt
+   * (first ~60 chars) the first time touchThread() sees a task land on a
+   * still-default-titled thread -- see store.ts#touchThread. A user-driven
+   * rename (RenameThreadRequest) overrides this and is never auto-replaced
+   * again.
+   */
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  /** The most recent task's id, if any task has been created on this thread yet. Used so a thread list can show "last activity" without a second round-trip. */
+  lastTaskId?: string;
+  /** The project this thread's tasks are grounded in, when any task on it carried a projectContext -- same semantics as TaskSummary.projectPath, copied from the first task that had one. */
+  projectPath?: string;
+}
+
+/** Body is optional -- an empty/omitted body creates a thread with the default "New Chat" title, which is what lazy client-side thread creation (first message sent) actually sends. */
+export interface CreateThreadRequest {
+  title?: string;
+}
+
+export interface CreateThreadResponse {
+  thread: ThreadSummary;
+}
+
+export interface ListThreadsResponse {
+  threads: ThreadSummary[];
+}
+
+/** GET /threads/:id -- the thread plus its full task history, in creation order, for a desktop panel to rehydrate `historyTurns` and the feed when the user reopens an existing thread. */
+export interface ThreadDetailResponse {
+  thread: ThreadSummary;
+  tasks: TaskDetail[];
+}
+
+export interface RenameThreadRequest {
+  title: string;
 }
 
 /** Streamed over the /tasks/:id/stream WebSocket, and also what GET /tasks/:id's `steps`/`output`/`edits` are built from server-side. */
@@ -453,14 +822,118 @@ export interface TokenUsage {
   contextWindow?: number;
 }
 
+export type ModelFailureCategory =
+  | "connection_refused"
+  | "connection_reset"
+  | "dns_or_network"
+  | "provider_timeout"
+  | "stream_idle_timeout"
+  | "local_queue_full"
+  | "stream_interrupted"
+  | "process_terminated"
+  | "context_or_resource_exhaustion"
+  | "context_budget_exceeded"
+  | "provider_http_error"
+  | "unknown_network_error";
+
+export interface ModelExecutionDiagnostic {
+  requestId: string;
+  /** Parent Build/chat task id used to correlate gateway, adapter, and provider logs. */
+  taskId?: string;
+  attempt?: number;
+  provider: string;
+  endpoint: string;
+  modelId: string;
+  phase: "queue" | "connect" | "connected" | "headers" | "stream" | "complete";
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  queueWaitMs?: number;
+  queuePosition?: number;
+  activeRequests?: number;
+  maxConcurrency?: number;
+  serializedRequestBytes?: number;
+  serializedRequestSha256?: string;
+  /** Actual Ollama request shape with message text replaced by byte counts and hashes. */
+  serializedRequestRedacted?: {
+    model: string;
+    keepAlive?: string;
+    stream: boolean;
+    format?: unknown;
+    options?: Record<string, string | number | boolean>;
+    messages: Array<{ role: string; contentBytes: number; contentSha256: string }>;
+  };
+  /** Present only when restricted Ollama request capture was explicitly enabled. */
+  serializedRequestCapturePath?: string;
+  serializedRequestCaptureError?: string;
+  /** Present only when restricted raw-response capture was explicitly enabled. */
+  responseCapturePath?: string;
+  responseCaptureError?: string;
+  queueStartedAt?: string;
+  transportStartedAt?: string;
+  connectedAt?: string;
+  headersAt?: string;
+  firstTokenAt?: string;
+  streamEndedAt?: string;
+  streamIdleTimeoutMs?: number;
+  maxObservedStreamIdleMs?: number;
+  streamIdleTimedOut?: boolean;
+  timeToHeadersMs?: number;
+  timeToConnectMs?: number;
+  responseHeaderWaitMs?: number;
+  timeToFirstTokenMs?: number;
+  promptChars?: number;
+  estimatedPromptTokens?: number;
+  promptTokens?: number;
+  generatedTokens?: number;
+  /** Approximate generated-token count from streamed text when the request ended before Ollama's final usage record. */
+  estimatedGeneratedTokens?: number;
+  contextLength?: number;
+  requestTimeoutMs?: number;
+  headersTimeoutMs?: number;
+  /** Time beyond the configured deadline before the request was observed as terminal. */
+  deadlineOverrunMs?: number;
+  ollamaLoadDurationMs?: number;
+  promptEvaluationDurationMs?: number;
+  generationDurationMs?: number;
+  providerTotalDurationMs?: number;
+  /** CPU/memory sample for the active local Ollama inference process, if the host exposes ps. */
+  ollamaProcessCpuPercent?: number;
+  ollamaCpuSeconds?: number;
+  resourceSampleDurationMs?: number;
+  ollamaProcessRssBytes?: number;
+  /** macOS system-wide free-memory percentage when `memory_pressure` is available. */
+  hostMemoryFreePercent?: number;
+  hostMemoryFreePercentAtStart?: number;
+  /** GPU memory allocated by Ollama; zero indicates CPU-only execution. */
+  ollamaVramBytes?: number;
+  /** Gateway-side scheduling/CPU metrics help distinguish a slow model from a stalled event loop. */
+  eventLoopDelayMaxMs?: number;
+  gatewayCpuUserMs?: number;
+  gatewayCpuSystemMs?: number;
+  processMemoryBytes?: number;
+  responseBytes: number;
+  streaming: boolean;
+  httpStatus?: number;
+  errorCategory?: ModelFailureCategory;
+  errorMessage?: string;
+  errorCause?: string;
+  cancelled: boolean;
+  deadlineExceeded: boolean;
+  retryHistory: string[];
+}
+
 export type TaskEvent =
   | { type: "step"; step: TaskStep }
   | { type: "output"; delta: string }
-  | { type: "edits"; edits: ProposedEdit[] }
+  | { type: "edits"; edits: ProposedEdit[]; contractVersion?: typeof BUILD_RESPONSE_CONTRACT_VERSION }
   | { type: "review"; review: EditReview }
   | { type: "status"; status: TaskStatus }
   | { type: "usage"; usage: TokenUsage }
+  | { type: "model_diagnostic"; diagnostic: ModelExecutionDiagnostic }
+  | { type: "generation_checkpoint"; checkpoint: GenerationCheckpoint }
   | { type: "error"; message: string }
+  | { type: "provider_failure"; message: string }
   | { type: "done" };
 
 /**

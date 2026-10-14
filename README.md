@@ -6,6 +6,10 @@ MobiusX is Web + Desktop + Cloud Agents + CLI, not a web-to-desktop replacement.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full architecture: surface responsibilities, the local/cloud agent split, how this relates to the existing MobiusX IDE (VS Code fork) project, tech stack decisions, repo layout, and the phased roadmap.
 
+## Model quality evaluation
+
+Phase 0's fixed task set, clean fixtures, result-record format, and report generator live in [`evals/phase-0/`](evals/phase-0/README.md). Run `node evals/phase-0/report.mjs evals/phase-0/results.jsonl` after recording observed model runs. The report does not call models.
+
 ## Status — Phase 1 (in progress)
 
 Working, tested vertical slice:

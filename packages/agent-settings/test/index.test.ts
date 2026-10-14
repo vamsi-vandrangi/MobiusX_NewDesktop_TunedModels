@@ -102,3 +102,34 @@ test("getSettings drops an invalid fixLoopMode without discarding other fields",
   assert.equal(settings.terminalApprovalMode, "off");
   assert.equal(settings.fixLoopMode, undefined);
 });
+
+// Assistant Memory's automatic-extraction toggle (Oct 2026 addition) —
+// same off/auto shape and the exact same validate-independently,
+// deliberately-not-defaulted-in-storage pattern as fixLoopMode above (see
+// AgentSettings.memoryMode's doc comment): an older settings.json with no
+// opinion on this means "off" without a migration.
+test("getSettings reports no memoryMode by default (off is the implicit default, never stored)", async () => {
+  const file = join(settingsDir, "settings.json");
+  await import("node:fs/promises").then((fs) => fs.writeFile(file, JSON.stringify({ terminalApprovalMode: "off" })));
+  const settings = await getSettings();
+  assert.equal(settings.memoryMode, undefined);
+});
+
+test("updateSettings persists memoryMode and getSettings reflects it, without disturbing fixLoopMode", async () => {
+  await updateSettings({ fixLoopMode: "manual" });
+  const updated = await updateSettings({ memoryMode: "auto" });
+  assert.equal(updated.memoryMode, "auto");
+  const settings = await getSettings();
+  assert.equal(settings.memoryMode, "auto");
+  assert.equal(settings.fixLoopMode, "manual");
+});
+
+test("getSettings drops an invalid memoryMode without discarding other fields", async () => {
+  const file = join(settingsDir, "settings.json");
+  await import("node:fs/promises").then((fs) =>
+    fs.writeFile(file, JSON.stringify({ terminalApprovalMode: "guarded", memoryMode: "sometimes" })),
+  );
+  const settings = await getSettings();
+  assert.equal(settings.terminalApprovalMode, "guarded");
+  assert.equal(settings.memoryMode, undefined);
+});

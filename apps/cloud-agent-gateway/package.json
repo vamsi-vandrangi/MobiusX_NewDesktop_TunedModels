@@ -4,16 +4,17 @@
   "private": true,
   "type": "module",
   "main": "dist/index.js",
-  "description": "Local reference implementation of the MobiusX desktop<->cloud task contract (Phase 3) \u2014 NOT the real production MobiusX Cloud backend. See src/index.ts and docs/ARCHITECTURE.md \u00a712.",
+  "description": "Local reference implementation of the MobiusX desktop<->cloud task contract (Phase 3) — NOT the real production MobiusX Cloud backend. See src/index.ts and docs/ARCHITECTURE.md §12.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --import ./test/setup.mjs --test test/*.test.ts"
   },
   "dependencies": {
     "@mobiusx/audit-log": "*",
     "@mobiusx/agent-settings": "*",
+    "@mobiusx/assistant-memory": "*",
     "@mobiusx/protocol": "*",
     "@mobiusx/secret-scan": "*",
     "express": "^4.21.2",

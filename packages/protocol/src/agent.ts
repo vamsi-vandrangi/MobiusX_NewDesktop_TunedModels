@@ -94,6 +94,8 @@ export interface PreviewServiceState {
   log: string[];
   exitCode: number | null;
   startedAt: string;
+  /** Absolute path to the backend's SQLite database file, when one was found in its own config (a `sqlite:///...` URL in database.py/config.py/main.py etc. -- see desktop-agent's detectSqliteDatabasePath). Always null for a frontend service, and null for a backend that isn't using SQLite (or whose URL this couldn't recognize) -- informational only, never a guess. */
+  databasePath: string | null;
 }
 
 export interface PreviewStartResponse {
@@ -118,12 +120,38 @@ export interface FsNode {
 export interface FsTreeResponse {
   root: string;
   nodes: FsNode[];
+  /** Phase D only — present (and true) when a remote tree walk hit
+   * remoteFsOps.ts's MAX_REMOTE_NODES cap and stopped early. Always absent
+   * for a local project, which has no such cap. */
+  truncated?: boolean;
 }
 
 export interface FsReadResponse {
   path: string;
   content: string;
   truncated: boolean;
+}
+
+/**
+ * A manual save -- a human editing in the Monaco editor and pressing
+ * Cmd/Ctrl+S, never AI-generated content (that's ApplyEditsRequest below,
+ * with its own stricter create/modify-exists contract and secret scan).
+ * Deliberately simpler: a save always targets a file the editor already
+ * has open (so it already exists), and isn't secret-scanned -- that gate
+ * exists to catch a model inventing secret-shaped content, not to
+ * second-guess a user's own edits to their own file.
+ *
+ * Local-project only for now -- unlike ApplyEditsRequest, there's no
+ * remote/SFTP branch yet (see routes.ts's POST /fs/write doc comment for
+ * that named, not-silently-dropped gap).
+ */
+export interface FsWriteRequest {
+  path: string;
+  content: string;
+}
+
+export interface FsWriteResponse {
+  path: string;
 }
 
 export interface GitStatusEntry {
@@ -160,6 +188,117 @@ export interface GitDiffResponse {
   diff: string;
 }
 
+/**
+ * "Commit & Push to Git" -- the banner that appears automatically once a
+ * build-mode task's edits have been applied (see renderer.js's
+ * buildPostBuildPanel). `paths`, when given, stages exactly those files
+ * (the ones this task actually touched) rather than `git add -A`, so an
+ * unrelated dirty file the user hasn't reviewed never rides along in the
+ * same commit; omit it (or pass an empty array) to stage everything.
+ */
+export interface GitCommitRequest {
+  message: string;
+  paths?: string[];
+}
+
+export interface GitCommitResponse {
+  committed: boolean; // false when nothing was actually staged (e.g. already committed)
+  hash: string | null;
+}
+
+export interface GitPushResponse {
+  pushed: boolean;
+  reason?: string; // set when pushed is false -- "no remote configured", a real git error, etc.
+}
+
+/**
+ * "Clone Repository" (Phase C): clones `url` into a brand-new folder named
+ * `name` inside `parentPath`, then opens it exactly like CreateProjectRequest
+ * does -- so the renderer can treat "opened", "created", and "cloned" the
+ * same way from here on (see OpenProjectResponse). `pat`, when present, is
+ * used only in-memory to build an authenticated clone URL server-side; it is
+ * never echoed back and never persisted by this endpoint (persisting a saved
+ * PAT for reuse is a separate, Electron-safeStorage-backed flow -- see
+ * apps/desktop/src/main/main.js's git:setCredential handler).
+ */
+export interface GitCloneRequest {
+  parentPath: string;
+  name: string;
+  url: string;
+  pat?: string;
+}
+
+export interface GitCloneResponse {
+  path: string;
+  isGitRepo: boolean;
+  fileCount: number;
+}
+
+/**
+ * Phase D ("Connect via SSH"): a saved or ad-hoc remote target. Real secrets
+ * (password, key passphrase) are never part of this shape — see
+ * apps/desktop/src/main/main.js's ssh-targets.enc block (same safeStorage
+ * pattern as git-credentials.enc) for where those actually live. This is
+ * what the ssh:listTargets IPC call returns and what the shell renders in
+ * the "This PC ▾" picker.
+ */
+export interface SshTarget {
+  id: string;
+  label: string;
+  host: string;
+  port: number;
+  username: string;
+  authMethod: "key" | "password" | "agent";
+  /** Only meaningful when authMethod is "key" — a path on THIS machine (the
+   * desktop agent runs locally, so it reads the key file directly off disk;
+   * the key's own bytes never cross a process boundary). */
+  identityPath?: string;
+  /** True when a password/passphrase is saved for this target — never the value itself. */
+  hasSecret: boolean;
+}
+
+/**
+ * Body of POST /remote/connect. `password` (authMethod "password") or
+ * `passphrase` (an encrypted "key" identity) are used only in-memory to
+ * open the real SSH/SFTP session — see apps/desktop-agent/src/
+ * remoteConnection.ts — and are never persisted or echoed back by this
+ * endpoint. Saving them for reuse is the separate ssh:setTarget
+ * safeStorage flow, the same split GitCloneRequest's `pat` already
+ * establishes for git credentials.
+ */
+export interface RemoteConnectRequest {
+  host: string;
+  port?: number;
+  username: string;
+  authMethod: "key" | "password" | "agent";
+  identityPath?: string;
+  password?: string;
+  passphrase?: string;
+  /** Remote starting directory; defaults to the SFTP session's own home ("."). */
+  remotePath?: string;
+  /** Carried through to the audit log and the UI badge only — never used to connect. */
+  label?: string;
+}
+
+export interface RemoteConnectResponse {
+  /** The resolved, absolute remote path — now the "open project", exactly
+   * like OpenProjectResponse/GitCloneResponse's `path` for a local one. */
+  path: string;
+  host: string;
+  username: string;
+  isGitRepo: boolean;
+  fileCount: number;
+  /** True when the real tree walk hit MAX_REMOTE_NODES and stopped early — see remoteFsOps.ts. */
+  truncated: boolean;
+}
+
+export interface RemoteStatusResponse {
+  connected: boolean;
+  host: string | null;
+  username: string | null;
+  path: string | null;
+}
+
 export interface ApiError {
   error: string;
   detail?: string;
@@ -187,8 +326,8 @@ export interface AppliedEditResult {
 
 export interface ApplyEditsResponse {
   results: AppliedEditResult[];
-  /** The checkpoint automatically taken of every touched path's pre-edit state, immediately before this batch was written to disk -- see CheckpointEntry below. Always present (edits is validated non-empty). */
-  checkpointId: string;
+  /** The checkpoint automatically taken of every touched path's pre-edit state, immediately before this batch was written to disk -- see CheckpointEntry below. Present for a local project (edits is validated non-empty); ABSENT for a remote (Phase D) apply, which has no checkpoint/rollback store yet -- see routes.ts's /fs/apply-edits doc comment for that scope note. */
+  checkpointId?: string;
   /** Present only when at least one "after-api-change" hook fired for this apply (see HookRule below) -- absent, not [], when no hooks were configured at all. */
   hookResults?: HookRunResult[];
 }
@@ -281,6 +420,42 @@ export interface SteeringListResponse {
 }
 
 export interface SteeringWriteRequest {
+  /** Safe filename stem -- letters, numbers, hyphen, underscore only, no extension/slashes. */
+  name: string;
+  content: string;
+}
+
+/**
+ * Assistant Memory (Oct 2026 addition — the top-priority gap from a direct
+ * capability comparison against Claude Chat/Code: this app had nothing
+ * resembling cross-session memory of the user until this feature). Unlike
+ * SteeringFile above, a memory file is GLOBAL (lives under
+ * `~/.mobiusx/memory/`, see @mobiusx/assistant-memory) rather than scoped
+ * to one project's `.mobiusx/` — it follows the user across projects, the
+ * same way their own preferences would. Shape deliberately mirrors
+ * SteeringFile/SteeringListResponse/SteeringWriteRequest so the desktop
+ * client's existing list/edit/save/delete UI pattern (see renderer.js's
+ * loadSteering()) ports over with minimal new code, not because the two
+ * concepts are the same thing: steering is project conventions the user
+ * writes once for the AI to follow; memory is what the AI (or the user)
+ * records about the user themselves, read back on every future task.
+ */
+export interface MemoryFile {
+  /** Filename without the memory/ prefix or .md extension, e.g. "profile", "preferences", or an extractor-created "topic-<slug>". */
+  name: string;
+  /** Absolute path on disk. */
+  path: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface MemoryListResponse {
+  files: MemoryFile[];
+  /** Absolute path to ~/.mobiusx/memory/. */
+  dir: string;
+}
+
+export interface MemoryWriteRequest {
   /** Safe filename stem -- letters, numbers, hyphen, underscore only, no extension/slashes. */
   name: string;
   content: string;
@@ -522,6 +697,25 @@ export interface AgentSettings {
    * routine "ask" queries on a faster/cheaper one.
    */
   modelRouting?: Partial<Record<AgentMode, ModelSelection>>;
+  /**
+   * Assistant Memory's automatic-extraction toggle (Oct 2026 addition).
+   * Mirrors fixLoopMode's off/auto shape and its absent-means-off
+   * convention exactly: absent (not defaulted to "off" in storage) means
+   * today's behavior — no extraction call, no write to ~/.mobiusx/memory/
+   * — so an older settings.json needs no migration. "auto" makes one best-
+   * effort extraction call after a structured-edit-mode task (build, fix,
+   * spec, etc. — the same modes that already get a second-pass persona
+   * review, see personas.ts#runPersonaReview) completes with real edits,
+   * looking for durable facts the user stated (preferences, conventions,
+   * corrections) — never one-off task specifics — and appending any found
+   * to the relevant ~/.mobiusx/memory/*.md file (see
+   * apps/cloud-agent-gateway/src/runners/memoryExtraction.ts). Reading
+   * memory back into every prompt is NOT gated by this field — see
+   * ProjectContext.assistantMemoryContext in cloud.ts — only the automatic
+   * WRITE path is. A failed extraction call never fails or delays the
+   * task it rode along with.
+   */
+  memoryMode?: "off" | "auto";
 }
 
 /**

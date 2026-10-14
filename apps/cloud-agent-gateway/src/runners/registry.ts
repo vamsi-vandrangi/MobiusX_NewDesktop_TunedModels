@@ -5,7 +5,11 @@ import { anthropicRunner } from "./anthropicRunner.js";
 import { openrouterRunner } from "./openrouterRunner.js";
 import { groqRunner } from "./groqRunner.js";
 import { deepseekRunner } from "./deepseekRunner.js";
+import { cerebrasRunner } from "./cerebrasRunner.js";
+import { xkiroRunner } from "./xkiroRunner.js";
+import { apinexRunner } from "./apinexRunner.js";
 import { ollamaRunner } from "./ollamaRunner.js";
+import type { AutoModelTier } from "./layaRouter.js";
 
 /**
  * Multi-model support (PRD's model-selection requirement): every runner
@@ -21,6 +25,9 @@ export const RUNNERS: Record<ModelProvider, AgentRunner> = {
   openrouter: openrouterRunner,
   groq: groqRunner,
   deepseek: deepseekRunner,
+  cerebras: cerebrasRunner,
+  xkiro: xkiroRunner,
+  apinex: apinexRunner,
   ollama: ollamaRunner,
 };
 
@@ -44,14 +51,17 @@ export const RUNNERS: Record<ModelProvider, AgentRunner> = {
  * prompts, confirmed on two separate live runs. Groq's free-tier models are
  * plain instruction-tuned chat models with no such failure mode observed —
  * a meaningfully safer default until OpenRouter's free catalog looks
- * different.
+ * different. Configured xKiro/APInex free-tier models are later fallbacks;
+ * their daily quotas are provider-controlled and a rejected request moves
+ * on to the next available candidate.
  */
-// "deepseek" is deliberately absent here too, alongside ollama -- see
-// ModelProvider's doc comment in packages/protocol/src/cloud.ts: it's a
-// paid, metered provider (DeepSeek's own API), so it must only ever run
-// when a user explicitly picks it, never as an automatic fallback that
-// starts charging their account without them choosing that.
-const AUTO_PRIORITY: ModelProvider[] = ["anthropic", "groq", "openrouter"];
+// "deepseek" and "cerebras" are deliberately absent here too, alongside
+// ollama -- see ModelProvider's doc comment in packages/protocol/src/
+// cloud.ts: both are paid/metered-after-free-trial providers, so each
+// must only ever run when a user explicitly picks it, never as an
+// automatic fallback that starts charging their account without them
+// choosing that.
+const AUTO_PRIORITY: ModelProvider[] = ["anthropic", "groq", "openrouter", "xkiro", "apinex"];
 
 /** Full catalog across every provider — what GET /models returns for the picker UI, availability warts and all. */
 export async function listAllModels(): Promise<ModelOption[]> {
@@ -116,13 +126,28 @@ export async function resolveRunner(requested: ModelSelection | undefined, setti
 }
 
 async function autoResolve(): Promise<ResolvedRunner> {
-  for (const provider of AUTO_PRIORITY) {
+  const candidates = await autoRunnerCandidates();
+  if (candidates.length) return candidates[0];
+  return { runner: demoRunner };
+}
+
+/** Configured automatic providers in priority order for runtime failover. */
+export async function autoRunnerCandidates(tier: AutoModelTier = "powerful"): Promise<ResolvedRunner[]> {
+  const candidates: ResolvedRunner[] = [];
+  const priorities: ModelProvider[] = tier === "fast"
+    ? ["groq", "openrouter", "xkiro", "apinex", "anthropic"]
+    : tier === "balanced"
+      ? ["groq", "anthropic", "openrouter", "xkiro", "apinex"]
+      : AUTO_PRIORITY;
+  for (const provider of priorities) {
     const runner = RUNNERS[provider];
     const options = await runner.listModels();
-    const available = options.find((o) => o.available);
-    if (available) return { runner, modelId: available.model };
+    const availableOptions = options.filter((o) => o.available);
+    const preferredModel = provider === "groq" && tier === "fast" ? "openai/gpt-oss-20b" : undefined;
+    const available = (preferredModel ? availableOptions.find((o) => o.model === preferredModel) : undefined) ?? availableOptions[0];
+    if (available) candidates.push({ runner, modelId: available.model });
   }
-  return { runner: demoRunner };
+  return candidates;
 }
 
 function describeChoice(resolved: ResolvedRunner): string {

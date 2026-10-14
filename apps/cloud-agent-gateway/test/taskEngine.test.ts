@@ -17,9 +17,12 @@ delete process.env.ANTHROPIC_API_KEY;
 delete process.env.ANTHROPIC_MODEL;
 delete process.env.OPENROUTER_API_KEY;
 delete process.env.GROQ_API_KEY;
+delete process.env.XKIRO_API_KEY;
+delete process.env.APINEX_API_KEY;
 
-const { startTask, getTask, cancelTask } = await import("../src/taskEngine.js");
+const { startTask, getTask, cancelTask, shouldBypassLayaForExplicitBuild } = await import("../src/taskEngine.js");
 const { listTasks } = await import("../src/store.js");
+const { resetLayaAvailabilityForTests } = await import("../src/runners/layaRouter.js");
 
 function waitUntilDone(id: string, timeoutMs = 5000): Promise<void> {
   const start = Date.now();
@@ -57,6 +60,119 @@ test("startTask with no Anthropic env runs the demo runner end-to-end", async ()
   assert.ok(task!.steps.every((s) => s.status === "completed"));
   assert.match(task!.output, /demo runner/);
   assert.match(task!.output, /reduce payment timeout retries/);
+});
+
+test("explicit provider remains pinned while Laya classifies the task locally", async (t) => {
+  resetLayaAvailabilityForTests();
+  let layaCalls = 0;
+  t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
+    if (String(url).endsWith("/v1/systemone")) {
+      layaCalls += 1;
+      return new Response("MLX runner unavailable", { status: 500 });
+    }
+    throw new Error(`Unexpected fetch in test: ${String(url)}`);
+  });
+  const summary = await startTask({ mode: "plan", prompt: "Plan a small settings update", model: { provider: "demo", model: "demo" } });
+  assert.equal(summary.runner, "demo", "Laya classification must not replace an explicit provider selection");
+  assert.equal(layaCalls, 1, "Laya should classify explicit-provider tasks too");
+  assert.match(summary.modelNote ?? "", /Laya returned HTTP 500/);
+  await waitUntilDone(summary.id);
+});
+
+test("explicit Build model bypasses Laya and preserves the selected provider", async (t) => {
+  resetLayaAvailabilityForTests();
+  delete process.env.MOBIUSX_BYPASS_LAYA_FOR_EXPLICIT_BUILD;
+  let layaCalls = 0;
+  t.mock.method(globalThis, "fetch", async (url: string | URL | Request) => {
+    if (String(url).endsWith("/v1/systemone")) {
+      layaCalls += 1;
+      return new Response("MLX runner unavailable", { status: 500 });
+    }
+    throw new Error(`Unexpected fetch in test: ${String(url)}`);
+  });
+
+  const summary = await startTask({
+    mode: "build",
+    prompt: "Build a small application",
+    model: { provider: "demo", model: "demo" },
+  });
+  assert.equal(summary.runner, "demo");
+  assert.equal(summary.model, "demo");
+  assert.equal(layaCalls, 0, "an explicit Build choice must not contact Laya");
+  await waitUntilDone(summary.id);
+  const task = await getTask(summary.id);
+  assert.ok(task?.steps.some((step) => /Laya bypassed for explicit Build/.test(step.label)));
+});
+
+test("the Laya Build bypass can be disabled without changing other routing modes", async () => {
+  const explicitBuild = { mode: "build" as const, model: { provider: "demo" as const, model: "demo" }, autoCloud: false };
+  assert.equal(shouldBypassLayaForExplicitBuild(explicitBuild, {}), true);
+  assert.equal(shouldBypassLayaForExplicitBuild(explicitBuild, { MOBIUSX_BYPASS_LAYA_FOR_EXPLICIT_BUILD: "false" }), false);
+  assert.equal(shouldBypassLayaForExplicitBuild({ ...explicitBuild, mode: "plan" }, {}), false);
+  assert.equal(shouldBypassLayaForExplicitBuild({ ...explicitBuild, autoCloud: true }, {}), false);
+});
+
+test("Auto Cloud fails over on provider HTTP errors and reaches the next configured free model", async (t) => {
+  process.env.GROQ_API_KEY = "groq-test";
+  process.env.OPENROUTER_API_KEY = "openrouter-test";
+  process.env.XKIRO_API_KEY = "xkiro-test";
+  t.after(() => {
+    delete process.env.GROQ_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.XKIRO_API_KEY;
+  });
+
+  const editResponse = [
+    "I built a small garden storefront.",
+    "===MOBIUSX_EDITS===",
+    "```json",
+    JSON.stringify({ edits: [{ path: "index.html", action: "create", content: "<main>Garden shop</main>" }] }),
+    "```",
+  ].join("\n");
+  const groqPlan = "A simple blue-themed gardening shop with a Buy button placeholder.";
+  const encoder = new TextEncoder();
+  t.mock.method(globalThis, "fetch", async (url: string | URL | Request, init?: RequestInit) => {
+    const target = String(url);
+    if (target.endsWith("/v1/systemone")) return new Response("unsupported", { status: 500 });
+    if (target.includes("api.groq.com")) {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: groqPlan } }] })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
+    if (target.includes("openrouter.ai")) return new Response(JSON.stringify({ error: { message: "model endpoint unavailable" } }), { status: 404 });
+    if (target.includes("api.xkiro.com")) {
+      const requestBody = JSON.parse(String(init?.body ?? "{}")) as { stream?: boolean };
+      if (!requestBody.stream) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ verdict: "approve", summary: "Review complete.", concerns: [] }) } }] }), { status: 200 });
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: editResponse } }] })}\n\n`));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }
+    throw new Error(`Unexpected provider request: ${target}`);
+  });
+
+  const summary = await startTask({ mode: "build", prompt: "Build a gardening website", autoCloud: true });
+  await waitUntilDone(summary.id);
+  const task = await getTask(summary.id);
+  assert.ok(task);
+  assert.equal(task!.status, "completed");
+  assert.equal(task!.runner, "xkiro");
+  assert.equal(task!.edits?.[0]?.path, "index.html");
+  assert.match(task!.output, /groq\/openai\/gpt-oss-120b failed/i);
+  assert.match(task!.output, /openrouter\/inclusionai\/ling-3\.0-flash-vl:free failed/i);
+  assert.doesNotMatch(task!.output, /A simple blue-themed gardening shop/i, "failed provider prose must not be shown as the completed response");
+  assert.match(task!.output, /I built a small garden storefront/i, "the successful fallback's response should be surfaced");
 });
 
 test("listTasks reflects created tasks, most recent first", async () => {

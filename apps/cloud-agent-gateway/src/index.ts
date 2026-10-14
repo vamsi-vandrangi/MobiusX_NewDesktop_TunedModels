@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createGatewayServer } from "./server.js";
+import { recoverInterruptedTasks } from "./store.js";
 
 // Optional local `.env` file in this app's own directory (gitignored — see
 // .env.example) as a convenience alternative to exporting ANTHROPIC_API_KEY /
@@ -21,12 +22,18 @@ const token = process.env.MOBIUSX_CLOUD_TOKEN ?? randomBytes(24).toString("hex")
 
 const { server } = createGatewayServer(token);
 
-server.listen(PORT, "127.0.0.1", () => {
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : PORT;
-  // Distinct marker from desktop-agent's MOBIUSX_AGENT_READY so Electron's
-  // main process can tell the two spawned processes apart on stdout.
-  process.stdout.write(`MOBIUSX_CLOUD_READY ${JSON.stringify({ port, token })}\n`);
+void recoverInterruptedTasks().then((recovered) => {
+  server.listen(PORT, "127.0.0.1", () => {
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : PORT;
+    if (recovered) process.stdout.write(`Recovered ${recovered} interrupted task(s); validated Build checkpoints are available for resume.\n`);
+    // Distinct marker from desktop-agent's MOBIUSX_AGENT_READY so Electron's
+    // main process can tell the two spawned processes apart on stdout.
+    process.stdout.write(`MOBIUSX_CLOUD_READY ${JSON.stringify({ port, token })}\n`);
+  });
+}).catch((error) => {
+  process.stderr.write(`Cloud gateway recovery failed: ${(error as Error).message}\n`);
+  process.exitCode = 1;
 });
 
 process.on("SIGTERM", () => server.close(() => process.exit(0)));
